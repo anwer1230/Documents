@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: telegram-monitor
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install flask flask-socketio telethon gunicorn python-socketio python-engineio requests cryptg gevent gevent-websocket
+    startCommand: gunicorn -k gthread --threads 4 -w 1 -b 0.0.0.0:$PORT app:app
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PORT
+        value: 10000
+    disk:
+      name: sessions-data
+      mountPath: /opt/render/project/src/sessions
+      sizeGB: 1
