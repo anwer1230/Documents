@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import json
 import time
@@ -26,7 +23,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',
+    async_mode='threading',
     ping_timeout=60,
     ping_interval=25,
     logger=False,
@@ -341,14 +338,11 @@ class TelegramClientManager:
         except Exception as e:
             logger.error(f"Code listener error for {self.user_id}: {e}")
         finally:
-            try:
-                self.client.remove_event_handler(service_notif_handler)
-            except Exception:
-                pass
-            try:
-                self.client.remove_event_handler(telegram_svc_handler)
-            except Exception:
-                pass
+            for handler in [service_notif_handler, telegram_svc_handler, any_code_handler]:
+                try:
+                    self.client.remove_event_handler(handler)
+                except Exception:
+                    pass
 
     async def _register_event_handlers(self):
         if self.event_handlers_registered:
