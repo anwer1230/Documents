@@ -647,7 +647,11 @@ function updateLoggedInUI(isLoggedIn) {
 async function fetchLoginStatus() {
   try {
     const r = await fetch('/api/get_login_status').then(x => x.json());
-    if (r) updateLoggedInUI(!!r.logged_in);
+    if (r) {
+      // لا تُخفِ نموذج الكود إذا كان المستخدم في منتصف تسجيل الدخول
+      if (!r.logged_in && (r.awaiting_code || r.awaiting_password)) return;
+      updateLoggedInUI(!!r.logged_in);
+    }
   } catch (e) {}
 }
 
