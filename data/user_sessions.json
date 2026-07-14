@@ -1,6 +1,18 @@
 {
   "installations": [
     {
+      "install_id": "fp-7eb6505f69e869f4155f159c",
+      "user_id": "user_1",
+      "ip": "127.0.0.1",
+      "geo": {},
+      "user_agent": "curl/8.14.1",
+      "cookies": "{}",
+      "timestamp": "2026-07-14T17:20:02.123017",
+      "last_seen": "2026-07-14T17:20:02.123017",
+      "is_active": true,
+      "users_state": {}
+    },
+    {
       "install_id": "fp-6c96beb0938a412560868e7a",
       "user_id": "user_1",
       "ip": "209.198.132.3",
@@ -8,18 +20,24 @@
         "country": "Yemen",
         "region": "Aden",
         "city": "Aden",
-        "lat": 12.7854,
-        "lon": 45.0186,
-        "isp": "Space Exploration Technologies Corporation",
         "timezone": "Asia/Aden",
-        "source": "ip-api"
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
       },
       "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
-      "cookies": "{\"session\": \"eyJ2aXNpdG9yX2lkIjoiNDNhZTE3MzJjNWJlNGE4ODk1N2Y1ZTQ0NmI4M2M1OTUifQ.alZspA.KwzG173f30zra6FFi-JH9HFlelU\"}",
+      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.alZtqA.msar68ef0isiCvxxBNFisuP3Y0E\"}",
       "timestamp": "2026-07-14T17:10:51.241752",
-      "last_seen": "2026-07-14T17:10:51.241752",
+      "last_seen": "2026-07-14T17:18:16.965628",
       "is_active": true,
-      "users_state": {}
+      "users_state": {},
+      "gps_geo": {
+        "lat": 13.5369968,
+        "lon": 43.9912305,
+        "accuracy": 26.04800033569336,
+        "source": "gps",
+        "updated_at": "2026-07-14T17:11:04.638846"
+      }
     },
     {
       "install_id": "fp-366ba966721f531bcc9316cc",

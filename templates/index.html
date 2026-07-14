@@ -60,357 +60,747 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
     <style>
-        /* ══════════════════════════════════════════════════
-           تأثير زجاجي شفاف (Glassmorphism) للواجهة
-           ══════════════════════════════════════════════════ */
-        body {
-            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important;
-            min-height: 100vh;
-        }
-        .card {
-            background: rgba(255, 255, 255, 0.07) !important;
-            backdrop-filter: blur(14px) !important;
-            -webkit-backdrop-filter: blur(14px) !important;
-            border: 1px solid rgba(255, 255, 255, 0.15) !important;
-            border-radius: 16px !important;
-            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.28), 0 1.5px 0 rgba(255,255,255,0.08) inset !important;
-            color: #e8eaf6 !important;
-        }
-        .card-header {
-            border-radius: 16px 16px 0 0 !important;
-            backdrop-filter: blur(8px) !important;
-            border-bottom: 1px solid rgba(255,255,255,0.12) !important;
-        }
-        .card-body { color: #d0d4ef; }
-        .form-control, .form-select {
-            background: rgba(255,255,255,0.08) !important;
-            border: 1px solid rgba(255,255,255,0.18) !important;
-            color: #e8eaf6 !important;
-            border-radius: 10px !important;
-        }
-        .form-control::placeholder { color: rgba(255,255,255,0.4) !important; }
-        .form-control:focus, .form-select:focus {
-            background: rgba(255,255,255,0.14) !important;
-            border-color: #6c63ff !important;
-            box-shadow: 0 0 0 3px rgba(108,99,255,0.25) !important;
-            color: #fff !important;
-        }
-        .btn-outline-primary   { border-color:#6c63ff!important; color:#a5b4fc!important; }
-        .btn-outline-primary:hover { background:#6c63ff!important; color:#fff!important; }
-        .btn-outline-success   { border-color:#34d399!important; color:#6ee7b7!important; }
-        .btn-outline-success:hover { background:#34d399!important; color:#064e3b!important; }
-        .btn-outline-warning   { border-color:#fbbf24!important; color:#fde68a!important; }
-        .btn-outline-warning:hover { background:#fbbf24!important; color:#1c1400!important; }
-        .btn-outline-danger    { border-color:#f87171!important; color:#fca5a5!important; }
-        .btn-outline-danger:hover  { background:#f87171!important; color:#1a0000!important; }
-        .btn-outline-info      { border-color:#22d3ee!important; color:#a5f3fc!important; }
-        .btn-outline-info:hover    { background:#22d3ee!important; color:#083344!important; }
-        .btn-outline-dark      { border-color:#94a3b8!important; color:#cbd5e1!important; }
-        .btn-outline-dark:hover    { background:#94a3b8!important; color:#0f172a!important; }
-        .btn-primary   { background:linear-gradient(135deg,#6c63ff,#4e45d1)!important; border:none!important; }
-        .btn-success   { background:linear-gradient(135deg,#34d399,#059669)!important; border:none!important; }
-        .btn-warning   { background:linear-gradient(135deg,#fbbf24,#d97706)!important; border:none!important; color:#1c1400!important; }
-        .btn-danger    { background:linear-gradient(135deg,#f87171,#dc2626)!important; border:none!important; }
-        .btn-info      { background:linear-gradient(135deg,#22d3ee,#0891b2)!important; border:none!important; }
-        label, .form-label { color:#c7d2fe !important; font-weight:600; }
-        .text-muted { color:#94a3b8 !important; }
-        .badge.bg-primary  { background:#6c63ff!important; }
-        .badge.bg-success  { background:#059669!important; }
-        .badge.bg-warning  { background:#d97706!important; }
-        .badge.bg-danger   { background:#dc2626!important; }
-        .badge.bg-info     { background:#0891b2!important; }
-        .modal-content {
-            background: rgba(20,20,50,0.88) !important;
-            backdrop-filter: blur(24px) !important;
-            -webkit-backdrop-filter: blur(24px) !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            border-radius: 18px !important;
-            color: #e8eaf6 !important;
-        }
-        .modal-header { border-bottom:1px solid rgba(255,255,255,0.12)!important; }
-        .modal-footer { border-top:1px solid rgba(255,255,255,0.12)!important; }
-        .table { color:#d0d4ef!important; }
-        .table th { color:#a5b4fc!important; border-color:rgba(255,255,255,0.1)!important; }
-        .table td { border-color:rgba(255,255,255,0.07)!important; }
-        /* أيقونات بارزة وملونة */
-        .btn .fa-2x { filter:drop-shadow(0 2px 6px rgba(255,255,255,0.18)); transition:filter 0.2s; }
-        .btn:hover .fa-2x { filter:drop-shadow(0 4px 12px rgba(255,255,255,0.38)); }
-        .btn-outline-warning .fas.fa-search { color:#fbbf24!important; text-shadow:0 0 12px #fbbf24; }
-        .btn-outline-danger  .fas           { color:#f87171!important; text-shadow:0 0 10px #f87171; }
-        .btn-outline-success .fas           { color:#34d399!important; text-shadow:0 0 10px #34d399; }
-        .btn-outline-info    .fas           { color:#22d3ee!important; text-shadow:0 0 10px #22d3ee; }
-        .btn-outline-primary .fas           { color:#818cf8!important; text-shadow:0 0 10px #818cf8; }
-        .users-bar .card {
-            background: rgba(99,102,241,0.12) !important;
-            border: 1px solid rgba(99,102,241,0.3) !important;
-        }
-        .user-tab.active { box-shadow:0 0 16px rgba(108,99,255,0.5)!important; }
-        .list-group-item {
-            background:rgba(255,255,255,0.05)!important;
-            border:1px solid rgba(255,255,255,0.1)!important;
-            color:#d0d4ef!important;
-        }
-        .alert-info    { background:rgba(34,211,238,0.12)!important; border-color:rgba(34,211,238,0.3)!important; color:#a5f3fc!important; }
-        .alert-warning { background:rgba(251,191,36,0.12)!important; border-color:rgba(251,191,36,0.3)!important; color:#fde68a!important; }
-        .alert-success { background:rgba(52,211,153,0.12)!important; border-color:rgba(52,211,153,0.3)!important; color:#6ee7b7!important; }
-        .alert-danger  { background:rgba(248,113,113,0.12)!important; border-color:rgba(248,113,113,0.3)!important; color:#fca5a5!important; }
-        /* ══ نهاية Glassmorphism ══ */
+        /* ═══════════════════════════════════════════════════════════════
+           🚀 COSMIC DARK UI — تصميم كوني مذهل
+           ═══════════════════════════════════════════════════════════════ */
 
-        .header-title {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 25px;
-            border-radius: 15px;
-            margin-bottom: 20px;
-            text-align: center;
-            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap');
+
+        :root {
+            --bg-primary: #030712;
+            --bg-secondary: #0a0f1e;
+            --bg-card: rgba(13, 20, 45, 0.75);
+            --accent-blue: #3b82f6;
+            --accent-violet: #8b5cf6;
+            --accent-cyan: #06b6d4;
+            --accent-emerald: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-rose: #f43f5e;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --border-glass: rgba(255,255,255,0.08);
+            --glow-blue: 0 0 20px rgba(59,130,246,0.4);
+            --glow-violet: 0 0 20px rgba(139,92,246,0.4);
+            --glow-cyan: 0 0 20px rgba(6,182,212,0.4);
+            --glow-emerald: 0 0 20px rgba(16,185,129,0.4);
         }
-        .whatsapp-link {
-            color: #25D366;
-            text-decoration: none;
-            font-weight: bold;
-            transition: all 0.3s ease;
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Cairo', -apple-system, BlinkMacSystemFont, sans-serif !important;
+            background: var(--bg-primary) !important;
+            min-height: 100vh;
+            color: var(--text-primary) !important;
+            overflow-x: hidden;
+            direction: rtl;
         }
-        .whatsapp-link:hover {
-            color: #128C7E;
-            transform: scale(1.05);
-        }
-        .log-container {
-            height: 300px;
-            overflow-y: auto;
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 10px;
-        }
-        .console-container {
-            height: 250px;
-            overflow-y: auto;
-            background: #212529;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 10px;
-            color: #28a745;
-            font-family: 'Courier New', monospace;
-        }
-        .log-entry {
-            margin-bottom: 5px;
-            padding: 5px;
-            border-radius: 3px;
-        }
-        .log-success {
-            background: #d1e7dd;
-            color: #0f5132;
-        }
-        .log-error {
-            background: #f8d7da;
-            color: #842029;
-        }
-        .log-warning {
-            background: #fff3cd;
-            color: #664d03;
-        }
-        .log-info {
-            background: #cff4fc;
-            color: #055160;
-        }
-        .log-time {
-            font-weight: bold;
-            margin-right: 5px;
-        }
-        .console-line {
-            margin-bottom: 2px;
-            font-size: 12px;
-        }
-        .monitoring-status {
+
+        /* ── خلفية متحركة ── */
+        body::before {
+            content: '';
             position: fixed;
-            top: 16px;
-            right: 16px;
-            z-index: 1050;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 6px;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 60% at 20% 10%, rgba(59,130,246,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 60% 80% at 80% 90%, rgba(139,92,246,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 50% 50% at 50% 50%, rgba(6,182,212,0.05) 0%, transparent 70%),
+                linear-gradient(135deg, #030712 0%, #0a0f1e 50%, #030712 100%);
+            z-index: 0;
+            pointer-events: none;
+            animation: bgPulse 12s ease-in-out infinite alternate;
         }
-        #globalResetBtn {
-            background: linear-gradient(135deg,#dc3545,#c0392b);
-            color: #fff;
-            font-size: 0.72rem;
-            font-weight: 600;
-            cursor: pointer;
-            border: none;
-            border-radius: 20px;
-            padding: 5px 12px 5px 10px;
-            box-shadow: 0 2px 8px rgba(220,53,69,0.4);
+
+        @keyframes bgPulse {
+            0%  { opacity: 0.8; }
+            100% { opacity: 1; }
+        }
+
+        body > * { position: relative; z-index: 1; }
+
+        /* ── شريط العنوان الرئيسي ── */
+        .cosmic-header {
+            background: linear-gradient(135deg,
+                rgba(30,20,80,0.95) 0%,
+                rgba(15,30,80,0.95) 50%,
+                rgba(20,10,60,0.95) 100%);
+            border-bottom: 1px solid rgba(139,92,246,0.3);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 12px 20px;
             display: flex;
             align-items: center;
-            gap: 5px;
-            white-space: nowrap;
-            letter-spacing: 0.3px;
-        }
-        #globalResetBtn:hover {
-            background: linear-gradient(135deg,#c0392b,#a93226);
-            box-shadow: 0 3px 12px rgba(220,53,69,0.55);
-        }
-
-        .alert-popup {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 2000;
-            min-width: 400px;
-            max-width: 600px;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            justify-content: space-between;
+            gap: 12px;
+            box-shadow: 0 4px 30px rgba(0,0,0,0.5), 0 1px 0 rgba(139,92,246,0.2);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
         }
 
-        .keyword-alert {
-            animation: alertBounce 0.5s ease-in-out;
-        }
-
-        @keyframes alertBounce {
-            0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
-            50% { transform: translate(-50%, -50%) scale(1.1); opacity: 0.8; }
-            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-        }
-
-        /* تحسين الشكل للجوال */
-        @media (max-width: 768px) {
-            .container-fluid {
-                padding: 10px;
-            }
-            .card-body {
-                padding: 15px;
-            }
-            .log-container, .console-container {
-                height: 200px;
-            }
-            .header-title {
-                padding: 20px;
-            }
-            .header-title h2 {
-                font-size: 1.5rem;
-            }
-            .alert-popup {
-                min-width: 90vw;
-                max-width: 95vw;
-            }
-        }
-
-        /* زر التثبيت */
-        .install-btn {
-            background: linear-gradient(45deg, #28a745, #20c997);
-            border: none;
-            color: white;
-            padding: 12px 20px;
-            border-radius: 25px;
-            font-weight: bold;
-            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
-            transition: all 0.3s ease;
-            margin-top: 15px;
-        }
-
-        .install-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(40, 167, 69, 0.6);
-            background: linear-gradient(45deg, #218838, #1e7e34);
-        }
-
-        .install-btn i {
-            margin-left: 8px;
-        }
-
-        .pwa-features {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 10px;
-            margin-top: 10px;
-            backdrop-filter: blur(10px);
-        }
-
-        .pwa-features small {
-            display: block;
-            color: rgba(255, 255, 255, 0.9);
-            margin-bottom: 5px;
-        }
-
-        /* أنماط شريط المستخدمين */
-        .users-bar .card {
-            border: none;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-        }
-
-        .user-tabs {
+        .cosmic-logo {
             display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: center;
+            align-items: center;
+            gap: 12px;
         }
 
-        .user-tab {
-            border: 2px solid transparent;
-            border-radius: 25px;
-            padding: 8px 15px;
-            margin: 2px;
-            font-weight: bold;
-            background: white;
+        .cosmic-logo img {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            border: 2px solid rgba(139,92,246,0.5);
+            box-shadow: 0 0 16px rgba(139,92,246,0.4);
+        }
+
+        .cosmic-logo-text {
+            line-height: 1.2;
+        }
+
+        .cosmic-logo-title {
+            font-size: 0.95rem;
+            font-weight: 900;
+            background: linear-gradient(90deg, #a78bfa, #60a5fa, #34d399);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .cosmic-logo-sub {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+
+        .header-status-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 4px 12px;
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+        }
+
+        /* ── الكروت الزجاجية ── */
+        .card, .glass-card {
+            background: var(--bg-card) !important;
+            backdrop-filter: blur(16px) !important;
+            -webkit-backdrop-filter: blur(16px) !important;
+            border: 1px solid var(--border-glass) !important;
+            border-radius: 18px !important;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06) !important;
+            color: var(--text-primary) !important;
             transition: all 0.3s ease;
-            position: relative;
             overflow: hidden;
         }
 
+        .card:hover { box-shadow: 0 12px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08) !important; }
+
+        /* ── رؤوس الكروت ── */
+        .card-header {
+            border-radius: 0 !important;
+            backdrop-filter: blur(8px) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+            font-weight: 700;
+            padding: 14px 18px !important;
+        }
+
+        .card-header-blue {
+            background: linear-gradient(135deg, rgba(59,130,246,0.25), rgba(30,64,175,0.2)) !important;
+            border-bottom: 1px solid rgba(59,130,246,0.3) !important;
+        }
+
+        .card-header-violet {
+            background: linear-gradient(135deg, rgba(139,92,246,0.25), rgba(91,33,182,0.2)) !important;
+            border-bottom: 1px solid rgba(139,92,246,0.3) !important;
+        }
+
+        .card-header-emerald {
+            background: linear-gradient(135deg, rgba(16,185,129,0.25), rgba(4,120,87,0.2)) !important;
+            border-bottom: 1px solid rgba(16,185,129,0.3) !important;
+        }
+
+        .card-header-cyan {
+            background: linear-gradient(135deg, rgba(6,182,212,0.25), rgba(8,145,178,0.2)) !important;
+            border-bottom: 1px solid rgba(6,182,212,0.3) !important;
+        }
+
+        .card-header-amber {
+            background: linear-gradient(135deg, rgba(245,158,11,0.25), rgba(180,83,9,0.2)) !important;
+            border-bottom: 1px solid rgba(245,158,11,0.3) !important;
+        }
+
+        .card-header-rose {
+            background: linear-gradient(135deg, rgba(244,63,94,0.25), rgba(159,18,57,0.2)) !important;
+            border-bottom: 1px solid rgba(244,63,94,0.3) !important;
+        }
+
+        .card-header-dark {
+            background: linear-gradient(135deg, rgba(30,41,59,0.6), rgba(15,23,42,0.4)) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+        }
+
+        .card-body { color: var(--text-primary); }
+
+        /* ── الحقول ── */
+        .form-control, .form-select {
+            background: rgba(255,255,255,0.05) !important;
+            border: 1px solid rgba(255,255,255,0.12) !important;
+            color: var(--text-primary) !important;
+            border-radius: 10px !important;
+            transition: all 0.2s ease;
+        }
+
+        .form-control::placeholder { color: rgba(255,255,255,0.3) !important; }
+
+        .form-control:focus, .form-select:focus {
+            background: rgba(255,255,255,0.08) !important;
+            border-color: var(--accent-violet) !important;
+            box-shadow: 0 0 0 3px rgba(139,92,246,0.2) !important;
+            color: #fff !important;
+        }
+
+        .form-select option { background: #1e2a4a; color: #e2e8f0; }
+
+        .form-label {
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        /* ── الأزرار الرئيسية ── */
+        .btn-glow-blue {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(37,99,235,0.4) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-glow-blue:hover { box-shadow: 0 6px 25px rgba(37,99,235,0.6) !important; transform: translateY(-1px); }
+
+        .btn-glow-emerald {
+            background: linear-gradient(135deg, #059669, #047857) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(5,150,105,0.4) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-glow-emerald:hover { box-shadow: 0 6px 25px rgba(5,150,105,0.6) !important; transform: translateY(-1px); }
+
+        .btn-glow-violet {
+            background: linear-gradient(135deg, #7c3aed, #6d28d9) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(124,58,237,0.4) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-glow-violet:hover { box-shadow: 0 6px 25px rgba(124,58,237,0.6) !important; transform: translateY(-1px); }
+
+        .btn-glow-rose {
+            background: linear-gradient(135deg, #e11d48, #be123c) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(225,29,72,0.4) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-glow-rose:hover { box-shadow: 0 6px 25px rgba(225,29,72,0.6) !important; transform: translateY(-1px); }
+
+        .btn-glow-amber {
+            background: linear-gradient(135deg, #d97706, #b45309) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(217,119,6,0.4) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-glow-amber:hover { box-shadow: 0 6px 25px rgba(217,119,6,0.6) !important; transform: translateY(-1px); }
+
+        /* ── أزرار Bootstrap المعدلة ── */
+        .btn-primary {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+            border: none !important;
+            box-shadow: 0 4px 15px rgba(37,99,235,0.35) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover { box-shadow: 0 6px 25px rgba(37,99,235,0.55) !important; transform: translateY(-1px); }
+
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857) !important;
+            border: none !important;
+            box-shadow: 0 4px 15px rgba(5,150,105,0.35) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-success:hover { box-shadow: 0 6px 25px rgba(5,150,105,0.55) !important; transform: translateY(-1px); }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #dc2626, #b91c1c) !important;
+            border: none !important;
+            box-shadow: 0 4px 15px rgba(220,38,38,0.35) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-danger:hover { box-shadow: 0 6px 25px rgba(220,38,38,0.55) !important; transform: translateY(-1px); }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #d97706, #b45309) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(217,119,6,0.35) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-warning:hover { box-shadow: 0 6px 25px rgba(217,119,6,0.55) !important; transform: translateY(-1px); color:#fff!important; }
+
+        .btn-info {
+            background: linear-gradient(135deg, #0891b2, #0e7490) !important;
+            border: none !important;
+            color: #fff !important;
+            box-shadow: 0 4px 15px rgba(8,145,178,0.35) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .btn-info:hover { box-shadow: 0 6px 25px rgba(8,145,178,0.55) !important; transform: translateY(-1px); }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #475569, #334155) !important;
+            border: none !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+        }
+
+        .btn-dark {
+            background: linear-gradient(135deg, #1e293b, #0f172a) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 10px !important;
+            font-weight: 700;
+        }
+
+        /* ── أزرار Outline ── */
+        .btn-outline-primary { border-color: rgba(59,130,246,0.5) !important; color: #60a5fa !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-primary:hover { background: rgba(59,130,246,0.15) !important; border-color: #3b82f6 !important; box-shadow: 0 0 15px rgba(59,130,246,0.3) !important; }
+
+        .btn-outline-success { border-color: rgba(16,185,129,0.5) !important; color: #34d399 !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-success:hover { background: rgba(16,185,129,0.15) !important; border-color: #10b981 !important; box-shadow: 0 0 15px rgba(16,185,129,0.3) !important; }
+
+        .btn-outline-danger { border-color: rgba(244,63,94,0.5) !important; color: #fb7185 !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-danger:hover { background: rgba(244,63,94,0.15) !important; border-color: #f43f5e !important; box-shadow: 0 0 15px rgba(244,63,94,0.3) !important; }
+
+        .btn-outline-info { border-color: rgba(6,182,212,0.5) !important; color: #22d3ee !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-info:hover { background: rgba(6,182,212,0.15) !important; border-color: #06b6d4 !important; box-shadow: 0 0 15px rgba(6,182,212,0.3) !important; }
+
+        .btn-outline-warning { border-color: rgba(245,158,11,0.5) !important; color: #fbbf24 !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-warning:hover { background: rgba(245,158,11,0.15) !important; border-color: #f59e0b !important; box-shadow: 0 0 15px rgba(245,158,11,0.3) !important; }
+
+        .btn-outline-dark { border-color: rgba(100,116,139,0.4) !important; color: #94a3b8 !important; border-radius: 10px !important; transition: all 0.3s; }
+        .btn-outline-dark:hover { background: rgba(100,116,139,0.15) !important; border-color: #94a3b8 !important; }
+
+        /* ── شريط المستخدمين ── */
+        .users-bar-cosmic {
+            background: rgba(13,20,45,0.6);
+            border: 1px solid rgba(139,92,246,0.2);
+            border-radius: 18px;
+            padding: 14px 18px;
+            backdrop-filter: blur(16px);
+            margin-bottom: 20px;
+        }
+
+        .users-bar-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .user-tab {
+            background: rgba(255,255,255,0.04) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            color: var(--text-secondary) !important;
+            border-radius: 12px !important;
+            padding: 7px 16px !important;
+            font-size: 0.8rem !important;
+            font-weight: 600 !important;
+            transition: all 0.3s ease !important;
+            cursor: pointer;
+        }
+
         .user-tab:hover {
+            background: rgba(255,255,255,0.08) !important;
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-            background: rgba(255,255,255,0.9);
         }
 
         .user-tab.active {
-            background: rgba(0,0,0,0.1);
-            transform: scale(1.05);
-            box-shadow: 0 6px 15px rgba(0,0,0,0.2);
+            background: rgba(139,92,246,0.2) !important;
+            border-color: rgba(139,92,246,0.6) !important;
+            box-shadow: 0 0 18px rgba(139,92,246,0.3), inset 0 0 10px rgba(139,92,246,0.1) !important;
         }
 
-        .user-tab.active::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(45deg, rgba(255,255,255,0.1), rgba(0,0,0,0.05));
-            border-radius: 23px;
+        /* ── بطاقة القسم ── */
+        .section-card {
+            background: rgba(13,20,45,0.75) !important;
+            backdrop-filter: blur(16px) !important;
+            border: 1px solid rgba(255,255,255,0.08) !important;
+            border-radius: 18px !important;
+            overflow: hidden;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
         }
 
-        .user-tab i {
-            font-size: 1.1em;
+        .section-header {
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 0.9rem;
         }
 
-        /* تحسين شكل المستخدمين للجوال */
+        .section-header-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            flex-shrink: 0;
+        }
+
+        .section-body { padding: 18px; }
+
+        /* ── بطاقات الإحصائيات ── */
+        .stat-pill {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 12px 16px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .stat-pill:hover { transform: scale(1.02); }
+
+        .stat-pill .stat-number {
+            font-size: 1.8rem;
+            font-weight: 900;
+            line-height: 1;
+        }
+
+        .stat-pill .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* ── بطاقات الوظائف ── */
+        .feature-btn {
+            background: rgba(255,255,255,0.04) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 14px !important;
+            padding: 16px 10px !important;
+            color: var(--text-primary) !important;
+            cursor: pointer;
+            transition: all 0.3s ease !important;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            min-height: 90px;
+            text-align: center;
+        }
+
+        .feature-btn:hover {
+            transform: translateY(-3px);
+            background: rgba(255,255,255,0.08) !important;
+        }
+
+        .feature-btn .feature-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .feature-btn .feature-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+
+        .feature-blue  { border-color: rgba(59,130,246,0.35) !important; }
+        .feature-blue:hover  { border-color: rgba(59,130,246,0.7) !important; box-shadow: 0 0 20px rgba(59,130,246,0.25) !important; }
+        .feature-blue  .feature-icon { background: rgba(59,130,246,0.2); color: #60a5fa; }
+
+        .feature-green { border-color: rgba(16,185,129,0.35) !important; }
+        .feature-green:hover { border-color: rgba(16,185,129,0.7) !important; box-shadow: 0 0 20px rgba(16,185,129,0.25) !important; }
+        .feature-green .feature-icon { background: rgba(16,185,129,0.2); color: #34d399; }
+
+        .feature-amber { border-color: rgba(245,158,11,0.35) !important; }
+        .feature-amber:hover { border-color: rgba(245,158,11,0.7) !important; box-shadow: 0 0 20px rgba(245,158,11,0.25) !important; }
+        .feature-amber .feature-icon { background: rgba(245,158,11,0.2); color: #fbbf24; }
+
+        .feature-rose  { border-color: rgba(244,63,94,0.35) !important; }
+        .feature-rose:hover  { border-color: rgba(244,63,94,0.7) !important; box-shadow: 0 0 20px rgba(244,63,94,0.25) !important; }
+        .feature-rose  .feature-icon { background: rgba(244,63,94,0.2); color: #fb7185; }
+
+        .feature-cyan  { border-color: rgba(6,182,212,0.35) !important; }
+        .feature-cyan:hover  { border-color: rgba(6,182,212,0.7) !important; box-shadow: 0 0 20px rgba(6,182,212,0.25) !important; }
+        .feature-cyan  .feature-icon { background: rgba(6,182,212,0.2); color: #22d3ee; }
+
+        .feature-violet { border-color: rgba(139,92,246,0.35) !important; }
+        .feature-violet:hover { border-color: rgba(139,92,246,0.7) !important; box-shadow: 0 0 20px rgba(139,92,246,0.25) !important; }
+        .feature-violet .feature-icon { background: rgba(139,92,246,0.2); color: #a78bfa; }
+
+        .feature-dark  { border-color: rgba(100,116,139,0.35) !important; }
+        .feature-dark:hover  { border-color: rgba(100,116,139,0.7) !important; box-shadow: 0 0 20px rgba(100,116,139,0.2) !important; }
+        .feature-dark  .feature-icon { background: rgba(100,116,139,0.2); color: #94a3b8; }
+
+        /* ── مؤشر الاتصال النابض ── */
+        @keyframes statusPulse {
+            0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+            50% { box-shadow: 0 0 0 5px transparent; opacity: 0.7; }
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            animation: statusPulse 2s infinite;
+        }
+
+        .status-connected { background: #10b981; color: #10b981; }
+        .status-disconnected { background: #f43f5e; color: #f43f5e; }
+
+        /* ── نموذج الإرسال ── */
+        .mode-btn {
+            background: rgba(255,255,255,0.04) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            color: var(--text-secondary) !important;
+            border-radius: 10px !important;
+            font-size: 0.78rem !important;
+            font-weight: 600 !important;
+            transition: all 0.25s ease !important;
+            padding: 6px 10px !important;
+        }
+        .mode-btn.active, .mode-btn:active {
+            background: rgba(59,130,246,0.2) !important;
+            border-color: rgba(59,130,246,0.6) !important;
+            color: #60a5fa !important;
+            box-shadow: 0 0 12px rgba(59,130,246,0.25) !important;
+        }
+
+        /* ── سجل العمليات ── */
+        .log-container {
+            background: rgba(2,6,23,0.8) !important;
+            color: #a0c4ff !important;
+            font-family: 'Courier New', Courier, monospace !important;
+            font-size: 0.75rem !important;
+            height: 200px !important;
+            overflow-y: auto !important;
+            padding: 12px !important;
+            border-radius: 0 0 18px 18px !important;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(139,92,246,0.4) transparent;
+        }
+
+        .console-container {
+            background: rgba(2,6,23,0.8) !important;
+            color: #86efac !important;
+            font-family: 'Courier New', Courier, monospace !important;
+            font-size: 0.75rem !important;
+            height: 200px !important;
+            overflow-y: auto !important;
+            padding: 12px !important;
+            border-radius: 0 0 18px 18px !important;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(16,185,129,0.4) transparent;
+        }
+
+        /* ── منطقة رفع الملفات ── */
+        #dropZone {
+            background: rgba(255,255,255,0.03) !important;
+            border: 2px dashed rgba(139,92,246,0.4) !important;
+            border-radius: 14px !important;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        #dropZone:hover {
+            background: rgba(139,92,246,0.06) !important;
+            border-color: rgba(139,92,246,0.7) !important;
+        }
+
+        /* ── المودالات ── */
+        .modal-content {
+            background: linear-gradient(160deg, #0d1432, #0a0f1e) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 20px !important;
+            backdrop-filter: blur(24px) !important;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.7) !important;
+            color: var(--text-primary) !important;
+        }
+
+        .modal-header { border-bottom: 1px solid rgba(255,255,255,0.08) !important; }
+        .modal-footer { border-top: 1px solid rgba(255,255,255,0.08) !important; }
+        .modal-title { color: #fff !important; font-weight: 800 !important; }
+        .btn-close { filter: invert(1) !important; }
+
+        /* ── قائمة Dropdown ── */
+        .dropdown-menu {
+            background: linear-gradient(160deg, #0d1432, #0a0f1e) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 14px !important;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6) !important;
+            backdrop-filter: blur(20px);
+            padding: 8px !important;
+        }
+
+        .dropdown-item {
+            color: var(--text-primary) !important;
+            border-radius: 10px !important;
+            transition: all 0.2s !important;
+        }
+
+        .dropdown-item:hover {
+            background: rgba(139,92,246,0.15) !important;
+            color: #fff !important;
+        }
+
+        /* ── Badge ── */
+        .badge { border-radius: 8px !important; font-weight: 700 !important; }
+        .bg-primary { background: linear-gradient(135deg, #2563eb, #1d4ed8) !important; }
+        .bg-success { background: linear-gradient(135deg, #059669, #047857) !important; }
+        .bg-danger  { background: linear-gradient(135deg, #dc2626, #b91c1c) !important; }
+        .bg-warning { background: linear-gradient(135deg, #d97706, #b45309) !important; }
+        .bg-info    { background: linear-gradient(135deg, #0891b2, #0e7490) !important; }
+        .bg-secondary { background: linear-gradient(135deg, #475569, #334155) !important; }
+        .bg-dark { background: linear-gradient(135deg, #1e293b, #0f172a) !important; }
+
+        /* ── شريط الحالة المجدول ── */
+        #scheduleStatusBar {
+            border-radius: 14px !important;
+            background: rgba(245,158,11,0.08) !important;
+            border: 1px solid rgba(245,158,11,0.25) !important;
+        }
+
+        /* ── الزر العائم للـ PWA ── */
+        #pwaInstallBtn {
+            border-radius: 14px !important;
+            transition: all 0.3s ease !important;
+        }
+
+        /* ── تأثير التحميل ── */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%) !important;
+            background-size: 200% 100% !important;
+            animation: skeleton-loading 1.5s infinite !important;
+        }
+
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* ── Alerts ── */
+        .alert {
+            background: rgba(255,255,255,0.05) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 12px !important;
+            color: var(--text-primary) !important;
+        }
+
+        .alert-info { border-color: rgba(6,182,212,0.3) !important; background: rgba(6,182,212,0.08) !important; }
+        .alert-success { border-color: rgba(16,185,129,0.3) !important; background: rgba(16,185,129,0.08) !important; }
+        .alert-danger { border-color: rgba(244,63,94,0.3) !important; background: rgba(244,63,94,0.08) !important; }
+        .alert-warning { border-color: rgba(245,158,11,0.3) !important; background: rgba(245,158,11,0.08) !important; }
+
+        /* ── تأثيرات كانفاس AI ── */
+        .ai-header {
+            background: linear-gradient(135deg, rgba(124,58,237,0.3), rgba(30,20,80,0.4)) !important;
+            border-bottom: 1px solid rgba(139,92,246,0.3) !important;
+        }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.4); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.7); }
+
+        /* ── تأثيرات إضافية ── */
+        .text-gradient-blue { background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .text-gradient-emerald { background: linear-gradient(90deg, #34d399, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+
+        .glow-border-blue { border-color: rgba(59,130,246,0.4) !important; box-shadow: 0 0 20px rgba(59,130,246,0.15); }
+        .glow-border-violet { border-color: rgba(139,92,246,0.4) !important; box-shadow: 0 0 20px rgba(139,92,246,0.15); }
+        .glow-border-emerald { border-color: rgba(16,185,129,0.4) !important; box-shadow: 0 0 20px rgba(16,185,129,0.15); }
+
+        /* ── ريسبونسيف ── */
         @media (max-width: 768px) {
-            .user-tabs {
-                flex-direction: column;
-                align-items: center;
-            }
-            
-            .user-tab {
-                width: 200px;
-                text-align: center;
-            }
+            .cosmic-header { padding: 10px 14px; }
+            .cosmic-logo-title { font-size: 0.8rem; }
+            .section-body { padding: 14px; }
         }
 
-        /* إضافة تأثير النبضة للمستخدم النشط */
-        .user-tab.active {
-            animation: pulse 2s infinite;
+        /* ── حالة النظام المرئي ── */
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: rgba(16,185,129,0.12);
+            border: 1px solid rgba(16,185,129,0.3);
+            border-radius: 20px;
+            padding: 2px 10px;
+            font-size: 0.68rem;
+            color: #34d399;
+            font-weight: 700;
         }
 
-        @keyframes pulse {
-            0% { box-shadow: 0 6px 15px rgba(0,0,0,0.2); }
-            50% { box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
-            100% { box-shadow: 0 6px 15px rgba(0,0,0,0.2); }
+        .live-dot {
+            width: 6px;
+            height: 6px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: statusPulse 1.5s infinite;
         }
+
+        /* ── PWA install ── */
+        #pwaInstallBtn.pwa-ready {
+            border-color: rgba(16,185,129,0.6) !important;
+            box-shadow: 0 0 15px rgba(16,185,129,0.25) !important;
+        }
+
+        /* إخفاء شريط المستخدمين الأصلي */
+        .users-bar > .card { border: none !important; background: transparent !important; box-shadow: none !important; }
     </style>
 </head>
 <body>
@@ -549,697 +939,529 @@
       setTimeout(__hideSplash, 4000);
     </script>
 
-    <div class="container-fluid mt-4">
-        <!-- شريط المستخدمين في الأعلى -->
-        {# ══ شريط الحسابات — يتغير بناءً على عدد الحسابات المسجّلة ══ #}
+    <div class="container-fluid" style="max-width:1200px;margin:0 auto;padding:16px;">
+
+        <!-- شريط الإشعارات الخاص بـ PWA -->
+        <div id="pushStatusMsg" style="display:none;"></div>
+
+        <!-- ══════════════════════════════════════════
+             شريط الحسابات
+        ══════════════════════════════════════════ -->
         {% if predefined_users %}
-        {# ── حالة: يوجد حسابات ── عرض الحسابات + زر إضافة ── #}
-        <div class="users-bar mb-4">
-            <div class="card">
-                <div class="card-body py-2">
-                    <div class="d-flex justify-content-center align-items-center flex-wrap gap-1">
-                        {# ── الحسابات الموجودة ── #}
-                        {% for uid, user_data in predefined_users.items() %}
-                        <div style="position:relative;display:inline-block;margin:2px;">
-                            <button class="btn user-tab {% if uid == current_user.id %}active{% endif %}"
-                                    id="userTab_{{ uid }}"
-                                    data-user-id="{{ uid }}"
-                                    data-default-name="{{ user_data.name }}"
-                                    style="color:{{ user_data.color }};border-color:{{ user_data.color }};">
-                                <img class="user-tab-avatar" id="userTabAvatar_{{ uid }}"
-                                     src="/api/account_avatar/{{ uid }}" alt=""
-                                     onerror="this.style.display='none';"
-                                     onload="this.style.display='inline-block';"
-                                     style="display:none;width:26px;height:26px;border-radius:50%;object-fit:cover;margin-left:6px;border:2px solid {{ user_data.color }};vertical-align:middle;">
-                                <i class="{{ user_data.icon }} me-2"></i>
-                                <span class="user-tab-name">{{ user_data.name }}</span>
-                            </button>
-                            <button class="btn btn-danger p-0 user-single-reset-btn"
-                                    data-uid="{{ uid }}" data-uname="{{ user_data.name }}"
-                                    title="إعادة تعيين {{ user_data.name }}"
-                                    onclick="openResetSingleModal(this); event.stopPropagation();"
-                                    style="position:absolute;top:-8px;left:-8px;width:20px;height:20px;border-radius:50%;font-size:0.55rem;line-height:20px;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);z-index:20;">
-                                <i class="fas fa-redo-alt"></i>
-                            </button>
-                            {% if admin_ui_visible %}
-                            <button title="حذف {{ user_data.name }}"
-                                    onclick="deleteDynUser('{{ uid }}'); event.stopPropagation();"
-                                    style="position:absolute;top:-8px;right:-8px;width:18px;height:18px;border-radius:50%;font-size:0.5rem;background:#ef4444;color:#fff;border:none;cursor:pointer;z-index:20;">✕</button>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                        {# ── زر إضافة حساب جديد ── #}
-                        <div style="display:inline-block;margin:2px;">
-                            <button class="btn user-tab" onclick="doAddAccountSlot()"
-                                    style="border:2px dashed #6366f1;color:#a5b4fc;opacity:.9;"
-                                    title="إضافة حساب تيليجرام جديد">
-                                <i class="fas fa-plus-circle me-1"></i>إضافة حساب
-                            </button>
-                        </div>
-                    </div>
-                    <div class="text-center mt-2">
-                        <small class="text-info">
-                            <i class="fas fa-info-circle me-1"></i>
-                            الحساب النشط: <strong id="currentUserNameDisplay" style="color: {{ current_user.color }};">{{ current_user.name }}</strong>
-                            <img id="currentAccountAvatar" src="" alt="" onerror="this.style.display='none';" style="display:none;width:22px;height:22px;border-radius:50%;object-fit:cover;margin:0 6px;vertical-align:middle;border:1px solid #ddd;">
-                            <span id="currentAccountNameDisplay" class="ms-2 badge bg-light text-dark" style="display:none;"></span>
-                        </small>
-                    </div>
-                </div>
+        <div class="users-bar mb-0" style="margin-bottom:0!important;">
+        <div class="users-bar-cosmic">
+            <div class="users-bar-label">
+                <i class="fas fa-users" style="color:#a78bfa;"></i>
+                الحسابات النشطة
+                <span style="margin-right:auto;"></span>
+                <span id="currentUserNameDisplay" style="color:{{ current_user.color }};font-size:0.75rem;font-weight:700;">
+                    <i class="fas fa-circle" style="font-size:0.5rem;vertical-align:middle;margin-left:4px;"></i>{{ current_user.name }}
+                </span>
             </div>
-        </div>
-        {% else %}
-        {# ── حالة: لا يوجد حسابات بعد ── عرض زر تسجيل الدخول فقط ── #}
-        <div class="mb-4 text-center" id="firstLoginBanner">
-            <div class="card mx-auto" style="max-width:420px;border:2px solid #6366f1;background:linear-gradient(135deg,rgba(99,102,241,0.08),rgba(139,92,246,0.05));border-radius:18px;">
-                <div class="card-body py-4 px-4">
-                    <div style="width:64px;height:64px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;box-shadow:0 8px 24px rgba(99,102,241,0.35);">
-                        <i class="fab fa-telegram-plane" style="font-size:2rem;color:#fff;"></i>
-                    </div>
-                    <h5 style="color:#e2e8f0;font-weight:800;margin-bottom:6px;">مركز سرعة انجاز</h5>
-                    <p style="color:#94a3b8;font-size:0.88rem;margin-bottom:20px;">سجّل دخولك بحساب تيليجرام للبدء</p>
-                    <button class="btn btn-primary w-100 py-2" onclick="scrollToLoginForm()"
-                            style="background:linear-gradient(135deg,#6366f1,#8b5cf6);border:none;border-radius:12px;font-weight:700;font-size:1rem;box-shadow:0 6px 18px rgba(99,102,241,0.4);">
-                        <i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول بتيليجرام
+            <div class="d-flex justify-content-center align-items-center flex-wrap gap-2">
+                {% for uid, user_data in predefined_users.items() %}
+                <div style="position:relative;display:inline-block;">
+                    <button class="btn user-tab {% if uid == current_user.id %}active{% endif %}"
+                            id="userTab_{{ uid }}"
+                            data-user-id="{{ uid }}"
+                            data-default-name="{{ user_data.name }}"
+                            style="color:{{ user_data.color }};border-color:{{ user_data.color }}33;">
+                        <img class="user-tab-avatar" id="userTabAvatar_{{ uid }}"
+                             src="/api/account_avatar/{{ uid }}" alt=""
+                             onerror="this.style.display='none';"
+                             onload="this.style.display='inline-block';"
+                             style="display:none;width:22px;height:22px;border-radius:50%;object-fit:cover;margin-left:6px;border:2px solid {{ user_data.color }};vertical-align:middle;">
+                        <i class="{{ user_data.icon }} me-1" style="font-size:0.75rem;"></i>
+                        <span class="user-tab-name" style="font-size:0.78rem;">{{ user_data.name }}</span>
+                    </button>
+                    <button class="btn btn-danger p-0 user-single-reset-btn"
+                            data-uid="{{ uid }}" data-uname="{{ user_data.name }}"
+                            title="إعادة تعيين {{ user_data.name }}"
+                            onclick="openResetSingleModal(this); event.stopPropagation();"
+                            style="position:absolute;top:-7px;left:-7px;width:18px;height:18px;border-radius:50%;font-size:0.5rem;line-height:18px;text-align:center;border:2px solid #0a0f1e;z-index:20;padding:0!important;min-height:unset!important;background:linear-gradient(135deg,#dc2626,#991b1b)!important;box-shadow:0 2px 6px rgba(220,38,38,0.4)!important;">
+                        <i class="fas fa-redo-alt"></i>
+                    </button>
+                    {% if admin_ui_visible %}
+                    <button title="حذف {{ user_data.name }}"
+                            onclick="deleteDynUser('{{ uid }}'); event.stopPropagation();"
+                            style="position:absolute;top:-7px;right:-7px;width:16px;height:16px;border-radius:50%;font-size:0.45rem;background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;border:1.5px solid #0a0f1e;cursor:pointer;z-index:20;display:flex;align-items:center;justify-content:center;">✕</button>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                <div style="display:inline-block;">
+                    <button class="btn user-tab" onclick="doAddAccountSlot()"
+                            style="border:1.5px dashed rgba(99,102,241,0.5);color:#a5b4fc;font-size:0.78rem;"
+                            title="إضافة حساب تيليجرام جديد">
+                        <i class="fas fa-plus-circle me-1" style="font-size:0.75rem;"></i>إضافة حساب
                     </button>
                 </div>
             </div>
         </div>
-        {# عناصر مخفية مطلوبة للـ JS #}
-        <span id="currentUserNameDisplay" style="display:none;">{{ current_user.name }}</span>
-        <img id="currentAccountAvatar" src="" alt="" style="display:none;">
-        <span id="currentAccountNameDisplay" style="display:none;"></span>
+        </div>
         {% endif %}
 
-        <!-- مساحة للتنبيهات -->
-        <div id="alertContainer"></div>
+        <!-- ══════════════════════════════════════════
+             الشبكة الرئيسية
+        ══════════════════════════════════════════ -->
+        <div class="row g-3">
 
-        <!-- مؤشر حالة المراقبة + زر تنظيف الكل -->
-        <div class="monitoring-status">
-            <span id="monitoringIndicator" class="badge bg-secondary">
-                <i class="fas fa-circle"></i> غير نشط
-            </span>
-            <button id="globalResetBtn"
-                    title="تنظيف والخروج من كل الجلسات لجميع الحسابات"
-                    onclick="openResetAllModal()">
-                <i class="fas fa-power-off"></i>
-                تنظيف الكل
-            </button>
-            <!-- زر الإدارة مخفي من الواجهة — يظهر عبر كلمة مرور البحث -->
-        </div>
+            <!-- ════ عمود اليمين: تسجيل الدخول + الإحصائيات + الوظائف ════ -->
+            <div class="col-lg-6">
 
-        <!-- العنوان الرئيسي الجديد -->
-        <div class="header-title">
-            <h2 class="mb-3" style="position:relative;">
-                <i class="fas fa-graduation-cap me-2"></i>
-                📚 تصميم وتنفيذ مركز سرعة انجاز
-                <span style="position:absolute;top:-8px;right:-8px;background:linear-gradient(135deg,#f093fb,#f5576c);color:#fff;font-size:0.55rem;font-weight:700;padding:3px 8px;border-radius:12px;letter-spacing:0.5px;box-shadow:0 2px 8px rgba(245,87,108,0.5);">v1.1</span>
-            </h2>
-            <h4 class="mb-3">للخدمات الطلابية والأكاديمية</h4>
-            <p class="mb-2">
-                <i class="fab fa-whatsapp me-2"></i>
-                واتساب: 
-                <a href="https://wa.me/+966510349663" class="whatsapp-link" target="_blank">
-                    +966510349663
-                </a>
-            </p>
-            <div class="mt-3">
-                <small id="connectionStatus" class="badge bg-secondary">
-                    {% if connection_status == 'connected' %}
-                        <i class="fas fa-circle text-success"></i> متصل
-                    {% else %}
-                        <i class="fas fa-circle text-danger"></i> غير متصل
-                    {% endif %}
-                </small>
-            </div>
-
-            <!-- زر تثبيت التطبيق -->
-            <div class="text-center mt-3">
-                <!-- زر التثبيت المباشر (يتغير حسب الجهاز تلقائياً) -->
-                <button id="pwaInstallBtn" class="btn install-btn"
-                        style="display:inline-block; background:linear-gradient(135deg,#1cc88a,#13855c); font-size:1rem; padding:10px 28px; border-radius:30px; border:none; box-shadow:0 4px 15px rgba(28,200,138,0.4);"
-                        onclick="pwaInstallClick()">
-                    <i class="fas fa-download me-2"></i>
-                    <span id="pwaInstallLabel">📲 تثبيت التطبيق</span>
-                </button>
-                <div id="pwaInstalledMsg" style="display:none;" class="text-success mt-2">
-                    <i class="fas fa-check-circle"></i> التطبيق مثبّت ✅
-                </div>
-
-                <div class="pwa-features mt-2">
-                    <small><i class="fas fa-mobile-alt"></i> يعمل على جميع الأجهزة</small>
-                    <small><i class="fas fa-wifi"></i> يعمل بدون إنترنت</small>
-                    <small><i class="fas fa-bell"></i> إشعارات فورية</small>
-                    <small><i class="fas fa-rocket"></i> سرعة عالية</small>
-                </div>
-            </div>
-        </div>
-
-        <!-- الإشعارات مخفية — تُفعَّل تلقائياً عند تحميل الصفحة -->
-        <input type="checkbox" id="pushToggle"   style="display:none">
-        <input type="checkbox" id="speechToggle" style="display:none">
-        <div id="pushStatusMsg" style="display:none;"></div>
-
-        <div class="row">
-            <!-- لوحة تسجيل الدخول -->
-            <div class="col-lg-6 mb-4">
-                <div class="card">
-                    <div class="card-header bg-primary text-white text-center">
-                        <h2 class="mb-1">
-                            <i class="fas fa-telegram-plane me-2"></i>
-                            تسجيل الدخول
-                        </h2>
-                        <small id="connectionStatusHeader" class="badge bg-secondary">
+                <!-- 🔐 بطاقة تسجيل الدخول -->
+                <div class="section-card glow-border-blue" style="border-color:rgba(59,130,246,0.25)!important;">
+                    <div class="section-header card-header-blue">
+                        <div class="section-header-icon" style="background:rgba(59,130,246,0.2);">
+                            <i class="fab fa-telegram-plane" style="color:#60a5fa;"></i>
+                        </div>
+                        <span class="text-gradient-blue" style="font-size:0.92rem;">تسجيل الدخول</span>
+                        <small id="connectionStatusHeader" class="badge ms-auto" style="font-size:0.65rem;">
                             {% if connection_status == 'connected' %}
-                                <i class="fas fa-circle text-success"></i> متصل
+                                <span class="status-dot status-connected" style="display:inline-block;width:8px;height:8px;margin-left:4px;border-radius:50%;background:#10b981;"></span> متصل
                             {% else %}
-                                <i class="fas fa-circle text-danger"></i> غير متصل
+                                <span class="status-dot status-disconnected" style="display:inline-block;width:8px;height:8px;margin-left:4px;border-radius:50%;background:#f43f5e;"></span> غير متصل
                             {% endif %}
                         </small>
                     </div>
-                    <div class="card-body">
+                    <div class="section-body">
                         <form id="loginForm">
                             <div class="mb-3">
-                                <label for="phone" class="form-label">رقم الهاتف</label>
+                                <label for="phone" class="form-label"><i class="fas fa-mobile-alt me-1"></i>رقم الهاتف</label>
                                 <input type="tel" class="form-control" id="phone"
                                         placeholder="+966xxxxxxxxx"
                                         value="{{ settings.phone or '' }}"
                                        required>
-                                <div class="form-text">أدخل رقم الهاتف مع رمز الدولة</div>
                             </div>
-
                             <div class="mb-3" id="passwordDiv" style="display: none;">
-                                <label for="password" class="form-label">كلمة مرور التليجرام (اختيارية)</label>
+                                <label for="password" class="form-label"><i class="fas fa-lock me-1"></i>كلمة مرور التليجرام (اختيارية)</label>
                                 <input type="password" class="form-control" id="password"
                                         placeholder="كلمة المرور للتحقق الثنائي">
                             </div>
-
-                            <div class="row">
-                                <div class="col-md-6 mb-2" id="loginButtonContainer">
+                            <div class="row g-2">
+                                <div class="col-6" id="loginButtonContainer">
                                     <button type="submit" class="btn btn-primary w-100" id="loginBtn">
-                                        <i class="fas fa-sign-in-alt me-2"></i>
-                                        تسجيل الدخول
+                                        <i class="fas fa-sign-in-alt me-2"></i>دخول
                                     </button>
                                 </div>
-
-                                <!-- أزرار إدارة الجلسة - تظهر بعد تسجيل الدخول -->
-                                <div class="col-md-6 mb-2" id="sessionControls" style="display: none;">
+                                <div class="col-6" id="sessionControls" style="display: none;">
                                     <button type="button" class="btn btn-danger w-100" id="logoutButton">
-                                        <i class="fas fa-sign-out-alt me-2"></i>تسجيل الخروج
+                                        <i class="fas fa-sign-out-alt me-2"></i>خروج
                                     </button>
-                                    <small class="text-muted d-block mt-1 text-center">
-                                        <i class="fas fa-info-circle me-1"></i>
-                                        إنهاء جلسة التليجرام نهائياً
-                                    </small>
                                 </div>
-                                
                             </div>
                         </form>
 
-                        <!-- نموذج التحقق من الكود -->
-                        <form id="verifyForm" style="display: none;">
+                        <form id="verifyForm" style="display: none;" class="mt-2">
                             <div class="mb-3">
-                                <label for="verificationCode" class="form-label">كود التحقق</label>
+                                <label for="verificationCode" class="form-label"><i class="fas fa-key me-1"></i>كود التحقق</label>
                                 <input type="text" class="form-control" id="verificationCode"
                                         placeholder="أدخل كود التحقق المرسل">
                             </div>
                             <button type="submit" class="btn btn-success w-100">
-                                <i class="fas fa-check me-2"></i>
-                                تأكيد الكود
-                            </button>
-                            <div class="row mt-2 g-2">
-                                <div class="col-6">
-                                    <button type="button" class="btn btn-outline-primary btn-sm w-100" id="resendCodeBtn">
-                                        <i class="fas fa-redo me-1"></i>إعادة إرسال
-                                    </button>
-                                </div>
-                                <div class="col-6">
-                                    <button type="button" class="btn btn-outline-warning btn-sm w-100" id="resendSmsBtn">
-                                        <i class="fas fa-sms me-1"></i>إرسال عبر SMS
-                                    </button>
-                                </div>
-                            </div>
-                            <small class="text-muted d-block mt-2 text-center">
-                                <i class="fas fa-info-circle me-1"></i>
-                                الكود يصل أولاً داخل تطبيق تيليجرام. اضغط "إرسال عبر SMS" لاستلامه كرسالة نصية.
-                            </small>
-                        </form>
-
-                        <!-- نموذج كلمة المرور -->
-                        <form id="passwordForm" style="display: none;">
-                            <div class="mb-3">
-                                <label for="twoFactorPassword" class="form-label">كلمة مرور التحقق الثنائي</label>
-                                <input type="password" class="form-control" id="twoFactorPassword"
-                                        placeholder="أدخل كلمة المرور">
-                            </div>
-                            <button type="submit" class="btn btn-success w-100">
-                                <i class="fas fa-unlock me-2"></i>
-                                تأكيد كلمة المرور
+                                <i class="fas fa-check me-2"></i>تحقق
                             </button>
                         </form>
                     </div>
                 </div>
 
-                <!-- إحصائيات الإرسال -->
-                <div class="card mt-3">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-chart-bar me-2"></i>
-                            إحصائيات الإرسال
-                        </h5>
+                <!-- 📊 إحصائيات الإرسال -->
+                <div class="section-card glow-border-cyan" style="border-color:rgba(6,182,212,0.25)!important;">
+                    <div class="section-header card-header-cyan">
+                        <div class="section-header-icon" style="background:rgba(6,182,212,0.2);">
+                            <i class="fas fa-chart-bar" style="color:#22d3ee;"></i>
+                        </div>
+                        <span style="color:#22d3ee;font-size:0.92rem;">إحصائيات الإرسال</span>
+                        <div class="live-indicator ms-auto">
+                            <div class="live-dot"></div>مباشر
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <div class="row text-center">
+                    <div class="section-body">
+                        <div class="row g-3">
                             <div class="col-6">
-                                <h3 class="text-success" id="sentCount">0</h3>
-                                <small>رسائل مرسلة</small>
+                                <div class="stat-pill" style="border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.06)!important;">
+                                    <div class="stat-number" style="color:#34d399;" id="sentCount">0</div>
+                                    <div class="stat-label"><i class="fas fa-paper-plane me-1"></i>رسائل مرسلة</div>
+                                </div>
                             </div>
                             <div class="col-6">
-                                <h3 class="text-danger" id="errorCount">0</h3>
-                                <small>أخطاء</small>
+                                <div class="stat-pill" style="border-color:rgba(244,63,94,0.3);background:rgba(244,63,94,0.06)!important;">
+                                    <div class="stat-number" style="color:#fb7185;" id="errorCount">0</div>
+                                    <div class="stat-label"><i class="fas fa-exclamation-triangle me-1"></i>أخطاء</div>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- الوظائف الجديدة -->
-                <div class="card mt-3">
-                    <div class="card-header bg-gradient text-white" style="background: linear-gradient(135deg, #1e3c78 0%, #2a5298 100%);">
-                        <h5 class="mb-0">
-                            <i class="fas fa-rocket me-2"></i>
-                            الوظائف الجديدة
-                        </h5>
+                <!-- 🚀 الوظائف الجديدة -->
+                <div class="section-card" style="border-color:rgba(139,92,246,0.25)!important;">
+                    <div class="section-header card-header-violet">
+                        <div class="section-header-icon" style="background:rgba(139,92,246,0.2);">
+                            <i class="fas fa-rocket" style="color:#a78bfa;"></i>
+                        </div>
+                        <span style="color:#a78bfa;font-size:0.92rem;">الوظائف المتقدمة</span>
                     </div>
-                    <div class="card-body">
+                    <div class="section-body">
                         <div class="row g-2">
+
+                            <!-- نظام التعلم الذكي -->
                             <div class="col-6 col-md-4">
-                                <button type="button" class="btn btn-outline-primary w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" id="btnLearningSystem" data-bs-toggle="modal" data-bs-target="#learningModal">
-                                    <i class="fas fa-brain fa-2x mb-2"></i>
-                                    <span class="small fw-bold">نظام التعلم الذكي</span>
+                                <button type="button" class="feature-btn feature-blue" id="btnLearningSystem" data-bs-toggle="modal" data-bs-target="#learningModal">
+                                    <div class="feature-icon"><i class="fas fa-brain"></i></div>
+                                    <div class="feature-label">نظام التعلم الذكي</div>
                                 </button>
                             </div>
+
+                            <!-- النشر الدوري -->
                             <div class="col-6 col-md-4">
-                                <button type="button" class="btn btn-outline-success w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" id="btnRotatingSystem" data-bs-toggle="modal" data-bs-target="#rotatingModal">
-                                    <i class="fas fa-sync-alt fa-2x mb-2"></i>
-                                    <span class="small fw-bold">النشر الدوري</span>
+                                <button type="button" class="feature-btn feature-green" id="btnRotatingSystem" data-bs-toggle="modal" data-bs-target="#rotatingModal">
+                                    <div class="feature-icon"><i class="fas fa-sync-alt"></i></div>
+                                    <div class="feature-label">النشر الدوري</div>
                                 </button>
                             </div>
+
+                            <!-- البحث في روابطي -->
                             <div class="col-6 col-md-4">
-                              <!-- زر البحث الموحد — يحتوي على روابطي المحفوظة ورسائلي بداخله -->
-                              <div class="btn btn-outline-warning w-100 h-100 py-2 d-flex flex-column align-items-center justify-content-center" id="btnSearchMyLinksDropdown" onclick="openSearchMyLinksTab('global')" style="min-height:90px;cursor:pointer;border-radius:8px;">
-                                  <i class="fas fa-search fa-2x mb-1 text-warning"></i>
-                                  <span class="small fw-bold">البحث في روابطي</span>
-                                  <!-- أيقونتا رسائلي والروابط المحفوظة داخل زر البحث -->
-                                  <div class="d-flex gap-1 mt-2" onclick="event.stopPropagation()">
-                                      <button type="button"
-                                              class="btn btn-warning btn-sm py-0 px-2"
-                                              style="font-size:0.62rem;border-radius:5px;"
-                                              onclick="(new bootstrap.Modal(document.getElementById('sentMessagesModal'))).show();"
-                                              title="رسائلي المُرسَلة">
-                                          <i class="fas fa-envelope me-1"></i>رسائلي
-                                          <span id="sentBatchesCount" class="badge bg-dark text-white ms-1" style="font-size:0.55rem;display:none;">0</span>
-                                      </button>
-                                      <button type="button"
-                                              id="btnSavedLinks"
-                                              class="btn btn-warning btn-sm py-0 px-2"
-                                              style="font-size:0.62rem;border-radius:5px;"
-                                              onclick="window.open('/saved_links','_blank')"
-                                              title="روابطي المحفوظة">
-                                          <i class="fas fa-bookmark me-1"></i>محفوظاتي
-                                      </button>
-                                  </div>
-                              </div>
+                                <div class="feature-btn feature-amber" id="btnSearchMyLinksDropdown" onclick="openSearchMyLinksTab('global')" style="cursor:pointer;gap:4px;">
+                                    <div class="feature-icon"><i class="fas fa-search"></i></div>
+                                    <div class="feature-label">البحث في روابطي</div>
+                                    <div class="d-flex gap-1 mt-1" onclick="event.stopPropagation()">
+                                        <button type="button"
+                                                class="btn btn-warning btn-sm py-0 px-2"
+                                                style="font-size:0.58rem;border-radius:6px;min-height:unset!important;"
+                                                onclick="(new bootstrap.Modal(document.getElementById('sentMessagesModal'))).show();"
+                                                title="رسائلي المُرسَلة">
+                                            <i class="fas fa-envelope me-1"></i>رسائلي
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-outline-warning btn-sm py-0 px-2"
+                                                style="font-size:0.58rem;border-radius:6px;min-height:unset!important;"
+                                                onclick="(new bootstrap.Modal(document.getElementById('searchMyLinksModal'))).show();"
+                                                title="الروابط المحفوظة">
+                                            <i class="fas fa-bookmark me-1"></i>روابطي
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
+
+                            <!-- الانضمام المتقدم -->
                             <div class="col-6 col-md-4">
-                                <button type="button" class="btn btn-outline-danger w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" id="btnAutoJoinAdvanced" data-bs-toggle="modal" data-bs-target="#autoJoinAdvancedModal">
-                                    <i class="fas fa-bolt fa-2x mb-2"></i>
-                                    <span class="small fw-bold">الانضمام المتقدم</span>
+                                <button type="button" class="feature-btn feature-rose" id="btnAutoJoinAdvanced" data-bs-toggle="modal" data-bs-target="#autoJoinAdvancedModal">
+                                    <div class="feature-icon"><i class="fas fa-bolt"></i></div>
+                                    <div class="feature-label">الانضمام المتقدم</div>
                                 </button>
                             </div>
-                            <!-- تم إخفاء زر صحة النظام -->
+
+                            <!-- صحة النظام (مخفي) -->
                             <div class="col-6 col-md-4" id="btnSystemHealth" style="display:none;">
-                                <div class="w-100 h-100">
-                                    <button type="button" class="btn btn-outline-secondary w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" onclick="checkSystemHealth()">
-                                        <i class="fas fa-heartbeat fa-2x mb-2"></i>
-                                        <span class="small fw-bold">صحة النظام</span>
+                                <button type="button" class="feature-btn feature-cyan" onclick="checkSystemHealth()">
+                                    <div class="feature-icon"><i class="fas fa-heartbeat"></i></div>
+                                    <div class="feature-label">صحة النظام</div>
+                                </button>
+                            </div>
+
+                            <!-- الردود التلقائية -->
+                            <div class="col-6 col-md-4">
+                                <button type="button" class="feature-btn feature-cyan" id="btnAutoReplies" data-bs-toggle="modal" data-bs-target="#autoRepliesModal">
+                                    <div class="feature-icon"><i class="fas fa-reply-all"></i></div>
+                                    <div class="feature-label">الردود التلقائية</div>
+                                </button>
+                            </div>
+
+                            <!-- سجلات النظام (مخفي) -->
+                            <div class="col-6 col-md-4" id="sysLogsCardCol" style="display:none;">
+                                <div class="position-relative w-100 h-100" style="min-height:90px;">
+                                    <button type="button" class="feature-btn feature-dark w-100 h-100" id="btnSystemLogs" data-bs-toggle="modal" data-bs-target="#systemLogsModal">
+                                        <div class="feature-icon"><i class="fas fa-terminal"></i></div>
+                                        <div class="feature-label">سجلات النظام</div>
+                                        <span id="logsLiveBadge" class="badge bg-success mt-1" style="font-size:0.55rem;display:none;">● مباشر</span>
+                                    </button>
+                                    <span id="diagErrorBadge"
+                                          class="position-absolute top-0 end-0 translate-middle badge rounded-pill bg-danger"
+                                          style="font-size:0.6rem;display:none;z-index:3;"></span>
+                                    <button type="button" id="sysLogsCloseBtn"
+                                            class="btn btn-sm position-absolute"
+                                            style="top:4px;right:4px;padding:1px 6px;font-size:0.7rem;line-height:1.4;background:rgba(0,0,0,0.3);color:#888;border:none;z-index:3;"
+                                            title="إخفاء"
+                                            onclick="document.getElementById('sysLogsCardCol').style.display='none'">
+                                        ✕
                                     </button>
                                 </div>
                             </div>
-                            <div class="col-6 col-md-4">
-                                <button type="button" class="btn btn-outline-info w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" id="btnAutoReplies" data-bs-toggle="modal" data-bs-target="#autoRepliesModal">
-                                    <i class="fas fa-reply-all fa-2x mb-2"></i>
-                                    <span class="small fw-bold">الردود التلقائية</span>
-                                </button>
-                            </div>
-                            <!-- تم نقل أيقونتَي "رسائلي" و"الروابط المحفوظة" داخل زر "البحث في روابطي" أعلاه -->
-                            <!-- تم إخفاق زر سجلات النظام -->
-                            <div class="col-6 col-md-4" id="sysLogsCardCol" style="display:none;">
-                              <div class="position-relative w-100 h-100">
-                                <button type="button" class="btn btn-outline-dark w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center" id="btnSystemLogs" data-bs-toggle="modal" data-bs-target="#systemLogsModal">
-                                    <i class="fas fa-terminal fa-2x mb-2"></i>
-                                    <span class="small fw-bold">سجلات النظام</span>
-                                    <span id="logsLiveBadge" class="badge bg-success mt-1" style="font-size:0.55rem;display:none;">● مباشر</span>
-                                </button>
-                                <!-- عداد الأخطاء -->
-                                <span id="diagErrorBadge"
-                                      class="position-absolute top-0 end-0 translate-middle badge rounded-pill bg-danger"
-                                      style="font-size:0.6rem;display:none;z-index:3;"></span>
-                                <!-- زر الإغلاق في الطرف -->
-                                <button type="button" id="sysLogsCloseBtn"
-                                        class="btn btn-sm position-absolute"
-                                        style="top:4px;right:4px;padding:1px 6px;font-size:0.7rem;line-height:1.4;background:rgba(0,0,0,0.18);color:#888;border:none;z-index:3;"
-                                        title="إخفاء"
-                                        onclick="document.getElementById('sysLogsCardCol').style.display='none'">
-                                  ✕
-                                </button>
-                              </div>
-                            </div>
+
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- لوحة الإعدادات -->
-            <div class="col-lg-6 mb-4">
-                <div class="card">
-                    <div class="card-header bg-success text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-cog me-2"></i>
-                            إعدادات المراقبة والإرسال
-                        </h5>
+            </div><!-- /col-lg-6 right -->
+
+            <!-- ════ عمود اليسار: الإعدادات ════ -->
+            <div class="col-lg-6">
+
+                <!-- ⚙️ إعدادات المراقبة والإرسال -->
+                <div class="section-card glow-border-emerald" style="border-color:rgba(16,185,129,0.25)!important;height:100%;">
+                    <div class="section-header card-header-emerald">
+                        <div class="section-header-icon" style="background:rgba(16,185,129,0.2);">
+                            <i class="fas fa-cog" style="color:#34d399;"></i>
+                        </div>
+                        <span style="color:#34d399;font-size:0.92rem;">إعدادات المراقبة والإرسال</span>
                     </div>
-                    <div class="card-body">
+                    <div class="section-body">
                         <form id="settingsForm">
+
+                            <!-- الرسالة -->
                             <div class="mb-3">
-                                <label for="message" class="form-label">الرسالة</label>
+                                <label for="message" class="form-label"><i class="fas fa-comment-dots me-1"></i>الرسالة</label>
                                 <textarea class="form-control" id="message" rows="3"
-                                          placeholder="اكتب الرسالة المراد إرسالها">{{ settings.message or '' }}</textarea>
+                                          placeholder="اكتب الرسالة المراد إرسالها...">{{ settings.message or '' }}</textarea>
                             </div>
 
-                            <!-- قسم رفع الصور المحسن -->
+                            <!-- رفع الصور -->
                             <div class="mb-3">
-                                <label for="imageUpload" class="form-label">
-                                    <i class="fas fa-image me-2"></i>إضافة صور للرسالة (اختياري)
-                                </label>
-                                
-                                <!-- منطقة السحب والإفلات -->
-                                <div id="dropZone" class="border border-2 border-dashed border-secondary rounded p-4 text-center mb-3" 
-                                     style="min-height: 120px; cursor: pointer; transition: all 0.3s ease;">
-                                    <i class="fas fa-cloud-upload-alt fa-3x text-muted mb-2"></i>
-                                    <h6 class="text-muted">اسحب الصور هنا أو انقر للاختيار</h6>
-                                    <p class="text-muted small mb-0">
-                                        <i class="fas fa-info-circle me-1"></i>
-                                        يدعم: JPG, PNG, GIF, WebP | الحد الأقصى: 10MB لكل صورة
-                                    </p>
-                                    <input type="file" class="d-none" id="imageUpload" 
+                                <label for="imageUpload" class="form-label"><i class="fas fa-image me-1"></i>إضافة صور للرسالة (اختياري)</label>
+                                <div id="dropZone" class="border border-2 border-dashed rounded p-3 text-center"
+                                     style="min-height: 90px; cursor: pointer; transition: all 0.3s ease;">
+                                    <i class="fas fa-cloud-upload-alt fa-2x text-muted mb-1"></i>
+                                    <div style="font-size:0.8rem;color:var(--text-secondary);">اسحب الصور هنا أو انقر للاختيار</div>
+                                    <div style="font-size:0.68rem;color:var(--text-secondary);margin-top:4px;">JPG, PNG, GIF, WebP | الحد الأقصى: 10MB</div>
+                                    <input type="file" class="d-none" id="imageUpload"
                                            accept="image/jpeg,image/png,image/gif,image/webp" multiple>
                                 </div>
-                                
-                                <!-- معاينة الصور المرفوعة -->
-                                <div id="imagePreview" class="mt-3" style="display: none;">
+                                <div id="imagePreview" class="mt-2" style="display: none;">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h6 class="mb-0"><i class="fas fa-images me-2 text-primary"></i>الصور المحددة (<span id="imageCount">0</span>)</h6>
-                                        <button type="button" class="btn btn-sm btn-outline-danger" id="clearImages">
-                                            <i class="fas fa-trash me-1"></i>مسح الكل
+                                        <span style="font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-images me-1"></i>الصور (<span id="imageCount">0</span>)</span>
+                                        <button type="button" class="btn btn-sm btn-outline-danger py-0 px-2" id="clearImages" style="font-size:0.7rem;">
+                                            <i class="fas fa-trash me-1"></i>مسح
                                         </button>
                                     </div>
                                     <div id="imagePreviewContainer" class="row g-2"></div>
-                                    <div class="alert alert-info mt-2 py-2" id="imageSendInfo">
-                                        <i class="fas fa-info-circle me-1"></i>
-                                        <strong>ملاحظة:</strong> ستُرسل الصور مع الرسالة النصية معاً في نفس الرسالة
+                                    <div class="alert alert-info mt-2 py-2" id="imageSendInfo" style="font-size:0.75rem;">
+                                        <i class="fas fa-info-circle me-1"></i>ستُرسل الصور مع الرسالة النصية معاً
                                     </div>
                                 </div>
                             </div>
 
-                            <!-- ─── خيارات وضع الإرسال ─── -->
+                            <!-- وضع الإرسال -->
                             <div class="mb-3">
-                                <label class="form-label fw-bold"><i class="fas fa-paper-plane me-1 text-primary"></i>وضع الإرسال:</label>
+                                <label class="form-label"><i class="fas fa-paper-plane me-1"></i>وضع الإرسال</label>
                                 <div class="btn-group w-100" role="group" id="sendModeGroup">
-                                    <button type="button" class="btn btn-outline-primary active" id="sendSpecificBtn" onclick="setSendMode('specific')">
-                                        <i class="fas fa-list me-1"></i> مجموعات محددة
+                                    <button type="button" class="btn mode-btn active" id="sendSpecificBtn" onclick="setSendMode('specific')">
+                                        <i class="fas fa-crosshairs me-1"></i>مجموعات محددة
                                     </button>
-                                    <button type="button" class="btn btn-outline-success" id="sendAllBtn" onclick="setSendMode('all')">
-                                        <i class="fas fa-globe me-1"></i> كل المجموعات
-                                    </button>
-                                </div>
-                                <div id="sendModeHelp" class="form-text text-info mt-1">
-                                    <i class="fas fa-info-circle me-1"></i>
-                                    <span id="sendModeText">أدخل روابط المجموعات في الحقل أدناه.</span>
-                                </div>
-                            </div>
-
-                            <div class="mb-3">
-                                <label for="groups" class="form-label">مجموعات الإرسال</label>
-                                <div class="input-group">
-                                    <textarea class="form-control" id="groups" rows="4"
-                                              placeholder="ضع كل مجموعة في سطر منفصل (@username أو اسم المجموعة)">{{ '\n'.join(settings.groups or []) }}</textarea>
-                                    <button class="btn btn-outline-secondary" type="button" id="browseGroupsBtn"
-                                            onclick="browseGroups()" title="استعراض المجموعات من الحساب">
-                                        <i class="fas fa-search"></i>
+                                    <button type="button" class="btn mode-btn" id="sendAllBtn" onclick="setSendMode('all')">
+                                        <i class="fas fa-broadcast-tower me-1"></i>جميع المجموعات
                                     </button>
                                 </div>
-                                <div class="form-text">
-                                    📤 هذه المجموعات للإرسال فقط - المراقبة تشمل كامل الحساب تلقائياً
-                                </div>
                             </div>
 
-                            <div class="mb-3">
-                                <label for="watchWords" class="form-label">كلمات المراقبة (اختيارية)</label>
-                                <textarea class="form-control" id="watchWords" rows="3"
-                                          placeholder="ضع كل كلمة في سطر منفصل (اتركها فارغة لمراقبة كل الرسائل)">{{ '\n'.join(settings.watch_words or []) }}</textarea>
-                                <div class="form-text">
-                                    ⚠️ المراقبة تشمل كامل المجموعات والمحادثات في الحساب
-                                    <br>🔹 إذا حددت كلمات: سيتم التنبيه عند ورود هذه الكلمات فقط
-                                    <br>🔹 إذا تركتها فارغة: سيتم التنبيه لكل الرسائل الجديدة
-                                </div>
+                            <!-- المجموعات -->
+                            <div class="mb-3" id="groupsDiv">
+                                <label for="groups" class="form-label"><i class="fas fa-users me-1"></i>المجموعات</label>
+                                <textarea class="form-control" id="groups" rows="2"
+                                          placeholder="أدخل روابط المجموعات (كل رابط في سطر)">{{ settings.groups or '' }}</textarea>
                             </div>
 
+                            <!-- الكلمات المراقبة -->
                             <div class="mb-3">
-                                <label for="sanitizeMode" class="form-label">
-                                    <i class="fas fa-shield-alt text-success me-1"></i>
-                                    وضع الإرسال عند المجموعات المحمية
-                                </label>
-                                <select class="form-select" id="sanitizeMode">
-                                    <option value="salam"  {{ 'selected' if (settings.sanitize_mode or 'salam') == 'salam'  else '' }}>🤖 ذكي (salam) — أرسل "السلام عليكم" ثم عدّل عند النشاط ✅ افتراضي</option>
-                                    <option value="skip"   {{ 'selected' if settings.sanitize_mode == 'skip'   else '' }}>⏭️ تخطي — لا ترسل للمجموعات المحمية</option>
-                                    <option value="smart"  {{ 'selected' if settings.sanitize_mode == 'smart'  else '' }}>🧠 ذكية — ينقّي الرسالة (يحذف روابط/أرقام)</option>
-                                    <option value="always" {{ 'selected' if settings.sanitize_mode == 'always' else '' }}>🛡️ تنقية — أرسل مع حذف الروابط دائماً</option>
-                                    <option value="off"    {{ 'selected' if settings.sanitize_mode == 'off'    else '' }}>🚫 معطّل — أرسل كما هي (خطر حظر)</option>
-                                </select>
-                                <div class="form-text">
-                                    <strong>🤖 ذكي (salam) [افتراضي]:</strong> يرسل "السلام عليكم" أولاً، ينتظر مدة interval، فإن وصلت ≥3 رسائل عدّل إلى رسالتك، وإلا حذف وأعاد الدورة. يُوقف تلقائياً عند تغيير الوضع. <br>
-                                    <strong>⏭️ تخطي:</strong> يتجاهل المجموعات المحمية تماماً — الأأمن للحساب. <br>
-                                    <strong>🧠 ذكية:</strong> يحذف الروابط والأرقام تلقائياً قبل الإرسال للمجموعات المحمية. <br>
-                                    <strong>🛡️ تنقية:</strong> يحذف الروابط من كل رسالة لجميع المجموعات. <br>
-                                    <strong>🚫 معطّل:</strong> يرسل الرسالة كما هي بدون تنقية (خطر حظر).
-                                </div>
+                                <label for="keywords" class="form-label"><i class="fas fa-eye me-1"></i>الكلمات المراقبة</label>
+                                <input type="text" class="form-control" id="keywords"
+                                       placeholder="كلمة1, كلمة2, ..."
+                                       value="{{ settings.keywords or '' }}">
                             </div>
 
-                            <!-- تم حذف زر فحص المجموعات -->
-
+                            <!-- نوع الإرسال -->
                             <div class="mb-3">
-                                <label for="sendType" class="form-label">نوع الإرسال</label>
+                                <label for="sendType" class="form-label"><i class="fas fa-calendar-alt me-1"></i>نوع الإرسال</label>
                                 <select class="form-select" id="sendType">
-                                    <option value="manual" {{ 'selected' if settings.send_type == 'manual' else '' }}>يدوي</option>
-                                    <option value="scheduled" {{ 'selected' if settings.send_type == 'scheduled' else '' }}>مجدول</option>
+                                    <option value="immediate" {% if settings.send_type == 'immediate' %}selected{% endif %}>فوري</option>
+                                    <option value="scheduled" {% if settings.send_type == 'scheduled' %}selected{% endif %}>مجدول</option>
                                 </select>
                             </div>
 
-                            <div class="mb-3" id="intervalDiv" style="{{ 'display: none;' if settings.send_type != 'scheduled' else '' }}">
-                                <label for="intervalSeconds" class="form-label">فترة الإرسال (بالدقائق)</label>
-                                <input type="number" class="form-control" id="intervalSeconds"
+                            <!-- الفاصل الزمني -->
+                            <div class="mb-3">
+                                <label for="interval" class="form-label"><i class="fas fa-clock me-1"></i>الفاصل الزمني (دقائق)</label>
+                                <input type="number" class="form-control" id="interval"
                                        value="{{ ((settings.interval_seconds or 1500) // 60) }}" min="1">
-                                <div class="form-text">الحد الأدنى: دقيقة واحدة — الافتراضي: 25 دقيقة</div>
+                                <div style="font-size:0.7rem;color:var(--text-secondary);margin-top:4px;">الحد الأدنى: دقيقة واحدة — الافتراضي: 25 دقيقة</div>
                             </div>
 
-                            <!-- مدة تشغيل الإرسال المجدول (تحلّ محل الوقت المحدد) -->
+                            <!-- مدة الإرسال المجدول -->
                             <div class="mb-3" id="scheduledTimeDiv" style="{{ 'display: none;' if settings.send_type != 'scheduled' else '' }}">
-                                <label for="scheduleDuration" class="form-label">
-                                    <i class="fas fa-hourglass-half me-2 text-warning"></i>مدة تشغيل الإرسال المجدول
-                                </label>
+                                <label for="scheduleDuration" class="form-label"><i class="fas fa-hourglass-half me-1"></i>مدة تشغيل الإرسال المجدول</label>
                                 <div class="input-group">
                                     <input type="number" class="form-control" id="scheduleDuration"
                                            min="0" step="0.5"
                                            value="{{ settings.schedule_duration_hours or 0 }}"
                                            placeholder="0">
-                                    <span class="input-group-text">ساعة</span>
+                                    <span class="input-group-text" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text-secondary);">ساعة</span>
                                 </div>
-                                <div class="form-text">
-                                    <i class="fas fa-info-circle me-1 text-info"></i>
-                                    <strong>0 = بدون حد زمني</strong> (يعمل حتى إيقاف يدوي) —
-                                    مثال: 3 = يتوقف تلقائياً بعد 3 ساعات ويظهر زر استئناف
+                                <div style="font-size:0.7rem;color:var(--text-secondary);margin-top:4px;"><strong>0 = بدون حد زمني</strong></div>
+                            </div>
+
+                            <!-- أزرار الحفظ والإرسال -->
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <button type="submit" class="btn btn-success w-100">
+                                        <i class="fas fa-save me-2"></i>حفظ
+                                    </button>
+                                </div>
+                                <div class="col-6">
+                                    <button type="button" class="btn btn-primary w-100" id="sendNowBtn">
+                                        <i class="fas fa-paper-plane me-2"></i>إرسال الآن
+                                    </button>
                                 </div>
                             </div>
 
-                            <div class="row">
-                                <div class="col-md-6 mb-2">
-                                    <button type="submit" class="btn btn-success w-100">
-                                        <i class="fas fa-save me-2"></i>
-                                        حفظ الإعدادات
-                                    </button>
-                                </div>
-                                <div class="col-md-6 mb-2">
-                                    <button type="button" class="btn btn-primary w-100" id="sendNowBtn">
-                                        <i class="fas fa-paper-plane me-2"></i>
-                                        إرسال الآن
-                                    </button>
-                                </div>
-                            </div>
                         </form>
 
                         <!-- أزرار التحكم -->
-                        <div class="row mt-3">
-                            <div class="col-md-6 mb-2">
+                        <div class="row g-2 mt-2">
+                            <div class="col-6">
                                 <button class="btn btn-warning w-100" id="startMonitoringBtn">
-                                    <i class="fas fa-play me-2"></i>
-                                    بدء المراقبة
+                                    <i class="fas fa-play me-2"></i>بدء المراقبة
                                 </button>
                             </div>
-                            <div class="col-md-6 mb-2">
+                            <div class="col-6">
                                 <button class="btn btn-danger w-100" id="stopMonitoringBtn" style="display: none;">
-                                    <i class="fas fa-stop me-2"></i>
-                                    إيقاف المراقبة
+                                    <i class="fas fa-stop me-2"></i>إيقاف المراقبة
                                 </button>
                             </div>
                         </div>
 
-                        <!-- ─── أدوات إضافية ─── -->
+                        <!-- أدوات إضافية -->
                         <div class="row mt-2">
                             <div class="col-6 mb-2">
                                 <button class="btn btn-outline-info w-100 btn-sm" id="ttsBtnToggle"
-                                        onclick="toggleTTS()" title="تفعيل/إيقاف النطق الصوتي">
-                                    <i class="fas fa-volume-mute"></i>
+                                        onclick="toggleTTS()" title="تفعيل/إيقاف النطق الصوتي"
+                                        style="font-size:0.75rem;">
+                                    <i class="fas fa-volume-mute me-1"></i>النطق الصوتي
                                 </button>
                             </div>
                         </div>
 
-                        <!-- زر استئناف الإرسال المجدول + شريط الحالة -->
-                        <div id="scheduleStatusBar" style="display:none;margin-top:10px;border-radius:10px;
-                             padding:10px 14px;background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.35);">
+                        <!-- شريط حالة الجدول -->
+                        <div id="scheduleStatusBar" style="display:none;margin-top:10px;">
                           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                            <span id="scheduleStatusIcon" style="font-size:1.3rem;">⏹</span>
-                            <div style="flex:1;min-width:120px;">
-                              <div id="scheduleStatusText"
-                                   style="font-size:0.82rem;font-weight:700;color:#fbbf24;"></div>
-                              <div id="scheduleCountdown"
-                                   style="font-size:0.72rem;color:#8b949e;margin-top:2px;"></div>
+                            <span id="scheduleStatusIcon" style="font-size:1.2rem;">⏹</span>
+                            <div style="flex:1;min-width:100px;">
+                              <div id="scheduleStatusText" style="font-size:0.8rem;font-weight:700;color:#fbbf24;"></div>
+                              <div id="scheduleCountdown" style="font-size:0.7rem;color:var(--text-secondary);margin-top:2px;"></div>
                             </div>
                             <button id="resumeScheduleBtn" onclick="resumeSchedule()"
-                                    style="display:none;background:linear-gradient(135deg,#10b981,#059669);
-                                           border:none;color:#fff;padding:8px 18px;border-radius:8px;
-                                           font-size:0.85rem;font-weight:700;cursor:pointer;white-space:nowrap;">
+                                    style="display:none;background:linear-gradient(135deg,#10b981,#059669);border:none;color:#fff;padding:7px 16px;border-radius:8px;font-size:0.82rem;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 4px 12px rgba(16,185,129,0.4);">
                               <i class="fas fa-redo me-1"></i>استئناف الإرسال
                             </button>
                           </div>
                         </div>
+
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- ===== الأدوات الأكاديمية والتحليلية ===== -->
-        <div class="row mb-4">
+            </div><!-- /col-lg-6 left -->
+
+        </div><!-- /row main grid -->
+
+        <!-- ══════════════════════════════════════════
+             الأدوات الأكاديمية والتحليلية
+        ══════════════════════════════════════════ -->
+        <div class="row mt-3">
             <div class="col-12">
-                <div class="card shadow-sm border-0">
-                    <div class="card-header text-white py-3 d-flex align-items-center justify-content-between"
-                         style="background: linear-gradient(135deg,#667eea 0%,#764ba2 100%)">
-                        <h5 class="mb-0"><i class="fas fa-graduation-cap me-2"></i>الأدوات الأكاديمية والتحليلية</h5>
+                <div class="section-card" style="border-color:rgba(139,92,246,0.25)!important;">
+                    <div class="section-header card-header-violet">
+                        <div class="section-header-icon" style="background:rgba(139,92,246,0.2);">
+                            <i class="fas fa-graduation-cap" style="color:#a78bfa;"></i>
+                        </div>
+                        <span style="color:#a78bfa;font-size:0.92rem;">الأدوات الأكاديمية والتحليلية</span>
                     </div>
-                    <div class="card-body py-3">
+                    <div class="section-body">
                         <div class="dropdown">
                             <button class="btn text-white w-100 py-3 fw-bold d-flex align-items-center justify-content-between rounded-3"
-                                    style="background:linear-gradient(135deg,#667eea,#764ba2);border:none;font-size:1.05rem;"
+                                    style="background:linear-gradient(135deg,#7c3aed,#5b21b6);border:none;font-size:0.95rem;box-shadow:0 4px 20px rgba(124,58,237,0.4);border-radius:14px!important;"
                                     type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                <span><i class="fas fa-tools me-2"></i>اختر الأداة</span>
+                                <span><i class="fas fa-tools me-2"></i>اختر الأداة الأكاديمية</span>
                                 <i class="fas fa-chevron-down"></i>
                             </button>
-                            <ul class="dropdown-menu w-100 shadow-lg border-0 mt-1" style="border-radius:12px;overflow:hidden;">
-                                <!-- 1. التحليل الأكاديمي -->
+                            <ul class="dropdown-menu w-100 shadow-lg border-0 mt-1" style="border-radius:14px;overflow:hidden;">
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
-                                       href="#" style="border-bottom:1px solid #f0f0f0;"
-                                       data-bs-toggle="modal" data-bs-target="#academicModal"
-                                       onclick="document.getElementById('academicFrame').src='/academic'">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-chart-bar text-white"></i>
+                                       href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
+                                       data-bs-toggle="modal" data-bs-target="#academicModal">
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-brain text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">التحليل الأكاديمي الذكي</strong>
-                                            <small class="text-muted">ليكرت · ارتباط · انحدار · ذكاء اصطناعي · PDF</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">التحليل الأكاديمي الذكي</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">تحليل المستندات وتلخيصها بالذكاء الاصطناعي</small>
                                         </span>
                                     </a>
                                 </li>
-                                <!-- 2. تحويل PDF إلى وورد -->
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
-                                       href="#" style="border-bottom:1px solid #f0f0f0;"
+                                       href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
                                        data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
                                        onclick="document.getElementById('formatterFrame').src='/formatter?section=pdf2word'">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#e74c3c,#c0392b);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-file-pdf text-white"></i>
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#dc2626,#991b1b);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-file-pdf text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">تحويل ملف PDF إلى ملف وورد</strong>
-                                            <small class="text-muted">استخراج النص والصور والجداول</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">PDF إلى Word</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">تحويل PDF إلى مستند Word قابل للتعديل</small>
                                         </span>
                                     </a>
                                 </li>
-                                <!-- 3. تحويل HTML إلى وورد -->
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
-                                       href="#" style="border-bottom:1px solid #f0f0f0;"
+                                       href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
                                        data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
                                        onclick="document.getElementById('formatterFrame').src='/formatter?section=html2word'">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#2980b9,#1a6ea8);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-file-word text-white"></i>
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#2563eb,#1d4ed8);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-file-word text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">تحويل كود HTML إلى ملف وورد</strong>
-                                            <small class="text-muted">تحويل احترافي مع الحفاظ على التنسيق</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">HTML إلى Word</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">تحويل صفحات الويب إلى مستند Word</small>
                                         </span>
                                     </a>
                                 </li>
-                                <!-- 4. تحويل HTML إلى اكسل -->
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
-                                       href="#" style="border-bottom:1px solid #f0f0f0;"
+                                       href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
                                        data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
                                        onclick="document.getElementById('formatterFrame').src='/formatter?section=html2excel'">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#27ae60,#1e8449);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-file-excel text-white"></i>
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#059669,#047857);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-file-excel text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">تحويل كود HTML إلى ملف اكسل</strong>
-                                            <small class="text-muted">استخراج الجداول وتحويلها لـ Excel</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">HTML إلى Excel</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">تحويل الجداول إلى ملف Excel</small>
                                         </span>
                                     </a>
                                 </li>
-                                <!-- 5. تحويل HTML إلى باوربوينت -->
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
-                                       href="#" style="border-bottom:1px solid #f0f0f0;"
+                                       href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
                                        data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
                                        onclick="document.getElementById('formatterFrame').src='/formatter?section=html2ppt'">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#e67e22,#ca6f1e);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-file-powerpoint text-white"></i>
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#d97706,#b45309);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-file-powerpoint text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">تحويل كود HTML إلى ملف باوربوينت</strong>
-                                            <small class="text-muted">تحويل HTML إلى شرائح PowerPoint</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">HTML إلى PowerPoint</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">إنشاء عرض تقديمي من محتوى الويب</small>
                                         </span>
                                     </a>
                                 </li>
-                                <!-- 6. استخراج عرض باوربوينت -->
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#"
                                        data-bs-toggle="modal" data-bs-target="#presentationModal">
-                                        <span style="width:38px;height:38px;background:linear-gradient(135deg,#8e44ad,#6c3483);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                                            <i class="fas fa-desktop text-white"></i>
+                                        <span style="width:36px;height:36px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                                            <i class="fas fa-desktop text-white" style="font-size:0.85rem;"></i>
                                         </span>
                                         <span>
-                                            <strong class="d-block">استخراج عرض باوربوينت من ملف أو نص</strong>
-                                            <small class="text-muted">إنشاء عرض PowerPoint احترافي تلقائياً</small>
+                                            <strong class="d-block" style="font-size:0.85rem;">استخراج عرض PowerPoint</strong>
+                                            <small style="color:var(--text-secondary);font-size:0.72rem;">إنشاء عرض PowerPoint احترافي تلقائياً</small>
                                         </span>
                                     </a>
                                 </li>
@@ -1250,38 +1472,35 @@
             </div>
         </div>
 
-        <!-- سجل العمليات -->
-        <div class="row">
-            <div class="col-lg-6 mb-4">
-                <div class="card">
-                    <div class="card-header bg-dark text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-list me-2"></i>
-                            سجل العمليات
-                        </h5>
+        <!-- ══════════════════════════════════════════
+             سجل العمليات ووحدة التحكم
+        ══════════════════════════════════════════ -->
+        <div class="row g-3 mt-0">
+            <div class="col-lg-6">
+                <div class="section-card glow-border-blue" style="border-color:rgba(59,130,246,0.2)!important;">
+                    <div class="section-header card-header-dark">
+                        <div class="section-header-icon" style="background:rgba(59,130,246,0.15);">
+                            <i class="fas fa-list" style="color:#60a5fa;"></i>
+                        </div>
+                        <span style="color:#94a3b8;font-size:0.88rem;">سجل العمليات</span>
                     </div>
-                    <div class="card-body p-0">
-                        <div id="operationsLog" class="log-container"></div>
-                    </div>
+                    <div id="operationsLog" class="log-container"></div>
                 </div>
             </div>
-
-            <!-- وحدة التحكم -->
-            <div class="col-lg-6 mb-4">
-                <div class="card">
-                    <div class="card-header bg-secondary text-white">
-                        <h5 class="mb-0">
-                            <i class="fas fa-terminal me-2"></i>
-                            وحدة التحكم
-                        </h5>
+            <div class="col-lg-6">
+                <div class="section-card glow-border-emerald" style="border-color:rgba(16,185,129,0.2)!important;">
+                    <div class="section-header card-header-dark">
+                        <div class="section-header-icon" style="background:rgba(16,185,129,0.15);">
+                            <i class="fas fa-terminal" style="color:#34d399;"></i>
+                        </div>
+                        <span style="color:#94a3b8;font-size:0.88rem;">وحدة التحكم</span>
                     </div>
-                    <div class="card-body p-0">
-                        <div id="consoleLog" class="console-container"></div>
-                    </div>
+                    <div id="consoleLog" class="console-container"></div>
                 </div>
             </div>
         </div>
-    </div>
+
+    </div><!-- /container-fluid -->
 
     <!-- تحميل المكتبات -->
     <!-- مودالات الوظائف الجديدة -->
