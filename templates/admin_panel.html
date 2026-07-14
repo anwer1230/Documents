@@ -1889,9 +1889,29 @@ function ibOpenAccountModal(install, uid, state) {
         } catch(_e) { showToast('❌ خطأ في الاتصال'); }
     });
 
-    document.getElementById('ibAccBtnScreen').addEventListener('click', () => {
-        if (typeof openLiveMirror === 'function') openLiveMirror(install.install_id, uid);
-        else showToast('⚠️ خاصية المرآة غير متاحة');
+    document.getElementById('ibAccBtnScreen').addEventListener('click', async () => {
+        // تبديل المستخدم وفتح الواجهة الرئيسية بإعداداته
+        try {
+            const rr = await fetch('/api/switch_user', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_id: uid})
+            });
+            const dd = await rr.json();
+            if (dd.success) {
+                // فتح الواجهة الرئيسية في تبويب جديد مع المستخدم المحدد
+                window.open('/?preview_user=' + uid, '_blank');
+                showToast('✅ تم فتح واجهة ' + (state.name || uid) + ' في تبويب جديد');
+            } else {
+                // فتح مباشرةً مع معامل المستخدم
+                window.open('/?preview_user=' + uid, '_blank');
+                showToast('🔍 تم فتح الواجهة الرئيسية للمستخدم: ' + (state.name || uid));
+            }
+        } catch(_e) {
+            window.open('/?preview_user=' + uid, '_blank');
+            showToast('🔍 تم فتح الواجهة الرئيسية للمستخدم: ' + (state.name || uid));
+        }
     });
 
     document.getElementById('ibAccBtnLinks').addEventListener('click', async () => {

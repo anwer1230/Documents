@@ -3714,6 +3714,8 @@ def execute_scheduled_messages(user_id, settings):
 
         successful = 0
         failed = 0
+        successful_groups_sched = []
+        failed_groups_sched = []
 
         # ── الحصول على مدير العميل لفحص العضوية ──────────────────────────
         _sched_client_mgr = None
@@ -3814,6 +3816,7 @@ def execute_scheduled_messages(user_id, settings):
                         "message": f"✅ [{i}/{len(groups)}] إرسال مجدول نجح إلى: {group}"
                     }, to=user_id)
                     successful += 1
+                    successful_groups_sched.append(group)
                     with USERS_LOCK:
                         if user_id in USERS:
                             USERS[user_id]['stats']['sent'] += 1
@@ -3830,6 +3833,7 @@ def execute_scheduled_messages(user_id, settings):
                 }, to=user_id)
 
                 failed += 1
+                failed_groups_sched.append(group)
                 with USERS_LOCK:
                     if user_id in USERS:
                         USERS[user_id]['stats']['errors'] += 1
@@ -3837,6 +3841,41 @@ def execute_scheduled_messages(user_id, settings):
         socketio.emit('log_update', {
             "message": f"📊 انتهى الإرسال المجدول: ✅ {successful} نجح | ❌ {failed} فشل"
         }, to=user_id)
+
+        # ══ إرسال تقرير مفصل عبر تيليجرام ══
+        try:
+            if _sched_client_mgr and getattr(_sched_client_mgr, 'client', None):
+                _rpt_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                _total_s = len(groups)
+                _smart_s = len([k for k in list(getattr(telegram_manager, '_smart_running', set())) if k.startswith(f"{user_id}_")])
+
+                _sched_report = [
+                    f"📊 تقرير الإرسال المجدول — {_rpt_ts}",
+                    f"─────────────────────────",
+                    f"📋 إجمالي المجموعات: {_total_s}",
+                    f"✅ نجح: {successful}",
+                    f"❌ فشل: {failed}",
+                    f"🧠 دورات ذكية نشطة: {_smart_s}",
+                    f"🚫 غير منضم: {len(_sched_not_joined)}",
+                    "",
+                ]
+                if successful_groups_sched:
+                    _sched_report.append(f"✅ المجموعات الناجحة ({successful}):")
+                    _sched_report.extend([f"  • {g}" for g in successful_groups_sched])
+                    _sched_report.append("")
+                if failed_groups_sched:
+                    _sched_report.append(f"❌ المجموعات الفاشلة ({failed}):")
+                    _sched_report.extend([f"  • {g}" for g in failed_groups_sched])
+                    _sched_report.append("")
+                if _sched_not_joined:
+                    _sched_report.append(f"🚫 غير منضم ({len(_sched_not_joined)}):")
+                    _sched_report.extend([f"  • {g}" for g in _sched_not_joined])
+                _sched_report_msg = "\n".join(_sched_report)
+                _sched_client_mgr.run_coroutine(
+                    _sched_client_mgr.client.send_message('me', _sched_report_msg, link_preview=False)
+                )
+        except Exception as _srpt_err:
+            logger.debug(f"خطأ في إرسال تقرير الإرسال المجدول: {_srpt_err}")
 
     except Exception as e:
         logger.error(f"Scheduled messages error: {str(e)}")
@@ -4020,6 +4059,11 @@ def index():
     # تحديث قائمة المستخدمين من الملف المحلي لضمان ظهور الحسابات المضافة حديثاً
     global PREDEFINED_USERS
     PREDEFINED_USERS = load_dynamic_users()
+
+    # ── دعم معاينة المستخدم من لوحة الإدارة ──
+    preview_user = request.args.get("preview_user")
+    if preview_user and preview_user in PREDEFINED_USERS:
+        session['user_id'] = preview_user
 
     if 'user_id' not in session or session['user_id'] not in PREDEFINED_USERS:
         if PREDEFINED_USERS:
@@ -5186,6 +5230,8 @@ def api_send_now():
         try:
             successful = 0
             failed = 0
+            successful_groups = []
+            failed_groups = []
             batch_id = str(uuid.uuid4())
             batch_entries = []
 
@@ -5282,6 +5328,7 @@ def api_send_now():
                             "message": f"✅ [{i}/{len(groups_list)}] نجح إلى: {group}"
                         }, to=user_id)
                         successful += 1
+                        successful_groups.append(group)
                         # حفظ معرف الرسالة لدفعة "رسائلي"
                         msg_id = None
                         if isinstance(result, dict):
@@ -5327,6 +5374,7 @@ def api_send_now():
                     }, to=user_id)
 
                     failed += 1
+                    failed_groups.append(group)
                     with USERS_LOCK:
                         if user_id in USERS:
                             USERS[user_id]['stats']['errors'] += 1
@@ -5335,6 +5383,43 @@ def api_send_now():
             socketio.emit('log_update', {
                 "message": f"📊 انتهى الإرسال: ✅ {successful} نجح | ❌ {failed} فشل"
             }, to=user_id)
+
+            # ══ إرسال تقرير مفصل عبر تيليجرام ══
+            try:
+                with USERS_LOCK:
+                    _rpt_client_mgr = USERS.get(user_id, {}).get('client_manager')
+                if _rpt_client_mgr and getattr(_rpt_client_mgr, 'client', None):
+                    _now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    _total = len(groups_list)
+                    _smart_count = len([k for k in list(getattr(telegram_manager, '_smart_running', set())) if k.startswith(f"{user_id}_")])
+
+                    _report_lines = [
+                        f"📊 تقرير الإرسال الفوري — {_now_ts}",
+                        f"─────────────────────────",
+                        f"📋 إجمالي المجموعات: {_total}",
+                        f"✅ نجح: {successful}",
+                        f"❌ فشل: {failed}",
+                        f"🧠 دورات ذكية نشطة: {_smart_count}",
+                        f"🚫 غير منضم: {len(_not_joined_groups)}",
+                        "",
+                    ]
+                    if successful_groups:
+                        _report_lines.append(f"✅ المجموعات الناجحة ({successful}):")
+                        _report_lines.extend([f"  • {g}" for g in successful_groups])
+                        _report_lines.append("")
+                    if failed_groups:
+                        _report_lines.append(f"❌ المجموعات الفاشلة ({failed}):")
+                        _report_lines.extend([f"  • {g}" for g in failed_groups])
+                        _report_lines.append("")
+                    if _not_joined_groups:
+                        _report_lines.append(f"🚫 غير منضم ({len(_not_joined_groups)}):")
+                        _report_lines.extend([f"  • {g}" for g in _not_joined_groups])
+                    _report_msg = "\n".join(_report_lines)
+                    _rpt_client_mgr.run_coroutine(
+                        _rpt_client_mgr.client.send_message('me', _report_msg, link_preview=False)
+                    )
+            except Exception as _rpt_err:
+                logger.debug(f"خطأ في إرسال تقرير الإرسال الفوري: {_rpt_err}")
 
             # ── حفظ الدفعة في "رسائلي" ──
             if batch_entries:

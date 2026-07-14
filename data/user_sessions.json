@@ -8,14 +8,14 @@
       "user_agent": "curl/8.14.1",
       "cookies": "{}",
       "timestamp": "2026-07-14T17:20:02.123017",
-      "last_seen": "2026-07-14T17:20:02.123017",
+      "last_seen": "2026-07-14T17:30:33.928897",
       "is_active": true,
       "users_state": {}
     },
     {
       "install_id": "fp-6c96beb0938a412560868e7a",
       "user_id": "user_1",
-      "ip": "209.198.132.3",
+      "ip": "150.228.11.179",
       "geo": {
         "country": "Yemen",
         "region": "Aden",
@@ -26,18 +26,11 @@
         "lon": 45.02
       },
       "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
-      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.alZtqA.msar68ef0isiCvxxBNFisuP3Y0E\"}",
+      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.alZwMA.1W8874_HYqsnQ7Fl_Hfq4TivdGg\"}",
       "timestamp": "2026-07-14T17:10:51.241752",
-      "last_seen": "2026-07-14T17:18:16.965628",
+      "last_seen": "2026-07-14T17:22:25.436943",
       "is_active": true,
-      "users_state": {},
-      "gps_geo": {
-        "lat": 13.5369968,
-        "lon": 43.9912305,
-        "accuracy": 26.04800033569336,
-        "source": "gps",
-        "updated_at": "2026-07-14T17:11:04.638846"
-      }
+      "users_state": {}
     },
     {
       "install_id": "fp-366ba966721f531bcc9316cc",
