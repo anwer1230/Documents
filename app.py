@@ -14444,6 +14444,155 @@ def api_admin_download_single_file():
 
 
 # ============================================================
+# نظام مشاركة الملفات — File Sharing System
+# ============================================================
+import secrets as _secrets_mod
+_FILE_SHARES = {}   # token -> {files, created_at, expires_at, label}
+_FILE_SHARES_LOCK = Lock()
+
+def _cleanup_shares():
+    """حذف الروابط المنتهية الصلاحية"""
+    now = time.time()
+    with _FILE_SHARES_LOCK:
+        expired = [t for t, v in _FILE_SHARES.items() if v.get('expires_at') and v['expires_at'] < now]
+        for t in expired:
+            del _FILE_SHARES[t]
+
+@app.route("/api/admin/create_share", methods=["POST"])
+def api_admin_create_share():
+    """إنشاء رابط مشاركة لملفات محددة (حتى 5 ملفات)"""
+    if not session.get("admin_auth"):
+        return jsonify({"success": False, "error": "غير مخول"}), 403
+    import os as _os
+    _cleanup_shares()
+    data = request.get_json() or {}
+    files = data.get("files", [])
+    label = data.get("label", "ملفات مشتركة")
+    expire_hours = int(data.get("expire_hours", 24))
+    bundle = data.get("bundle", False)  # رابط واحد لكل الملفات أو روابط منفردة
+
+    if not files:
+        return jsonify({"success": False, "error": "لم يتم تحديد أي ملفات"}), 400
+    if len(files) > 5:
+        return jsonify({"success": False, "error": "الحد الأقصى 5 ملفات"}), 400
+
+    base_dir = _os.path.dirname(_os.path.abspath(__file__))
+    valid_files = []
+    for rel in files:
+        full = _os.path.normpath(_os.path.join(base_dir, rel))
+        if full.startswith(base_dir) and _os.path.isfile(full):
+            valid_files.append(rel)
+    if not valid_files:
+        return jsonify({"success": False, "error": "لا توجد ملفات صالحة"}), 400
+
+    now = time.time()
+    expires_at = now + expire_hours * 3600
+
+    if bundle:
+        # رابط ZIP واحد لكل الملفات
+        token = _secrets_mod.token_urlsafe(16)
+        with _FILE_SHARES_LOCK:
+            _FILE_SHARES[token] = {
+                "files": valid_files, "created_at": now, "expires_at": expires_at,
+                "label": label, "mode": "bundle"
+            }
+        share_url = f"/share/{token}"
+        return jsonify({"success": True, "mode": "bundle", "token": token,
+                        "url": share_url, "files": valid_files, "expires_hours": expire_hours})
+    else:
+        # رابط منفرد لكل ملف
+        tokens = []
+        for rel in valid_files:
+            tok = _secrets_mod.token_urlsafe(16)
+            with _FILE_SHARES_LOCK:
+                _FILE_SHARES[tok] = {
+                    "files": [rel], "created_at": now, "expires_at": expires_at,
+                    "label": _os.path.basename(rel), "mode": "single"
+                }
+            tokens.append({"file": rel, "token": tok, "url": f"/share/{tok}"})
+        return jsonify({"success": True, "mode": "individual", "links": tokens, "expires_hours": expire_hours})
+
+@app.route("/api/admin/list_shares", methods=["GET"])
+def api_admin_list_shares():
+    """قائمة روابط المشاركة النشطة"""
+    if not session.get("admin_auth"):
+        return jsonify({"success": False, "error": "غير مخول"}), 403
+    _cleanup_shares()
+    now = time.time()
+    with _FILE_SHARES_LOCK:
+        result = []
+        for tok, v in _FILE_SHARES.items():
+            remaining = max(0, v.get('expires_at', 0) - now)
+            result.append({
+                "token": tok, "label": v.get("label", ""),
+                "files": v.get("files", []), "mode": v.get("mode", "bundle"),
+                "expires_in_min": int(remaining // 60),
+                "url": f"/share/{tok}"
+            })
+    return jsonify({"success": True, "shares": result})
+
+@app.route("/api/admin/revoke_share/<token>", methods=["POST"])
+def api_admin_revoke_share(token):
+    """إلغاء رابط مشاركة"""
+    if not session.get("admin_auth"):
+        return jsonify({"success": False, "error": "غير مخول"}), 403
+    with _FILE_SHARES_LOCK:
+        if token in _FILE_SHARES:
+            del _FILE_SHARES[token]
+            return jsonify({"success": True})
+    return jsonify({"success": False, "error": "الرابط غير موجود"})
+
+@app.route("/share/<token>")
+def share_page(token):
+    """صفحة المشاركة العامة — تعرض الملفات المتاحة"""
+    _cleanup_shares()
+    with _FILE_SHARES_LOCK:
+        share = _FILE_SHARES.get(token)
+    if not share or (share.get('expires_at') and share['expires_at'] < time.time()):
+        return render_template('shared_files.html', error="رابط المشاركة غير موجود أو انتهت صلاحيته", share=None, token=token)
+    return render_template('shared_files.html', error=None, share=share, token=token)
+
+@app.route("/share/<token>/download")
+def share_download_all(token):
+    """تحميل كل الملفات المشتركة كـ ZIP"""
+    import os as _os, zipfile, io
+    _cleanup_shares()
+    with _FILE_SHARES_LOCK:
+        share = _FILE_SHARES.get(token)
+    if not share or (share.get('expires_at') and share['expires_at'] < time.time()):
+        return jsonify({"error": "رابط منتهي الصلاحية"}), 404
+    base_dir = _os.path.dirname(_os.path.abspath(__file__))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for rel in share.get("files", []):
+            full = _os.path.normpath(_os.path.join(base_dir, rel))
+            if full.startswith(base_dir) and _os.path.isfile(full):
+                try: zf.write(full, _os.path.basename(rel))
+                except Exception: pass
+    buf.seek(0)
+    return send_file(buf, mimetype='application/zip', as_attachment=True,
+                     download_name=f"shared_files_{token[:8]}.zip")
+
+@app.route("/share/<token>/file/<int:idx>")
+def share_download_file(token, idx):
+    """تحميل ملف واحد من الرابط المشترك"""
+    import os as _os
+    _cleanup_shares()
+    with _FILE_SHARES_LOCK:
+        share = _FILE_SHARES.get(token)
+    if not share or (share.get('expires_at') and share['expires_at'] < time.time()):
+        return jsonify({"error": "رابط منتهي الصلاحية"}), 404
+    files = share.get("files", [])
+    if idx < 0 or idx >= len(files):
+        return jsonify({"error": "ملف غير موجود"}), 404
+    rel = files[idx]
+    base_dir = _os.path.dirname(_os.path.abspath(__file__))
+    full = _os.path.normpath(_os.path.join(base_dir, rel))
+    if not full.startswith(base_dir) or not _os.path.isfile(full):
+        return jsonify({"error": "ملف غير متاح"}), 404
+    return send_file(full, as_attachment=True, download_name=_os.path.basename(full))
+
+# ============================================================
 # وظيفة استخراج وتصنيف روابط تيليجرام حسب الدولة
 # ============================================================
 from urllib.parse import urlparse as _urlparse
