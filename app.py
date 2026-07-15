@@ -12288,6 +12288,8 @@ def api_admin_ui_status():
 @app.route('/admin_panel')
 def admin_panel_page():
     """صفحة لوحة الإدارة الكاملة"""
+    if not session.get('admin_auth'):
+        return redirect('/admin')
     return render_template('admin_panel.html')
 
 @app.route('/admin/api/session_check', methods=['GET'])
@@ -13022,7 +13024,7 @@ def admin_dashboard():
           const r=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({username:document.getElementById('adm_u').value,password:document.getElementById('adm_p').value})});
           const d=await r.json();
-          if(d.success){location.reload();}else{document.getElementById('msg').innerHTML='<div class="alert alert-danger">'+d.message+'</div>';}
+          if(d.success){location.href='/admin_panel';}else{document.getElementById('msg').innerHTML='<div class="alert alert-danger">'+d.message+'</div>';}
         }
         async function bioLogin(){
           const did=localStorage.getItem('deviceId'),bt=localStorage.getItem('biometricToken');
@@ -13030,7 +13032,7 @@ def admin_dashboard():
           const r=await fetch('/admin/api/biometric/login',{method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({device_id:did,biometric_token:bt})});
           const d=await r.json();
-          if(d.success){location.reload();}else{alert(d.message);}
+          if(d.success){location.href='/admin_panel';}else{alert(d.message);}
         }
         </script></body></html>''', 200
 
