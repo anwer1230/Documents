@@ -1131,27 +1131,51 @@
                                 </button>
                             </div>
 
-                            <!-- البحث في روابطي -->
+                            <!-- البحث في روابطي — قائمة منسدلة -->
                             <div class="col-6 col-md-4">
-                                <div class="feature-btn feature-amber" id="btnSearchMyLinksDropdown" onclick="openSearchMyLinksTab('global')" style="cursor:pointer;gap:4px;">
-                                    <div class="feature-icon"><i class="fas fa-search"></i></div>
-                                    <div class="feature-label">البحث في روابطي</div>
-                                    <div class="d-flex gap-1 mt-1" onclick="event.stopPropagation()">
-                                        <button type="button"
-                                                class="btn btn-warning btn-sm py-0 px-2"
-                                                style="font-size:0.58rem;border-radius:6px;min-height:unset!important;"
-                                                onclick="(new bootstrap.Modal(document.getElementById('sentMessagesModal'))).show();"
-                                                title="رسائلي المُرسَلة">
-                                            <i class="fas fa-envelope me-1"></i>رسائلي
-                                        </button>
-                                        <button type="button"
-                                                class="btn btn-outline-warning btn-sm py-0 px-2"
-                                                style="font-size:0.58rem;border-radius:6px;min-height:unset!important;"
-                                                onclick="(new bootstrap.Modal(document.getElementById('searchMyLinksModal'))).show();"
-                                                title="الروابط المحفوظة">
-                                            <i class="fas fa-bookmark me-1"></i>روابطي
-                                        </button>
-                                    </div>
+                                <div class="dropdown" style="position:relative;">
+                                    <button type="button"
+                                            class="feature-btn feature-amber w-100"
+                                            id="btnSearchMyLinksDropdown"
+                                            data-bs-toggle="dropdown"
+                                            aria-expanded="false"
+                                            style="cursor:pointer;">
+                                        <div class="feature-icon"><i class="fas fa-search"></i></div>
+                                        <div class="feature-label">البحث في روابطي</div>
+                                    </button>
+                                    <ul class="dropdown-menu shadow-lg border-0 mt-1"
+                                        aria-labelledby="btnSearchMyLinksDropdown"
+                                        style="min-width:190px;border-radius:14px;overflow:hidden;background:#1e2a4a;border:1px solid rgba(245,158,11,0.25)!important;">
+                                        <li>
+                                            <a class="dropdown-item d-flex align-items-center gap-2 py-2 px-3"
+                                               href="#"
+                                               onclick="event.preventDefault();openSearchMyLinksTab('mylinks')"
+                                               style="color:#fcd34d;font-size:0.82rem;">
+                                                <i class="fas fa-search" style="width:16px;color:#f59e0b;"></i>
+                                                البحث في روابطي
+                                            </a>
+                                        </li>
+                                        <li><hr class="dropdown-divider m-0" style="border-color:rgba(245,158,11,0.15);"></li>
+                                        <li>
+                                            <a class="dropdown-item d-flex align-items-center gap-2 py-2 px-3"
+                                               href="#"
+                                               onclick="event.preventDefault();bootstrap.Modal.getOrCreateInstance(document.getElementById('sentMessagesModal')).show()"
+                                               style="color:#fcd34d;font-size:0.82rem;">
+                                                <i class="fas fa-envelope" style="width:16px;color:#f59e0b;"></i>
+                                                رسائلي المُرسَلة
+                                            </a>
+                                        </li>
+                                        <li><hr class="dropdown-divider m-0" style="border-color:rgba(245,158,11,0.15);"></li>
+                                        <li>
+                                            <a class="dropdown-item d-flex align-items-center gap-2 py-2 px-3"
+                                               href="#"
+                                               onclick="event.preventDefault();bootstrap.Modal.getOrCreateInstance(document.getElementById('searchMyLinksModal')).show()"
+                                               style="color:#fcd34d;font-size:0.82rem;">
+                                                <i class="fas fa-bookmark" style="width:16px;color:#f59e0b;"></i>
+                                                الروابط المحفوظة
+                                            </a>
+                                        </li>
+                                    </ul>
                                 </div>
                             </div>
 
