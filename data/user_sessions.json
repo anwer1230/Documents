@@ -23,7 +23,7 @@
     {
       "install_id": "fp-7eb6505f69e869f4155f159c",
       "user_id": "user_1",
-      "ip": "127.0.0.1",
+      "ip": "127.0.0.x",
       "geo": {},
       "user_agent": "curl/8.14.1",
       "cookies": "{}",
@@ -50,24 +50,17 @@
       "timestamp": "2026-07-14T17:10:51.241752",
       "last_seen": "2026-07-14T17:45:02.998558",
       "is_active": true,
-      "users_state": {},
-      "gps_geo": {
-        "lat": 13.5370874,
-        "lon": 43.9912135,
-        "accuracy": 3.0239999294281006,
-        "source": "gps",
-        "updated_at": "2026-07-14T17:49:15.061584"
-      }
+      "users_state": {}
     },
     {
       "install_id": "fp-366ba966721f531bcc9316cc",
       "user_id": "user_1",
-      "ip": "127.0.0.x",
+      "ip": "127.0.0.1",
       "geo": {},
-      "user_agent": "Mozilla/5.0 (X11; Linux x86_64…",
-      "cookies": "{\"install_id\": \"fp-366ba966721f531bcc9316cc\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.alZtgQ.ITskMjruXudXnhCiBrEmlPEE1Vg\"}",
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36",
+      "cookies": "{\"install_id\": \"fp-366ba966721f531bcc9316cc\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.ald3VA.0Wen1hvCo-6ZlRK2YyZdDZd7ltI\"}",
       "timestamp": "2026-07-14T17:10:24.534710",
-      "last_seen": "2026-07-14T17:10:25.435749",
+      "last_seen": "2026-07-15T12:04:37.018192",
       "is_active": true,
       "users_state": {}
     }
