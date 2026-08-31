@@ -240,7 +240,7 @@ export class ConnectionsManager {
         const reqType = request._;
 
         // 1. Process Channel Join Request
-        if (reqType === 'TL_channels_joinChannel') {
+        if (reqType === 'TL_channels_joinChannel' || reqType === 'channels.joinChannel') {
           if (request.channel === 'invalid_channel') {
             const err: TLRPC.TL_error = { code: 400, text: 'CHANNEL_PRIVATE' };
             if (callback?.onError) callback.onError(err);
@@ -249,7 +249,7 @@ export class ConnectionsManager {
           }
           const success: any = {
             _: 'TL_updates',
-            updates: [{ _: 'TL_updateChannel', channel_id: request.channel }],
+            updates: [{ _: 'TL_updateChannel', channel_id: request.channel?.channel_id || request.channel || 0 }],
             date: Math.floor(Date.now() / 1000),
             seq: this.session.seqNo,
           };
@@ -502,6 +502,32 @@ export class ConnectionsManager {
         reject(errorObj);
       }
     });
+  }
+
+  /**
+   * DrKLO ConnectionsManager.sendRequestTypedAndProcessUpdates
+   * Dispatches MTProto request and automatically feeds incoming Updates into MessagesController
+   */
+  public async sendRequestTypedAndProcessUpdates<T = any>(
+    request: { _: string; [key: string]: any },
+    callback?: (response: T | null, error?: TLRPC.TL_error) => void
+  ): Promise<T> {
+    try {
+      const res = await this.sendRequest<T>(request, {
+        onSuccess: (response: T) => {
+          if (callback) callback(response, undefined);
+        },
+        onError: (error: TLRPC.TL_error) => {
+          if (callback) callback(null, error);
+        },
+      });
+      return res;
+    } catch (err: any) {
+      if (callback) {
+        callback(null, { code: 500, text: err?.text || err?.message || 'RPC_ERROR' });
+      }
+      throw err;
+    }
   }
 }
 

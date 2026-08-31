@@ -878,7 +878,10 @@ export class MessagesController {
       req.new_settings = newSettings;
 
       const res = await conn.sendRequest<any>(req);
-      const ok = !!(res && (res._ === 'boolTrue' || res === true));
+      const ok = !!(res && (res._ === 'boolTrue' || res === true || res._ === 'TL_boolTrue'));
+      if (res && typeof res === 'object' && (res._ === 'updates' || res.updates)) {
+        this.processUpdates(res, false);
+      }
       if (ok) {
         await this.loadPasswordSettings();
       }
@@ -923,11 +926,18 @@ export class MessagesController {
       req.rules = rules;
 
       const res = await conn.sendRequest<TLRPC.TL_account_privacyRules>(req);
-      const ok = !!(res && res._ === 'account.privacyRules');
+      const ok = !!(res && (res._ === 'account.privacyRules' || res._ === 'account_privacyRules'));
+      if (res && typeof res === 'object' && (res._ === 'updates' || res.updates)) {
+        this.processUpdates(res, false);
+      }
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.privacyRulesUpdated,
         key,
         res?.rules || rules
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.updateInterfaces,
+        NotificationCenter.UPDATE_MASK_ALL
       );
       return ok;
     } catch (e) {
@@ -1275,7 +1285,7 @@ export class MessagesController {
     }
   }
   // ==========================================================
-  // 11. Channel & Group Actions (Join, Leave, Pin, Forward)
+  // 11. Channel & Group Actions (Join, Leave, Pin, Forward, ImportInvite)
   // Replicated directly from DrKLO MessagesController.java
   // ==========================================================
   public async joinChannel(chatId: string | number): Promise<boolean> {
@@ -1286,7 +1296,12 @@ export class MessagesController {
       req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
 
       const res = await conn.sendRequest<any>(req);
-      const ok = !!(res && (res._ === 'updates' || res.updates || res.chats));
+      const ok = !!(res && (res._ === 'updates' || res.updates || res.chats || res._ === 'TL_updates'));
+
+      // Process updates to notify all client controllers and push sync
+      if (res) {
+        this.processUpdates(res, false);
+      }
 
       const chat = this.chats.get(String(chatId));
       if (chat) {
@@ -1314,6 +1329,29 @@ export class MessagesController {
     }
   }
 
+  public async importChatInvite(hash: string): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_messages_importChatInvite();
+      req._ = 'messages.importChatInvite';
+      req.hash = hash.replace(/^(https?:\/\/)?(t\.me\/(\+|joinchat\/)?)/, '');
+
+      const res = await conn.sendRequest<any>(req);
+      if (res) {
+        // Feed returned Updates directly to central Updates Processor
+        this.processUpdates(res, false);
+      }
+
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.dialogsNeedReload
+      );
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] importChatInvite failed:', e);
+      return null;
+    }
+  }
+
   public async leaveChat(chatId: string | number): Promise<boolean> {
     try {
       const conn = ConnectionsManager.getInstance(this.currentAccount);
@@ -1321,7 +1359,11 @@ export class MessagesController {
       req._ = 'channels.leaveChannel';
       req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
 
-      await conn.sendRequest<any>(req);
+      const res = await conn.sendRequest<any>(req);
+      if (res) {
+        this.processUpdates(res, false);
+      }
+
       const chat = this.chats.get(String(chatId));
       if (chat) {
         chat.isMember = false;
@@ -1353,7 +1395,11 @@ export class MessagesController {
       req.unpin = unpin;
       req.silent = silent;
 
-      await conn.sendRequest<any>(req);
+      const res = await conn.sendRequest<any>(req);
+      if (res) {
+        this.processUpdates(res, false);
+      }
+
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.pinnedInfoDidLoad,
         String(peerId),
@@ -1382,7 +1428,11 @@ export class MessagesController {
       req.random_id = messageIds.map(() => Math.floor(Math.random() * 1000000000));
       req.silent = silent;
 
-      await conn.sendRequest<any>(req);
+      const res = await conn.sendRequest<any>(req);
+      if (res) {
+        this.processUpdates(res, false);
+      }
+
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.messagesDidLoad,
         String(toPeerId)

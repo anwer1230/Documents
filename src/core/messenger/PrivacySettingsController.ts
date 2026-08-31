@@ -9,6 +9,7 @@
 import { TLRPC } from '../TLRPC';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { NotificationCenter } from '../NotificationCenter';
+import { MessagesController } from '../MessagesController';
 
 export type PrivacyTarget =
   | 'phone_number'
@@ -202,7 +203,10 @@ export class PrivacySettingsController {
       rules: [rule],
     };
 
-    await conn.sendRequest(req);
+    const res = await conn.sendRequest<any>(req);
+    if (res) {
+      MessagesController.getInstance(this.currentAccount).processUpdates(res, false);
+    }
 
     NotificationCenter.getInstance(this.currentAccount).postNotificationName(
       NotificationCenter.updateInterfaces,

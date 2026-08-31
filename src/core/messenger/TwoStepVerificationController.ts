@@ -9,6 +9,7 @@ import { TLRPC } from '../TLRPC';
 import { SRPHelper } from './SRPHelper';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { NotificationCenter } from '../NotificationCenter';
+import { MessagesController } from '../MessagesController';
 
 export interface TwoStepState {
   hasPassword: boolean;
@@ -143,7 +144,10 @@ export class TwoStepVerificationController {
       },
     };
 
-    await conn.sendRequest(req);
+    const res = await conn.sendRequest<any>(req);
+    if (res) {
+      MessagesController.getInstance(this.currentAccount).processUpdates(res, false);
+    }
 
     // If new password is empty -> removed
     if (params.newPassword === '' || params.newPassword === null) {
