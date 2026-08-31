@@ -1274,6 +1274,140 @@ export class MessagesController {
       return null;
     }
   }
+  // ==========================================================
+  // 11. Channel & Group Actions (Join, Leave, Pin, Forward)
+  // Replicated directly from DrKLO MessagesController.java
+  // ==========================================================
+  public async joinChannel(chatId: string | number): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_channels_joinChannel();
+      req._ = 'channels.joinChannel';
+      req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
+
+      const res = await conn.sendRequest<any>(req);
+      const ok = !!(res && (res._ === 'updates' || res.updates || res.chats));
+
+      const chat = this.chats.get(String(chatId));
+      if (chat) {
+        chat.isMember = true;
+        chat.memberCount = (chat.memberCount || 1000) + 1;
+        this.chats.set(String(chatId), chat);
+      }
+
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.chatInfoDidLoad,
+        String(chatId),
+        chat
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.updateInterfaces,
+        NotificationCenter.UPDATE_MASK_ALL
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.dialogsNeedReload
+      );
+      return ok;
+    } catch (e) {
+      console.warn('[MessagesController] joinChannel failed:', e);
+      return false;
+    }
+  }
+
+  public async leaveChat(chatId: string | number): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_channels_leaveChannel();
+      req._ = 'channels.leaveChannel';
+      req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
+
+      await conn.sendRequest<any>(req);
+      const chat = this.chats.get(String(chatId));
+      if (chat) {
+        chat.isMember = false;
+        if (chat.memberCount && chat.memberCount > 1) chat.memberCount--;
+      }
+
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.chatInfoDidLoad,
+        String(chatId),
+        chat
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.dialogsNeedReload
+      );
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] leaveChat failed:', e);
+      return false;
+    }
+  }
+
+  public async pinMessage(peerId: string | number, msgId: number, unpin: boolean = false, silent: boolean = false): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_messages_updatePinnedMessage();
+      req._ = 'messages.updatePinnedMessage';
+      req.peer = { _: 'inputPeerChat', chat_id: Number(peerId) || 0 };
+      req.id = msgId;
+      req.unpin = unpin;
+      req.silent = silent;
+
+      await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.pinnedInfoDidLoad,
+        String(peerId),
+        msgId
+      );
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] pinMessage failed:', e);
+      return false;
+    }
+  }
+
+  public async forwardMessages(
+    fromPeerId: string | number,
+    toPeerId: string | number,
+    messageIds: number[],
+    silent: boolean = false
+  ): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_messages_forwardMessages();
+      req._ = 'messages.forwardMessages';
+      req.from_peer = { _: 'inputPeerChat', chat_id: Number(fromPeerId) || 0 };
+      req.to_peer = { _: 'inputPeerChat', chat_id: Number(toPeerId) || 0 };
+      req.id = messageIds;
+      req.random_id = messageIds.map(() => Math.floor(Math.random() * 1000000000));
+      req.silent = silent;
+
+      await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.messagesDidLoad,
+        String(toPeerId)
+      );
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] forwardMessages failed:', e);
+      return false;
+    }
+  }
+
+  public async resolveUsername(username: string): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_contacts_resolveUsername();
+      req._ = 'contacts.resolveUsername';
+      req.username = username.replace(/^@/, '');
+
+      const res = await conn.sendRequest<any>(req);
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] resolveUsername failed:', e);
+      return null;
+    }
+  }
 }
 
 export const messagesController = MessagesController.getInstance();

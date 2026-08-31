@@ -275,6 +275,113 @@ export class LoginController {
   }
 
   /**
+   * TL_auth_resendCode
+   * Re-sends login code via SMS or alternative channel
+   */
+  public async resendCodeViaSms(
+    phoneNumber: string,
+    phoneCodeHash: string
+  ): Promise<SendCodeResult> {
+    try {
+      const resp = await fetch('/api/telegram/auth/send-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phoneNumber,
+          deliveryType: 'sms',
+          phoneCodeHash,
+        }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        return {
+          success: true,
+          phone: phoneNumber,
+          phoneCodeHash: data.phoneCodeHash || phoneCodeHash,
+          timeout: data.timeout || 60,
+          deliveryType: 'sms',
+          isRealTelegramMTProto: true,
+          message: data.message,
+        };
+      } else {
+        return {
+          success: false,
+          phone: phoneNumber,
+          phoneCodeHash,
+          timeout: 60,
+          deliveryType: 'sms',
+          isRealTelegramMTProto: true,
+          error: data.error,
+          message: this.translateAuthError(data.error),
+        };
+      }
+    } catch (e: any) {
+      return {
+        success: false,
+        phone: phoneNumber,
+        phoneCodeHash,
+        timeout: 60,
+        deliveryType: 'sms',
+        isRealTelegramMTProto: false,
+        error: e.message,
+        message: this.translateAuthError('TELEGRAM_CONNECTION_ERROR'),
+      };
+    }
+  }
+
+  /**
+   * TL_account_sendVerifyEmailCode
+   * Sends email verification code for 2FA setup or login recovery
+   */
+  public async sendVerifyEmailCode(
+    email: string,
+    purpose: any = { _: 'emailVerifyPurposeLogin' }
+  ): Promise<{ success: boolean; emailPattern?: string; error?: string; message?: string }> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_sendVerifyEmailCode();
+      req._ = 'account.sendVerifyEmailCode';
+      req.email = email;
+      req.purpose = purpose;
+
+      const res = await conn.sendRequest<any>(req);
+      return {
+        success: true,
+        emailPattern: res?.email_pattern || email,
+        message: 'Email verification code dispatched successfully.',
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e.message,
+        message: this.translateAuthError(e.message),
+      };
+    }
+  }
+
+  /**
+   * TL_account_resendPasswordEmail
+   * Resends the recovery email for Two-Step Verification
+   */
+  public async resendPasswordEmail(): Promise<{ success: boolean; error?: string; message?: string }> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = { _: 'account.resendPasswordEmail' };
+      await conn.sendRequest<any>(req);
+      return {
+        success: true,
+        message: 'Two-step verification recovery email sent successfully.',
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        error: e.message,
+        message: this.translateAuthError(e.message),
+      };
+    }
+  }
+
+  /**
    * Translates official Telegram MTProto error strings into user-friendly descriptions
    */
   public translateAuthError(errorStr?: string, isArabic: boolean = true): string {
