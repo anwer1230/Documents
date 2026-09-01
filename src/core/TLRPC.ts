@@ -933,6 +933,25 @@ export namespace TLRPC {
     public readParams(stream: any, exception: boolean): void {}
   }
 
+  export class TL_inputPeerNotifySettings extends TLObject {
+    public static constructorId = -1636603417;
+    public flags: number = 0;
+    public show_previews?: boolean;
+    public silent?: boolean;
+    public mute_until: number = 0;
+    public sound?: string;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_updateDialogNotificationsSettings extends TLObject {
+    public static constructorId = 1774378152;
+    public peer: any;
+    public settings!: TL_inputPeerNotifySettings;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
   // Full Channel / Group Info
   export interface TL_channelFull {
     id: string;
