@@ -43,13 +43,20 @@ export class UserConfig {
 
   /**
    * Helper to verify if a user object is a mock/dummy/test user.
+   * Strictly enforces real user validation with valid international phone and genuine ID.
    */
   public static isMockUser(user: User | null | undefined): boolean {
     if (!user) return true;
-    const id = String(user.id || '');
-    const phone = String(user.phone || '').replace(/\s+/g, '');
-    const username = String(user.username || '').toLowerCase();
-    const name = String(user.name || '');
+    const id = String(user.id || '').trim();
+    const phone = String(user.phone || '').replace(/[\s\-\(\)]/g, '');
+    const username = String(user.username || '').toLowerCase().trim();
+    const name = String(user.name || '').trim();
+
+    // Must have a genuine phone number with at least 7 digits
+    const digitsOnly = phone.replace(/\D/g, '');
+    if (digitsOnly.length < 7) {
+      return true;
+    }
 
     return (
       !id ||
@@ -57,13 +64,17 @@ export class UserConfig {
       id === 'user_primary' ||
       id === 'user_self' ||
       id.startsWith('mock_') ||
+      id.startsWith('test_') ||
+      id.startsWith('dummy_') ||
+      id.startsWith('guest_') ||
       username === 'anwer_dev' ||
       name === 'أنور فؤاد' ||
       phone === '+967770123456' ||
       phone === '0000000000' ||
       phone.startsWith('+999') ||
       phone.includes('test') ||
-      (user as any).isDummy === true
+      (user as any).isDummy === true ||
+      (user as any).isTestAccount === true
     );
   }
 

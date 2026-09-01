@@ -326,41 +326,14 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
     }
   };
 
-  // 4. Quick Instant Demo Login
-  const handleQuickDemoLogin = () => {
-    setIsLoading(true);
-    setStatusMessage(isArabic ? 'جارٍ إنشاء جلسة سحابية مشفرة...' : 'Creating secure session...');
-
-    setTimeout(() => {
-      setIsLoading(false);
-      const fullPhone = `${selectedCountry.code} ${phoneNumber || '772 997 043'}`.trim();
-      login({
-        name: firstName.trim() || 'أنور فؤاد',
-        phone: fullPhone,
-        username: username.trim() || 'anwer_dev',
-        avatar: '',
-        bio: 'Telegram Native Client • Layer 184',
-      });
-      showToast(isArabic ? 'تم تفعيل الجلسة والاتصال بالسحابة' : 'Session activated', '✅');
-    }, 700);
-  };
-
-  // 5. QR Code Login Simulation
-  const handleQrCodeConfirm = () => {
-    setIsLoading(true);
-    setStatusMessage(isArabic ? 'تم مسح رمز الاستجابة السريعة! جاري المصادقة...' : 'QR Scanned! Authenticating...');
-
-    setTimeout(() => {
-      setIsLoading(false);
-      login({
-        name: 'أنور فؤاد',
-        phone: '+967 772 997 043',
-        username: 'anwer_dev',
-        avatar: '',
-        bio: 'Telegram Desktop / Web Session Authenticated via QR',
-      });
-      showToast(isArabic ? 'تم تسجيل الدخول عبر رمز QR بنجاح' : 'QR Login Successful!', '🎉');
-    }, 1200);
+  // 4. QR Code Login helper - guide user to use official Telegram mobile scan or phone login
+  const handleQrCodeClick = () => {
+    showToast(
+      isArabic
+        ? 'يرجى مسح رمز QR من خلال تطبيق تيليجرام الرسمي على هاتفك (الإعدادات > الأجهزة > ربط جهاز) أو تسجيل الدخول برقم الهاتف.'
+        : 'Please scan the QR code via official Telegram app (Settings > Devices > Link Device) or log in with phone number.',
+      'ℹ️'
+    );
   };
 
   return (
@@ -587,16 +560,6 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
                     </>
                   )}
                 </button>
-
-                {/* Quick 1-Click Demo Login */}
-                <button
-                  type="button"
-                  onClick={handleQuickDemoLogin}
-                  className="w-full py-2.5 bg-white/5 hover:bg-white/10 active:scale-[0.99] text-gray-300 text-xs font-semibold rounded-2xl border border-white/10 flex items-center justify-center gap-2 transition-all"
-                >
-                  <Sparkles size={14} className="text-amber-400" />
-                  <span>{isArabic ? 'دخول فوري مباشر (Demo / Quick Connect)' : 'Instant Direct Connect (Demo)'}</span>
-                </button>
               </form>
             )}
 
@@ -817,9 +780,9 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
           <div className="w-full flex flex-col items-center space-y-4">
             {/* QR Visual Container with Scanning Laser */}
             <div
-              onClick={handleQrCodeConfirm}
+              onClick={handleQrCodeClick}
               className="relative w-56 h-56 bg-white p-3.5 rounded-3xl shadow-xl flex items-center justify-center cursor-pointer group overflow-hidden border-4 border-[#2481cc]/30 hover:border-[#2481cc] transition-all"
-              title={isArabic ? 'انقر للمحاكاة الفورية لمسح رمز QR' : 'Click to simulate instant QR scan'}
+              title={isArabic ? 'رمز QR للمصادقة عبر تيليجرام' : 'Telegram QR Authentication'}
             >
               {/* QR Pattern Representation */}
               <div className="w-full h-full bg-slate-900 rounded-2xl p-2 flex flex-col justify-between relative overflow-hidden">
@@ -862,7 +825,7 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
               {/* Hover click prompt */}
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity rounded-3xl">
                 <span className="text-xs font-bold text-white bg-[#2481cc] px-3 py-1.5 rounded-full shadow-lg">
-                  {isArabic ? 'انقر لتسجيل الدخول الفوري' : 'Click to Log In'}
+                  {isArabic ? 'مسح الرمز عبر تطبيق الهاتف' : 'Scan with Mobile App'}
                 </span>
               </div>
             </div>
@@ -875,18 +838,18 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
               <ol className="text-[11px] text-gray-400 space-y-1 list-decimal list-inside">
                 <li>{isArabic ? 'افتح تيليجرام على هاتفك الجوال' : 'Open Telegram on your mobile phone'}</li>
                 <li>{isArabic ? 'انتقل إلى الإعدادات > الأجهزة > ربط جهاز بالحاسوب' : 'Go to Settings > Devices > Link Desktop Device'}</li>
-                <li>{isArabic ? 'وجه الكاميرا نحو هذه الشاشة لتسجيل الدخول' : 'Point your phone at this screen to confirm'}</li>
+                <li>{isArabic ? 'وجه الكاميرا نحو هذه الشاشة لتأكيد الربط المباشر' : 'Point your camera at this screen to authenticate'}</li>
               </ol>
             </div>
 
-            {/* Quick Confirm Button */}
+            {/* Switch to Phone Login Button */}
             <button
               type="button"
-              onClick={handleQrCodeConfirm}
+              onClick={() => setAuthMode('phone')}
               className="w-full py-3 bg-[#2481cc] hover:bg-[#1f6fa8] text-white text-xs font-bold rounded-2xl shadow-lg shadow-[#2481cc]/25 transition-all flex items-center justify-center gap-2"
             >
-              <Check size={16} />
-              <span>{isArabic ? 'تأكيد تسجيل الدخول برمز QR' : 'Confirm QR Login'}</span>
+              <Phone size={16} />
+              <span>{isArabic ? 'تسجيل الدخول باستخدام رقم الهاتف' : 'Log in using Phone Number'}</span>
             </button>
           </div>
         )}

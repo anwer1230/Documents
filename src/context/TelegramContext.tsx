@@ -838,6 +838,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isPremium: true,
     };
 
+    // Strict validation: Reject any mock, dummy, or invalid user
+    if (UserConfig.isMockUser(newUser)) {
+      console.warn('[TelegramContext] Login rejected: detected mock or invalid user credentials.');
+      showToast(
+        settings.language === 'ar'
+          ? 'تعذر تسجيل الدخول: يجب استخدام رقم هاتف حقيقي ومصادق عليه عبر MTProto.'
+          : 'Login rejected: A real verified phone number is required.',
+        '❌'
+      );
+      return;
+    }
+
     if (data.sessionString) {
       try {
         SecureSessionStorage.setItem('tg_session_string', data.sessionString);
@@ -1047,6 +1059,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isOnline: true,
       isPremium: true,
     };
+
+    // Strict validation: Reject any mock, dummy, or invalid user
+    if (UserConfig.isMockUser(newUser)) {
+      console.warn('[TelegramContext] Add account rejected: detected mock or invalid user credentials.');
+      showToast(
+        settings.language === 'ar'
+          ? 'تعذر إضافة الحساب: يجب استخدام رقم هاتف حقيقي ومصادق عليه عبر MTProto.'
+          : 'Add account rejected: A real verified phone number is required.',
+        '❌'
+      );
+      return;
+    }
 
     if (newAccData.sessionString) {
       try {

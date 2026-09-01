@@ -57,17 +57,44 @@ export class UserConfig {
     return !!acc && acc.isActive !== false;
   }
 
+  public static isMockUser(user: User | null | undefined): boolean {
+    if (!user) return true;
+    const id = String(user.id || '').trim();
+    const phone = String(user.phone || '').replace(/[\s\-\(\)]/g, '');
+    const username = String(user.username || '').toLowerCase().trim();
+    const name = String(user.name || '').trim();
+
+    const digitsOnly = phone.replace(/\D/g, '');
+    if (digitsOnly.length < 7) {
+      return true;
+    }
+
+    return (
+      !id ||
+      id === 'user_anwer_main' ||
+      id === 'user_primary' ||
+      id === 'user_self' ||
+      id.startsWith('mock_') ||
+      id.startsWith('test_') ||
+      id.startsWith('dummy_') ||
+      id.startsWith('guest_') ||
+      username === 'anwer_dev' ||
+      name === 'أنور فؤاد' ||
+      phone === '+967770123456' ||
+      phone === '0000000000' ||
+      phone.startsWith('+999') ||
+      phone.includes('test') ||
+      (user as any).isDummy === true ||
+      (user as any).isTestAccount === true
+    );
+  }
+
   /**
    * Goal 1: Purges dummy/mock/test accounts and resets selectedAccount to the real account
    */
   public static cleanupTestAccounts(): void {
     const realAccounts = this.accounts.filter((a) => {
-      const isTest = (a.user as any)?.isTestAccount ||
-                     a.user?.phone?.startsWith('+999') ||
-                     a.user?.phone === '0000000000' ||
-                     a.user?.phone?.includes('test') ||
-                     (a.user as any)?.isDummy === true;
-      return !isTest && a.isActive !== false;
+      return a && a.user && !UserConfig.isMockUser(a.user) && a.isActive !== false;
     });
 
     if (realAccounts.length > 0) {
