@@ -1,0 +1,30 @@
+{
+  "short_name": "Telegram",
+  "name": "Telegram (DrKLO Official Build)",
+  "description": "Telegram Messenger for Android & Web - Official DrKLO Release Build (Telegram_Anwer)",
+  "icons": [
+    {
+      "src": "/telegram-logo.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    },
+    {
+      "src": "https://telegram.org/img/t_logo.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://telegram.org/img/t_logo.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#17212b",
+  "theme_color": "#2481cc",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "scope": "/"
+}
