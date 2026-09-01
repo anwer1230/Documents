@@ -1102,6 +1102,113 @@ export class MessagesController {
       );
       notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
     }
+
+    // =========================================================================
+    // 8. User Profile & Settings Updates (Sync Name, Photo, Status from other devices)
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateUserName' ||
+      update._ === 'updateUserName' ||
+      update.type === 'update_user_name'
+    ) {
+      const targetUserId = String(update.user_id || update.id || '');
+      const userConfig = UserConfig.getInstance(this.currentAccount);
+      const currentUser = userConfig.getCurrentUser();
+      const isSelf = !targetUserId || (currentUser && String(currentUser.id) === targetUserId);
+
+      const fullName = [update.first_name, update.last_name].filter(Boolean).join(' ') || update.name || (currentUser ? currentUser.name : '');
+      const username = update.username || (currentUser ? currentUser.username : '');
+
+      if (isSelf && currentUser) {
+        const updatedUser = {
+          ...currentUser,
+          name: fullName || currentUser.name,
+          username: username !== undefined ? username : currentUser.username,
+        };
+        userConfig.setCurrentUser(updatedUser);
+        notificationCenter.postNotificationName(
+          NotificationCenter.mainUserInfoChanged,
+          NotificationCenter.UPDATE_MASK_NAME,
+          updatedUser
+        );
+        notificationCenter.postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_NAME
+        );
+      }
+    } else if (
+      update._ === 'TL_updateUserPhoto' ||
+      update._ === 'updateUserPhoto' ||
+      update.type === 'update_user_photo'
+    ) {
+      const targetUserId = String(update.user_id || update.id || '');
+      const userConfig = UserConfig.getInstance(this.currentAccount);
+      const currentUser = userConfig.getCurrentUser();
+      const isSelf = !targetUserId || (currentUser && String(currentUser.id) === targetUserId);
+
+      const newAvatarUrl = update.avatar || update.photo_url || update.photo?.url || (typeof update.photo === 'string' ? update.photo : '');
+
+      if (isSelf && currentUser && newAvatarUrl) {
+        const updatedUser = {
+          ...currentUser,
+          avatar: newAvatarUrl,
+        };
+        userConfig.setCurrentUser(updatedUser);
+        notificationCenter.postNotificationName(
+          NotificationCenter.mainUserInfoChanged,
+          NotificationCenter.UPDATE_MASK_AVATAR,
+          updatedUser
+        );
+        notificationCenter.postNotificationName(NotificationCenter.didReplacedPhotoInMemCache);
+        notificationCenter.postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_AVATAR
+        );
+      }
+    } else if (
+      update._ === 'TL_updateUser' ||
+      update._ === 'updateUser' ||
+      update.type === 'update_user'
+    ) {
+      const userConfig = UserConfig.getInstance(this.currentAccount);
+      const currentUser = userConfig.getCurrentUser();
+      const u = update.user || update;
+      const targetUserId = String(u.id || u.user_id || '');
+      const isSelf = !targetUserId || (currentUser && String(currentUser.id) === targetUserId);
+
+      if (isSelf && currentUser) {
+        const updatedUser = {
+          ...currentUser,
+          name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.name || currentUser.name,
+          username: u.username !== undefined ? u.username : currentUser.username,
+          avatar: u.avatar || u.photo_url || currentUser.avatar,
+          bio: u.about || u.bio || currentUser.bio,
+          phone: u.phone || currentUser.phone,
+        };
+        userConfig.setCurrentUser(updatedUser);
+        notificationCenter.postNotificationName(
+          NotificationCenter.mainUserInfoChanged,
+          NotificationCenter.UPDATE_MASK_ALL,
+          updatedUser
+        );
+        notificationCenter.postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_ALL
+        );
+      }
+    } else if (
+      update._ === 'TL_updatePrivacy' ||
+      update._ === 'updatePrivacy' ||
+      update.type === 'update_privacy'
+    ) {
+      notificationCenter.postNotificationName(NotificationCenter.privacyRulesUpdated, update.rules || update);
+    } else if (
+      update._ === 'TL_updateTheme' ||
+      update._ === 'TL_updateAccountValue' ||
+      update.type === 'update_cloud_settings'
+    ) {
+      notificationCenter.postNotificationName(NotificationCenter.cloudSettingsUpdated, update.settings || update);
+    }
   }
 
   // ==========================================================

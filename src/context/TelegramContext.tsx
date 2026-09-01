@@ -684,7 +684,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [isAuthenticated]);
 
-  // Hook into DrKLO Telegram NotificationCenter event bus
+  // Hook into DrKLO Telegram NotificationCenter event bus for real-time MTProto multi-device synchronization
   useEffect(() => {
     const handleDialogsReload = () => {
       // Re-sort chats using Telegram priority algorithm
@@ -699,18 +699,49 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
     };
 
-    CoreNotificationCenter.getInstance(0).addObserver(
-      handleDialogsReload,
-      CoreNotificationCenter.dialogsNeedReload
-    );
+    const handleUserInfoChanged = (mask: number, updatedUser?: User) => {
+      if (updatedUser) {
+        setCurrentUser((prev) => ({
+          ...prev,
+          ...updatedUser,
+        }));
+
+        setAccounts((prevAccounts) =>
+          prevAccounts.map((acc) =>
+            acc.id === activeAccountId
+              ? {
+                  ...acc,
+                  user: { ...acc.user, ...updatedUser },
+                }
+              : acc
+          )
+        );
+      }
+    };
+
+    const handleCloudSettingsUpdated = (newSettings?: Partial<AppSettings>) => {
+      if (newSettings) {
+        setSettings((prev) => ({
+          ...prev,
+          ...newSettings,
+        }));
+      }
+    };
+
+    // Register observers across all account instances
+    const currentAccount = UserConfig.selectedAccount || 0;
+    const center = CoreNotificationCenter.getInstance(currentAccount);
+
+    center.addObserver(handleDialogsReload, CoreNotificationCenter.dialogsNeedReload);
+    center.addObserver(handleUserInfoChanged, CoreNotificationCenter.mainUserInfoChanged);
+    center.addObserver(handleCloudSettingsUpdated, CoreNotificationCenter.cloudSettingsUpdated);
 
     return () => {
-      CoreNotificationCenter.getInstance(0).removeObserver(
-        handleDialogsReload,
-        CoreNotificationCenter.dialogsNeedReload
-      );
+      center.removeObserver(handleDialogsReload, CoreNotificationCenter.dialogsNeedReload);
+      center.removeObserver(handleUserInfoChanged, CoreNotificationCenter.mainUserInfoChanged);
+      center.removeObserver(handleCloudSettingsUpdated, CoreNotificationCenter.cloudSettingsUpdated);
     };
-  }, []);
+  }, [activeAccountId]);
 
   const openSettingsPage = (page: SettingsSubPage = 'main') => {
     setSettingsSubPage(page);
@@ -794,6 +825,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const accountInstance = AccountInstance.getInstance(UserConfig.selectedAccount);
     accountInstance.getUserConfig().setCurrentUser(targetAcc.user);
 
+    // Broadcast account switch across isolated notification buses
+    accountInstance.getNotificationCenter().postNotificationName(
+      CoreNotificationCenter.mainUserInfoChanged,
+      CoreNotificationCenter.UPDATE_MASK_ALL,
+      targetAcc.user
+    );
+    accountInstance.getNotificationCenter().postNotificationName(CoreNotificationCenter.dialogsNeedReload);
+    accountInstance.getNotificationCenter().postNotificationName(
+      CoreNotificationCenter.updateInterfaces,
+      CoreNotificationCenter.UPDATE_MASK_ALL
+    );
+
     setActiveAccountId(targetAccountId);
     setCurrentUser(targetAcc.user);
     setSettings(targetAcc.settings || DEFAULT_APP_SETTINGS);
@@ -803,6 +846,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsDrawerOpen(false);
 
     setAccounts(updatedAccounts);
+
+    // Refresh dialogs from isolated storage if available
+    try {
+      const storedDialogs = accountInstance.getMessagesStorage().getDialogs();
+      if (storedDialogs && storedDialogs.length > 0) {
+        setChats(storedDialogs);
+      }
+    } catch {}
 
     try {
       SecureSessionStorage.setItem('tg_multi_accounts_v3', updatedAccounts);

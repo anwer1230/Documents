@@ -224,9 +224,16 @@ export const NavigationDrawer: React.FC = () => {
                   animate={{ height: 'auto', opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.2 }}
-                  className="bg-[#17212b] border-b border-[#2b394a] py-2 px-2 max-h-56 overflow-y-auto shadow-inner space-y-1"
+                  className="bg-[#17212b] border-b border-[#2b394a] py-2 px-2 max-h-64 overflow-y-auto shadow-inner space-y-1.5"
                 >
-                  {accounts.map((acc) => {
+                  <div className="px-2 py-1 flex items-center justify-between text-[11px] text-gray-400 font-medium">
+                    <span>{isArabic ? 'الحسابات النشطة' : 'Active Accounts'}</span>
+                    <span className="font-mono text-[#5288c1] bg-[#5288c1]/10 px-2 py-0.5 rounded-full">
+                      {accounts.length} / 4
+                    </span>
+                  </div>
+
+                  {accounts.slice(0, 4).map((acc, index) => {
                     const isActive = acc.id === activeAccountId;
                     return (
                       <motion.button
@@ -236,34 +243,39 @@ export const NavigationDrawer: React.FC = () => {
                           switchAccount(acc.id);
                         }}
                         className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all ${
-                          isActive ? 'bg-[#2481cc]/25 text-white' : 'hover:bg-white/5 text-gray-200'
+                          isActive
+                            ? 'bg-[#2481cc]/25 text-white ring-1 ring-[#2481cc]/50 shadow-sm'
+                            : 'hover:bg-white/5 text-gray-200'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1 text-left rtl:text-right">
-                          <div className="relative w-8 h-8 rounded-full overflow-hidden border border-white/20 shrink-0">
+                          <div className="relative w-9 h-9 rounded-full overflow-hidden border border-white/20 shrink-0">
                             {acc.user.avatar ? (
                               <img src={acc.user.avatar} alt={acc.user.name} className="w-full h-full object-cover" />
                             ) : (
-                              <div className="w-full h-full bg-[#5288c1] flex items-center justify-center text-white font-bold text-[10px]">
-                                {acc.user.name.charAt(0).toUpperCase()}
+                              <div className="w-full h-full bg-[#5288c1] flex items-center justify-center text-white font-bold text-xs">
+                                {acc.user.name ? acc.user.name.charAt(0).toUpperCase() : 'U'}
                               </div>
                             )}
                             {isActive && (
-                              <div className="absolute inset-0 bg-[#2481cc]/50 flex items-center justify-center">
-                                <Check className="w-3.5 h-3.5 text-white" />
+                              <div className="absolute inset-0 bg-[#2481cc]/60 flex items-center justify-center">
+                                <Check className="w-4 h-4 text-white stroke-[3]" />
                               </div>
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="text-xs font-semibold truncate flex items-center gap-1">
+                            <div className="text-xs font-semibold truncate flex items-center gap-1.5">
                               <span className="truncate">{acc.user.name}</span>
+                              <span className="text-[9px] bg-white/10 text-gray-300 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                {isArabic ? `حساب ${index + 1}` : `Acc ${index + 1}`}
+                              </span>
                             </div>
-                            <div className="text-[11px] text-gray-400 font-mono truncate">{acc.user.phone}</div>
+                            <div className="text-[11px] text-gray-400 font-mono truncate mt-0.5">{acc.user.phone}</div>
                           </div>
                         </div>
 
                         {(acc.unreadCount || 0) > 0 && (
-                          <span className="px-2 py-0.5 text-[11px] font-bold bg-[#5288c1] text-white rounded-full ml-2 rtl:mr-2">
+                          <span className="px-2 py-0.5 text-[11px] font-bold bg-[#5288c1] text-white rounded-full ml-2 rtl:mr-2 shadow-xs">
                             {acc.unreadCount}
                           </span>
                         )}
@@ -271,18 +283,29 @@ export const NavigationDrawer: React.FC = () => {
                     );
                   })}
 
-                  {/* Add Account Button */}
-                  <motion.button
-                    whileTap={{ scale: 0.98 }}
-                    id="btn-drawer-add-account"
-                    onClick={() => handleItemClick(() => setActiveModal('add-account'))}
-                    className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-xl text-xs font-semibold text-[#5288c1] hover:bg-[#5288c1]/10 transition-colors"
-                  >
-                    <div className="w-7 h-7 rounded-full border border-dashed border-[#5288c1] flex items-center justify-center">
-                      <UserPlus className="w-3.5 h-3.5 text-[#5288c1]" />
+                  {/* Add Account Button (Allowed up to 4 accounts) */}
+                  {accounts.length < 4 ? (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="btn-drawer-add-account"
+                      onClick={() => handleItemClick(() => setActiveModal('add-account'))}
+                      className="w-full flex items-center justify-between px-3 py-2 mt-1 rounded-xl text-xs font-semibold text-[#5288c1] hover:bg-[#5288c1]/10 transition-colors border border-dashed border-[#5288c1]/30"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-full border border-dashed border-[#5288c1] flex items-center justify-center shrink-0">
+                          <UserPlus className="w-3.5 h-3.5 text-[#5288c1]" />
+                        </div>
+                        <span>{isArabic ? '+ إضافة حساب جديد' : '+ Add New Account'}</span>
+                      </div>
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {isArabic ? `متاح (${4 - accounts.length})` : `(${4 - accounts.length} left)`}
+                      </span>
+                    </motion.button>
+                  ) : (
+                    <div className="px-3 py-1.5 text-[11px] text-center text-gray-400 bg-white/5 rounded-lg">
+                      {isArabic ? 'تم الوصول للحد الأقصى (4 حسابات)' : 'Maximum accounts limit reached (4/4)'}
                     </div>
-                    <span>{isArabic ? '+ إضافة حساب' : '+ Add Account'}</span>
-                  </motion.button>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>

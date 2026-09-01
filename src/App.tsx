@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { TelegramProvider, useTelegram } from './context/TelegramContext';
 import { GlobalErrorBoundary } from './components/Common/GlobalErrorBoundary';
+import { NotificationCenter } from './core/NotificationCenter';
+import { UserConfig } from './core/messenger/UserConfig';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { ChatView } from './components/Chat/ChatView';
 import { ChatInfoPanel } from './components/RightPanel/ChatInfoPanel';
@@ -46,10 +48,42 @@ import { TelegramAuthScreen } from './components/Auth/TelegramAuthScreen';
 import { useMobileNavigation } from './hooks/useMobileNavigation';
 
 const TelegramAppContent: React.FC = () => {
-  const { isAuthenticated, inAppNotifications, dismissNotification, activeModal, setActiveModal } = useTelegram();
+  const { isAuthenticated, inAppNotifications, dismissNotification, activeModal, setActiveModal, activeAccountId } = useTelegram();
 
   // Activate mobile hardware back button, touch navigation & popstate stack
   useMobileNavigation();
+
+  // Global observer for real-time MTProto updates dispatched from processUpdates
+  useEffect(() => {
+    const accountIndex = UserConfig.selectedAccount || 0;
+    const nc = NotificationCenter.getInstance(accountIndex);
+
+    const observer = {
+      didReceivedNotification: (id: number | string, _account: number, ..._args: any[]) => {
+        if (
+          id === NotificationCenter.mainUserInfoChanged ||
+          id === NotificationCenter.cloudSettingsUpdated ||
+          id === NotificationCenter.dialogsNeedReload ||
+          id === NotificationCenter.updateInterfaces
+        ) {
+          // Trigger interface refresh when critical MTProto updates arrive
+          document.dispatchEvent(new CustomEvent('tg_account_state_updated'));
+        }
+      },
+    };
+
+    nc.addObserver(observer, NotificationCenter.mainUserInfoChanged);
+    nc.addObserver(observer, NotificationCenter.cloudSettingsUpdated);
+    nc.addObserver(observer, NotificationCenter.dialogsNeedReload);
+    nc.addObserver(observer, NotificationCenter.updateInterfaces);
+
+    return () => {
+      nc.removeObserver(observer, NotificationCenter.mainUserInfoChanged);
+      nc.removeObserver(observer, NotificationCenter.cloudSettingsUpdated);
+      nc.removeObserver(observer, NotificationCenter.dialogsNeedReload);
+      nc.removeObserver(observer, NotificationCenter.updateInterfaces);
+    };
+  }, [activeAccountId]);
 
   if (!isAuthenticated) {
     return (
