@@ -1,15 +1,15 @@
 import { Chat, Folder, Message, TelegramApiConfig, User, UserAccount } from '../types';
 
 export const CURRENT_USER: User = {
-  id: 'user_me',
-  name: 'أنور فؤاد',
-  username: 'anwer_dev',
-  phone: '+966 50 000 0000',
+  id: '',
+  name: '',
+  username: '',
+  phone: '',
   avatar: '',
-  isOnline: true,
-  bio: 'Telegram Official Client (Native DrKLO Architecture)',
-  isVerified: true,
-  isPremium: true,
+  isOnline: false,
+  bio: '',
+  isVerified: false,
+  isPremium: false,
 };
 
 export const DEFAULT_TELEGRAM_API_CONFIG: TelegramApiConfig = {
@@ -244,23 +244,4 @@ export const DEMO_USER = CURRENT_USER;
 export const INITIAL_DIALOGS = INITIAL_CHATS;
 export const INITIAL_MESSAGES_MAP = INITIAL_MESSAGES;
 
-export const DEFAULT_ACCOUNTS: UserAccount[] = [
-  {
-    id: 'acc_personal',
-    user: CURRENT_USER,
-    settings: {
-      theme: 'dark',
-      accentColor: '#2481cc',
-      fontSize: 16,
-      language: 'ar',
-      sendByEnter: true,
-      soundEffects: true,
-      autoDownloadMedia: true,
-      chatWallpaper: 'pattern_classic',
-    },
-    chats: INITIAL_CHATS,
-    messages: INITIAL_MESSAGES,
-    unreadCount: 0,
-    isActive: true,
-  },
-];
+export const DEFAULT_ACCOUNTS: UserAccount[] = [];

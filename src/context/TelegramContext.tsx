@@ -242,94 +242,58 @@ interface TelegramContextType {
 const TelegramContext = createContext<TelegramContextType | undefined>(undefined);
 
 export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // 1. Multi-Account Storage & State - Purge mock accounts if authenticated
+  // 1. Multi-Account Storage & State - Pure Official Telegram Logic (No Mock/Demo Accounts)
+  const [accounts, setAccounts] = useState<UserAccount[]>(() => {
+    try {
+      const isAuth = localStorage.getItem('tg_auth_session_active') === 'true';
+      if (!isAuth) return [];
+      const saved = localStorage.getItem('tg_multi_accounts_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Filter out any legacy mock accounts
+          const realAccs = parsed.filter(
+            (a: UserAccount) => a.id !== 'acc_personal' && a.id !== 'acc_personal_demo' && Boolean(a.user?.phone)
+          );
+          return realAccs;
+        }
+      }
+    } catch {}
+    return [];
+  });
+
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
       const auth = localStorage.getItem('tg_auth_session_active');
-      return auth === 'true';
+      const saved = localStorage.getItem('tg_multi_accounts_v3');
+      if (auth === 'true' && saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.some((a: UserAccount) => a.id !== 'acc_personal' && a.id !== 'acc_personal_demo' && Boolean(a.user?.phone))) {
+          return true;
+        }
+      }
+      return false;
     } catch {
       return false;
     }
   });
 
-  const [accounts, setAccounts] = useState<UserAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem('tg_multi_accounts_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Guarantee each account has the full set of Telegram chats and messages
-          const hydrated = parsed.map((acc: UserAccount) => {
-            const savedChat = acc.chats?.find((c) => c.id === 'chat_saved_messages' || c.type === 'saved');
-            const personalizedSavedChat: Chat = savedChat || {
-              id: 'chat_saved_messages',
-              type: 'saved',
-              title: 'الرسائل المحفوظة',
-              avatar: acc.user?.avatar || '',
-              isPinned: true,
-              unreadCount: 0,
-              description: 'سحابة التخزين الشخصية الرسمية من تيليجرام.',
-              lastMessage: {
-                id: `m_saved_${acc.id}`,
-                senderName: 'You',
-                text: `مساحة التخزين السحابية الشخصية مشفرة بنجاح (${acc.user?.phone || 'Telegram'})`,
-                timestamp: '12:00 PM',
-                isOutgoing: true,
-                status: 'read',
-              },
-            };
-
-            const existingChatsMap = new Map<string, Chat>();
-            // Add INITIAL_CHATS first as baseline
-            INITIAL_CHATS.forEach((c) => existingChatsMap.set(c.id, c));
-            // Overlay existing account chats
-            if (Array.isArray(acc.chats)) {
-              acc.chats.forEach((c) => existingChatsMap.set(c.id, c));
-            }
-            existingChatsMap.set('chat_saved_messages', personalizedSavedChat);
-
-            const mergedChats = Array.from(existingChatsMap.values());
-            const mergedMessages = {
-              ...INITIAL_MESSAGES,
-              ...(acc.messages || {}),
-            };
-
-            return {
-              ...acc,
-              chats: mergedChats,
-              messages: mergedMessages,
-            };
-          });
-
-          // Filter out demo placeholder if authenticated
-          const isAuth = localStorage.getItem('tg_auth_session_active') === 'true';
-          if (isAuth) {
-            const realAccs = hydrated.filter((a: UserAccount) => a.id !== 'acc_personal_demo');
-            if (realAccs.length > 0) return realAccs;
-          }
-          return hydrated;
-        }
-      }
-    } catch {}
-    return DEFAULT_ACCOUNTS;
-  });
-
   const [activeAccountId, setActiveAccountId] = useState<string>(() => {
     try {
       const savedId = localStorage.getItem('tg_active_account_id_v3');
-      if (savedId) return savedId;
+      if (savedId && savedId !== 'acc_personal' && savedId !== 'acc_personal_demo') return savedId;
     } catch {}
-    return accounts[0]?.id || 'acc_personal';
+    return accounts[0]?.id || '';
   });
 
   // Current active account lookup
-  const initialActiveAcc = accounts.find((a) => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNTS[0];
+  const initialActiveAcc = accounts.find((a) => a.id === activeAccountId) || accounts[0] || null;
 
-  const [currentUser, setCurrentUser] = useState<User>(initialActiveAcc.user);
-  const [chats, setChats] = useState<Chat[]>(initialActiveAcc.chats);
-  const [messages, setMessages] = useState<Record<string, Message[]>>(initialActiveAcc.messages);
+  const [currentUser, setCurrentUser] = useState<User>(initialActiveAcc ? initialActiveAcc.user : CURRENT_USER);
+  const [chats, setChats] = useState<Chat[]>(initialActiveAcc ? initialActiveAcc.chats : []);
+  const [messages, setMessages] = useState<Record<string, Message[]>>(initialActiveAcc ? initialActiveAcc.messages : {});
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [activeChatId, setActiveChatId] = useState<string | null>(initialActiveAcc.chats[0]?.id || 'chat_saved_messages');
+  const [activeChatId, setActiveChatId] = useState<string | null>(initialActiveAcc?.chats?.[0]?.id || null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
   const [searchQuery, setSearchQuery] = useState<string>('');
