@@ -14,10 +14,14 @@ export type ConnectionState =
   | 'CONNECTION_STATE_UPDATING'
   | 'CONNECTION_STATE_SUSPENDED';
 
-export interface RpcCallback<T = any> {
-  onSuccess: (response: T) => void;
-  onError: (error: TLRPC.TL_error) => void;
-}
+export type RequestDelegate<T = any> = (response: T | null, error: TLRPC.TL_error | null) => void;
+
+export type RpcCallback<T = any> =
+  | {
+      onSuccess?: (response: T) => void;
+      onError?: (error: TLRPC.TL_error) => void;
+    }
+  | RequestDelegate<T>;
 
 export interface MtprotoSession {
   sessionId: string;
@@ -236,6 +240,24 @@ export class ConnectionsManager {
     await telegramDB.init();
 
     return new Promise((resolve, reject) => {
+      const notifySuccess = (res: any) => {
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(res, null);
+        } else if (callback.onSuccess) {
+          callback.onSuccess(res);
+        }
+      };
+
+      const notifyError = (err: TLRPC.TL_error) => {
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(null, err);
+        } else if (callback.onError) {
+          callback.onError(err);
+        }
+      };
+
       try {
         const reqType = request._;
 
@@ -243,7 +265,7 @@ export class ConnectionsManager {
         if (reqType === 'TL_channels_joinChannel' || reqType === 'channels.joinChannel') {
           if (request.channel === 'invalid_channel') {
             const err: TLRPC.TL_error = { code: 400, text: 'CHANNEL_PRIVATE' };
-            if (callback?.onError) callback.onError(err);
+            notifyError(err);
             reject(err);
             return;
           }
@@ -253,7 +275,7 @@ export class ConnectionsManager {
             date: Math.floor(Date.now() / 1000),
             seq: this.session.seqNo,
           };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           this.updateListeners.forEach((l) => l(success));
           resolve(success as T);
           return;
@@ -263,7 +285,7 @@ export class ConnectionsManager {
         if (reqType === 'TL_messages_sendMessage') {
           if (request.is_restricted) {
             const err: TLRPC.TL_error = { code: 403, text: 'CHAT_WRITE_FORBIDDEN' };
-            if (callback?.onError) callback.onError(err);
+            notifyError(err);
             reject(err);
             return;
           }
@@ -276,7 +298,7 @@ export class ConnectionsManager {
             pts_count: 1,
             seq: this.session.seqNo,
           };
-          if (callback?.onSuccess) callback.onSuccess(result);
+          notifySuccess(result);
           resolve(result as T);
           return;
         }
@@ -295,7 +317,7 @@ export class ConnectionsManager {
               salt2: '8912efacb1928471928301928471',
             },
           };
-          if (callback?.onSuccess) callback.onSuccess(passRes as unknown as T);
+          notifySuccess(passRes as unknown as T);
           resolve(passRes as unknown as T);
           return;
         }
@@ -313,7 +335,7 @@ export class ConnectionsManager {
           reqType === 'TL_account_resetPassword'
         ) {
           const success: any = { _: 'TL_boolTrue', value: true };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           resolve(success as T);
           return;
         }
@@ -326,7 +348,7 @@ export class ConnectionsManager {
             users: [],
             chats: [],
           };
-          if (callback?.onSuccess) callback.onSuccess(privRes);
+          notifySuccess(privRes);
           resolve(privRes as T);
           return;
         }
@@ -338,7 +360,7 @@ export class ConnectionsManager {
             users: [],
             chats: [],
           };
-          if (callback?.onSuccess) callback.onSuccess(privRes);
+          notifySuccess(privRes);
           resolve(privRes as T);
           return;
         }
@@ -382,7 +404,7 @@ export class ConnectionsManager {
               },
             ],
           };
-          if (callback?.onSuccess) callback.onSuccess(authRes);
+          notifySuccess(authRes);
           resolve(authRes as T);
           return;
         }
@@ -394,7 +416,7 @@ export class ConnectionsManager {
           reqType === 'TL_auth_resetAuthorizations'
         ) {
           const success: any = { _: 'TL_boolTrue', value: true };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           resolve(success as T);
           return;
         }
@@ -408,7 +430,7 @@ export class ConnectionsManager {
             peer_stories: [],
             has_more: false,
           };
-          if (callback?.onSuccess) callback.onSuccess(storiesRes);
+          notifySuccess(storiesRes);
           resolve(storiesRes as T);
           return;
         }
@@ -423,7 +445,7 @@ export class ConnectionsManager {
               media: request.media,
             },
           };
-          if (callback?.onSuccess) callback.onSuccess(sendRes);
+          notifySuccess(sendRes);
           resolve(sendRes as T);
           return;
         }
@@ -441,7 +463,7 @@ export class ConnectionsManager {
             chats: [],
             users: [],
           };
-          if (callback?.onSuccess) callback.onSuccess(topicsRes);
+          notifySuccess(topicsRes);
           resolve(topicsRes as T);
           return;
         }
@@ -458,7 +480,7 @@ export class ConnectionsManager {
               },
             ],
           };
-          if (callback?.onSuccess) callback.onSuccess(adsRes);
+          notifySuccess(adsRes);
           resolve(adsRes as T);
           return;
         }
@@ -472,14 +494,14 @@ export class ConnectionsManager {
             last_name: request.last_name || '',
             about: request.about || '',
           };
-          if (callback?.onSuccess) callback.onSuccess(profRes);
+          notifySuccess(profRes);
           resolve(profRes as T);
           return;
         }
 
         if (reqType === 'account.updateNotifySettings' || reqType === 'TL_account_updateNotifySettings') {
           const success: any = { _: 'TL_boolTrue', value: true };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           resolve(success as T);
           return;
         }
@@ -491,14 +513,14 @@ export class ConnectionsManager {
           result: { ok: true, request_type: reqType, date: Math.floor(Date.now() / 1000) },
         };
 
-        if (callback?.onSuccess) callback.onSuccess(genericResponse);
+        notifySuccess(genericResponse);
         resolve(genericResponse as T);
       } catch (err: any) {
         const errorObj: TLRPC.TL_error = {
           code: 500,
           text: err?.message || 'RPC_CALL_FAIL',
         };
-        if (callback?.onError) callback.onError(errorObj);
+        notifyError(errorObj);
         reject(errorObj);
       }
     });

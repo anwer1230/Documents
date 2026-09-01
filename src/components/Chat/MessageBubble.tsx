@@ -278,6 +278,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   return (
     <div
       id={`msg-bubble-container-${message.id}`}
+      data-message-id={message.id}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
       onTouchStart={(e) => {

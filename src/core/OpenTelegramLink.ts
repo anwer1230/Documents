@@ -6,6 +6,10 @@
  * org.telegram.ui.ChatInviteActivity.java
  */
 
+import { TLRPC } from './TLRPC';
+import { ConnectionsManager } from './ConnectionsManager';
+import { MessagesController } from './MessagesController';
+
 export interface ParsedTelegramLink {
   type: 'username' | 'invite' | 'message' | 'bot_start' | 'stickerset' | 'proxy' | 'wallpaper' | 'phone' | 'external';
   target: string;
@@ -197,5 +201,78 @@ export class OpenTelegramLink {
         error: e.message || 'CONNECTION_ERROR',
       };
     }
+  }
+
+  /**
+   * Replicates OpenTelegramLink.java: Parses and dispatches actions for Telegram links
+   */
+  public static async openTelegramLink(
+    currentAccount: number = 0,
+    url: string,
+    onNavigateChat?: (chatId: string) => void,
+    onOpenInvite?: (inviteInfo: ChatInvitePreview) => void
+  ): Promise<boolean> {
+    const parsed = this.parse(url);
+
+    if (parsed.type === 'invite') {
+      const inviteData = await this.checkChatInvite(parsed.target);
+      if (onOpenInvite) {
+        onOpenInvite(inviteData);
+      } else {
+        window.dispatchEvent(new CustomEvent('tg-open-invite', { detail: inviteData }));
+      }
+      return true;
+    }
+
+    if (parsed.type === 'username') {
+      const usernameClean = parsed.target.replace('@', '');
+      const req = new TLRPC.TL_contacts_resolveUsername();
+      req.username = usernameClean;
+
+      try {
+        const conn = ConnectionsManager.getInstance(currentAccount);
+        await conn.sendRequest(req, (response, error) => {
+          if (!error && response) {
+            const controller = MessagesController.getInstance(currentAccount);
+            if (response.users) controller.putUsers(response.users, false);
+            if (response.chats) controller.putChats(response.chats, false);
+
+            const targetPeerId = response.chats?.[0]?.id || response.users?.[0]?.id || `user_${usernameClean}`;
+            if (onNavigateChat) {
+              onNavigateChat(String(targetPeerId));
+            } else {
+              window.dispatchEvent(new CustomEvent('tg-open-chat', { detail: { chatId: String(targetPeerId), username: usernameClean } }));
+            }
+          } else {
+            // Fallback navigation
+            const fallbackId = `user_${usernameClean}`;
+            if (onNavigateChat) {
+              onNavigateChat(fallbackId);
+            } else {
+              window.dispatchEvent(new CustomEvent('tg-open-chat', { detail: { chatId: fallbackId, username: usernameClean } }));
+            }
+          }
+        });
+        return true;
+      } catch (e) {
+        console.warn('[OpenTelegramLink] Error resolving username:', e);
+        const fallbackId = `user_${usernameClean}`;
+        if (onNavigateChat) {
+          onNavigateChat(fallbackId);
+        } else {
+          window.dispatchEvent(new CustomEvent('tg-open-chat', { detail: { chatId: fallbackId, username: usernameClean } }));
+        }
+        return true;
+      }
+    }
+
+    if (parsed.type === 'external') {
+      if (typeof window !== 'undefined') {
+        window.open(parsed.originalUrl, '_blank', 'noopener,noreferrer');
+      }
+      return true;
+    }
+
+    return false;
   }
 }

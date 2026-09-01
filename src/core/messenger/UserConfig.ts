@@ -42,6 +42,48 @@ export class UserConfig {
   }
 
   /**
+   * DrKLO/Telegram Android: UserConfig.findAccountByPhone
+   * Searches all active accounts to find if the phone number already belongs to an existing account.
+   * Returns account index (0..MAX_ACCOUNT_COUNT-1) or -1 if not found.
+   */
+  public static findAccountByPhone(phone: string): number {
+    if (!phone) return -1;
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    if (!cleanPhone) return -1;
+
+    for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+      const config = UserConfig.getInstance(a);
+      if (config && config.isClientAuthorized() && config.currentUser) {
+        const accPhone = String(config.currentUser.phone || '').replace(/[^0-9]/g, '');
+        if (accPhone && accPhone === cleanPhone) {
+          return a;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * DrKLO/Telegram Android: UserConfig.findAccountByUserId
+   * Searches all active accounts to find if the user ID already belongs to an existing account.
+   */
+  public static findAccountByUserId(userId: string | number): number {
+    if (!userId || userId === '0') return -1;
+    const cleanId = String(userId);
+
+    for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+      const config = UserConfig.getInstance(a);
+      if (config && config.isClientAuthorized()) {
+        const accId = config.getClientUserId();
+        if (accId && accId === cleanId) {
+          return a;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
    * Helper to verify if a user object is a mock/dummy/test user.
    */
   public static isMockUser(user: User | null | undefined): boolean {

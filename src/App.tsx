@@ -41,12 +41,49 @@ import { ChatContextMenuView } from './components/Interactions/ChatContextMenu';
 import { MessageContextMenuView } from './components/Interactions/MessageContextMenu';
 import { ToastContainer } from './components/Interactions/ToastContainer';
 import { InAppNotificationBanner } from './components/Notifications/InAppNotificationBanner';
+import { AndroidNotificationShade } from './components/Notifications/AndroidNotificationShade';
 import { InstallAppBanner } from './components/Notifications/InstallAppBanner';
 import { TelegramAuthScreen } from './components/Auth/TelegramAuthScreen';
 import { useMobileNavigation } from './hooks/useMobileNavigation';
+import { AppUpdateAlertDialog } from './components/Modals/AppUpdateAlertDialog';
+import { UpdateAppActivityModal } from './components/Modals/UpdateAppActivityModal';
+import { RestrictedContentModal } from './components/Modals/RestrictedContentModal';
+import { ScreenshotBlockedToast } from './components/Notifications/ScreenshotBlockedToast';
+import { NotificationCenter } from './core/NotificationCenter';
+import { appUpdateController } from './core/messenger/AppUpdateController';
 
 const TelegramAppContent: React.FC = () => {
-  const { isAuthenticated, inAppNotifications, dismissNotification, activeModal, setActiveModal } = useTelegram();
+  const { isAuthenticated, inAppNotifications, dismissNotification, activeModal, setActiveModal, showToast, settings } = useTelegram();
+  const [showUpdateDialog, setShowUpdateDialog] = React.useState(false);
+  const [showUpdateActivity, setShowUpdateActivity] = React.useState(false);
+  const isArabic = settings.language === 'ar';
+
+  // Replicate LaunchActivity.java NotificationCenter observer
+  React.useEffect(() => {
+    const observer = {
+      didReceivedNotification: (id: number | string, account: number, ...args: any[]) => {
+        if (id === NotificationCenter.appUpdateAvailable) {
+          const update = args[0];
+          const isManual = args[1];
+          // Check if previously dismissed
+          const dismissedVer = localStorage.getItem('tg_dismissed_update_version');
+          if (isManual || !dismissedVer || dismissedVer !== update?.version) {
+            setShowUpdateDialog(true);
+          }
+        } else if (id === NotificationCenter.appUpdateNotModified) {
+          showToast(isArabic ? 'أنت تستخدم أحدث إصدار من تيليجرام بنجاح' : "You're already using the latest version of Telegram", '✅');
+        }
+      },
+    };
+
+    NotificationCenter.getGlobalInstance().addObserver(observer, NotificationCenter.appUpdateAvailable);
+    NotificationCenter.getGlobalInstance().addObserver(observer, NotificationCenter.appUpdateNotModified);
+
+    return () => {
+      NotificationCenter.getGlobalInstance().removeObserver(observer, NotificationCenter.appUpdateAvailable);
+      NotificationCenter.getGlobalInstance().removeObserver(observer, NotificationCenter.appUpdateNotModified);
+    };
+  }, [isArabic, showToast]);
 
   // Activate mobile hardware back button, touch navigation & popstate stack
   useMobileNavigation();
@@ -131,6 +168,26 @@ const TelegramAppContent: React.FC = () => {
       <ChatContextMenuView />
       <MessageContextMenuView />
 
+      {/* Telegram Official App Update Alert Dialog & Full Download Activity */}
+      <AppUpdateAlertDialog
+        isOpen={showUpdateDialog}
+        onClose={() => setShowUpdateDialog(false)}
+        onOpenFullActivity={() => {
+          setShowUpdateDialog(false);
+          setShowUpdateActivity(true);
+        }}
+      />
+      <UpdateAppActivityModal
+        isOpen={showUpdateActivity}
+        onClose={() => setShowUpdateActivity(false)}
+      />
+
+      {/* Android Notification Shade (Pull-down & Background Notifications) */}
+      <AndroidNotificationShade
+        isOpen={activeModal === 'android-notification-shade'}
+        onClose={() => setActiveModal('none')}
+      />
+
       {/* AI Studio Style Direct App Installation Banner */}
       <InstallAppBanner />
 
@@ -140,8 +197,17 @@ const TelegramAppContent: React.FC = () => {
         onDismiss={dismissNotification}
       />
 
+      {/* Restricted Content Warning Modal */}
+      <RestrictedContentModal
+        isOpen={activeModal === 'restricted-content'}
+        onClose={() => setActiveModal('none')}
+      />
+
       {/* Floating Toast Notifications */}
       <ToastContainer />
+
+      {/* Android FLAG_SECURE Screenshot Blocked Alert */}
+      <ScreenshotBlockedToast />
     </div>
   );
 };

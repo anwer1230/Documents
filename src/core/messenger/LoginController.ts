@@ -225,7 +225,22 @@ export class LoginController {
     futureAuthToken?: string,
     expires?: number
   ): void {
-    const account = this.currentAccount;
+    const rawPhone = user.phone || '';
+    const userId = String(user.id || '');
+
+    // Check if account already exists in one of the slots (0..MAX_ACCOUNT_COUNT-1)
+    let targetAccount = this.currentAccount;
+    const existingByPhone = rawPhone ? UserConfig.findAccountByPhone(rawPhone) : -1;
+    const existingById = userId ? UserConfig.findAccountByUserId(userId) : -1;
+    const foundExisting = existingByPhone !== -1 ? existingByPhone : (existingById !== -1 ? existingById : -1);
+
+    if (foundExisting !== -1) {
+      console.log(`[LoginController] Found existing account at index ${foundExisting} for phone ${rawPhone} / ID ${userId}. Reusing existing slot.`);
+      targetAccount = foundExisting;
+      UserConfig.selectedAccount = targetAccount;
+    }
+
+    const account = targetAccount;
     const userConfig = UserConfig.getInstance(account);
 
     const formattedUser = {
@@ -242,6 +257,7 @@ export class LoginController {
     // 1. Save currentUser in UserConfig
     userConfig.setCurrentUser(formattedUser as any);
     userConfig.clientUserId = String(user.id);
+    userConfig.isClientActivated = true;
     userConfig.saveConfig();
 
     // 2. Save future auth token if provided

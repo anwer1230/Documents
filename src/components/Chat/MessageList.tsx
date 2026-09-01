@@ -3,6 +3,7 @@ import { ArrowDown, Pin, X, Loader2, Shield, Lock, ChevronUp } from 'lucide-reac
 import { useTelegram } from '../../context/TelegramContext';
 import { MessageBubble } from './MessageBubble';
 import { messagesController } from '../../core/MessagesController';
+import { chatScrollManager } from '../../core/ChatScrollManager';
 
 const PAGE_CHUNK_SIZE = 30;
 
@@ -48,21 +49,50 @@ export const MessageList: React.FC = () => {
   const isLoadingOlder = activeChatId ? Boolean(isChatLoadingOlder[activeChatId]) : false;
   const hasMoreOnServer = activeChatId ? (chatHasMoreOlder[activeChatId] ?? true) : true;
 
-  // Reset pagination slice when switching chats
+  // Initialize / restore pagination slice and scroll metrics when switching chats
   useEffect(() => {
-    setVisibleCount(PAGE_CHUNK_SIZE);
-    setShowScrollBottom(false);
+    if (!activeChatId) return;
+
+    const savedState = chatScrollManager.getScrollPosition(activeChatId);
+    if (savedState) {
+      setVisibleCount(Math.max(PAGE_CHUNK_SIZE, savedState.visibleCount));
+      setShowScrollBottom(!savedState.isNearBottom);
+      isUserNearBottomRef.current = savedState.isNearBottom;
+    } else {
+      setVisibleCount(PAGE_CHUNK_SIZE);
+      setShowScrollBottom(false);
+      isUserNearBottomRef.current = true;
+    }
+
     setUnreadStreamCount(0);
     prevMessagesLengthRef.current = currentMessages.length;
-    isUserNearBottomRef.current = true;
 
-    // Scroll to bottom on initial chat load
+    // Restore scroll position accurately
+    const frameId = requestAnimationFrame(() => {
+      if (scrollContainerRef.current) {
+        chatScrollManager.restoreScroll(activeChatId, scrollContainerRef.current, true);
+      }
+    });
+
     const timeout = setTimeout(() => {
       if (scrollContainerRef.current) {
-        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+        chatScrollManager.restoreScroll(activeChatId, scrollContainerRef.current, true);
       }
-    }, 50);
-    return () => clearTimeout(timeout);
+    }, 60);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      clearTimeout(timeout);
+      // Save scroll state on exit (ChatActivity.onPause replication)
+      if (scrollContainerRef.current && activeChatId) {
+        chatScrollManager.saveScrollPosition(
+          activeChatId,
+          scrollContainerRef.current,
+          visibleCount,
+          isUserNearBottomRef.current
+        );
+      }
+    };
   }, [activeChatId]);
 
   // Determine slice of messages to display
@@ -169,6 +199,15 @@ export const MessageList: React.FC = () => {
     // Secondary fallback for fast mouse wheeling near top
     if (scrollTop < 80 && !isLoadingOlder && hasMore) {
       handleLoadOlder();
+    }
+
+    if (activeChatId) {
+      chatScrollManager.saveScrollPosition(
+        activeChatId,
+        scrollContainerRef.current,
+        visibleCount,
+        isNearBottom
+      );
     }
   };
 

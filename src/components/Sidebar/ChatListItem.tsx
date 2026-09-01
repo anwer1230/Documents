@@ -13,6 +13,7 @@ import {
   Archive,
   Trash2,
   MailCheck,
+  ShieldAlert,
 } from 'lucide-react';
 import { Chat } from '../../types';
 import { useTelegram } from '../../context/TelegramContext';
@@ -88,6 +89,8 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
     },
     isRtl,
   });
+
+  const isThreeLines = settings.chatListViewMode === 'three_lines';
 
   return (
     <div className="relative overflow-hidden w-full select-none bg-[var(--tg-theme-surface)]">
@@ -165,14 +168,20 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
           transition: isDragging ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)',
           backgroundColor: isActive ? 'rgba(36, 129, 204, 0.12)' : 'var(--tg-theme-surface)',
         }}
-        className={`relative z-10 group flex items-center gap-3 px-3 py-2.5 cursor-pointer select-none transition-colors duration-100 ${
+        className={`relative z-10 group flex items-center gap-3 px-3 cursor-pointer select-none transition-colors duration-100 ${
+          isThreeLines ? 'py-3' : 'py-2.5'
+        } ${
           isActive
             ? 'border-l-4 rtl:border-l-0 rtl:border-r-4 border-[#2481cc]'
             : 'hover:bg-white/5 active:bg-white/10'
         }`}
       >
         {/* Avatar / Icon */}
-        <div className="relative shrink-0 w-12 h-12 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-tr from-sky-600 to-cyan-500 text-white font-bold text-lg shadow-sm">
+        <div
+          className={`relative shrink-0 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-tr from-sky-600 to-cyan-500 text-white font-bold shadow-sm ${
+            isThreeLines ? 'w-13 h-13 text-xl' : 'w-12 h-12 text-lg'
+          }`}
+        >
           {isSavedMessages ? (
             <div className="w-full h-full bg-[#2481cc] flex items-center justify-center">
               <Bookmark className="w-6 h-6 fill-white text-white" />
@@ -191,11 +200,17 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
           {chat.type === 'private' && (
             <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-[var(--tg-theme-bg)] rounded-full" />
           )}
+
+          {chat.isRestricted && (
+            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-rose-600 rounded-full border border-black/50 flex items-center justify-center shadow">
+              <ShieldAlert className="w-2.5 h-2.5 text-white" />
+            </span>
+          )}
         </div>
 
         {/* Chat Details */}
         <div className="flex-1 min-w-0">
-          {/* Top Row: Title + Verification + Time */}
+          {/* Top Row: Title + Verification + Restricted + Time */}
           <div className="flex items-center justify-between gap-1 mb-0.5">
             <div className="flex items-center gap-1 min-w-0">
               <span className="font-semibold text-sm truncate" style={{ color: 'var(--tg-theme-bubble-in-text)' }}>
@@ -203,6 +218,11 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
               </span>
               {chat.isVerified && (
                 <BadgeCheck className="w-4 h-4 text-[#2481cc] shrink-0 fill-[#2481cc]/20" />
+              )}
+              {chat.isRestricted && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 font-semibold shrink-0">
+                  {isRtl ? 'محتوى مقيد' : 'Restricted'}
+                </span>
               )}
               {chat.type === 'bot' && (
                 <Bot className="w-3.5 h-3.5 text-gray-400 shrink-0" />
@@ -223,6 +243,25 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
             </span>
           </div>
 
+          {/* 3-Lines Mode Middle Row (Sender info / Channel handle / Group badge) */}
+          {isThreeLines && (
+            <div className="flex items-center gap-1 min-w-0 text-xs text-sky-400 font-medium truncate mb-0.5">
+              {chat.lastMessage?.senderName && !chat.lastMessage.isOutgoing && chat.type !== 'private' ? (
+                <span className="truncate">
+                  {chat.lastMessage.senderName}
+                </span>
+              ) : chat.username ? (
+                <span className="text-gray-400 font-mono text-[11px] truncate">
+                  @{chat.username}
+                </span>
+              ) : (
+                <span className="text-gray-400 text-[11px] truncate">
+                  {chat.type === 'channel' ? (isRtl ? 'قناة تيليجرام' : 'Telegram Channel') : (isRtl ? 'محادثة' : 'Chat')}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Bottom Row: Last Message Snippet OR Draft + Status + Unread / Pin */}
           <div className="flex items-center justify-between gap-2">
             {chat.draft ? (
@@ -237,15 +276,12 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
             ) : (
               <div className="flex items-center gap-1 min-w-0 text-xs text-gray-400 truncate">
                 {chat.lastMessage?.isOutgoing && renderStatusCheck(chat.lastMessage.status)}
-                {chat.lastMessage?.senderName &&
-                  !chat.lastMessage.isOutgoing &&
-                  chat.type === 'group' &&
-                  chat.lastMessage.senderName !== chat.title && (
-                    <span className="font-medium text-sky-400/90 truncate shrink-0">
-                      {chat.lastMessage.senderName}:
-                    </span>
-                  )}
-                <span className="truncate">
+                {!isThreeLines && chat.lastMessage?.senderName && !chat.lastMessage.isOutgoing && chat.type !== 'private' && (
+                  <span className="font-medium text-sky-400/90 truncate">
+                    {chat.lastMessage.senderName}:
+                  </span>
+                )}
+                <span className={`truncate ${isThreeLines ? 'line-clamp-2' : ''}`}>
                   {chat.lastMessage?.text || (settings.language === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet')}
                 </span>
               </div>

@@ -253,7 +253,7 @@ export interface AppSettings {
   theme: 'dark' | 'light' | 'night' | 'day';
   accentColor: string;
   fontSize: number; // 12 .. 30
-  language: 'ar' | 'en';
+  language: 'ar' | 'en' | 'ru' | 'es' | 'fr' | 'de' | 'it' | 'tr' | 'fa' | 'pt' | 'id' | 'ms' | 'nl' | 'pl' | 'uk' | 'hi' | 'zh' | 'ja' | 'ko' | 'ur' | 'ku' | string;
   sendByEnter: boolean;
   soundEffects: boolean;
   notificationsEnabled?: boolean;

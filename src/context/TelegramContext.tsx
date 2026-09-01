@@ -18,6 +18,8 @@ import {
   SettingsSubPage,
   CapturedLink,
   ProfileUserInfo,
+  FcmDiagnosticInfo,
+  FcmPushPacket,
 } from '../types';
 import {
   CURRENT_USER,
@@ -28,6 +30,7 @@ import {
   INITIAL_MESSAGES,
 } from '../data/mockTelegramData';
 import { telegramAudio } from '../utils/audioNotification';
+import { notificationsController } from '../core/NotificationsController';
 import { notificationsService } from '../core/NotificationsService';
 import { backgroundSyncService } from '../core/BackgroundSyncService';
 import { telegramDb, initTelegramDexieDb } from '../core/telegramDexieDb';
@@ -35,6 +38,9 @@ import { multiAccountManager } from '../utils/MultiAccountManager';
 import { notificationEngine } from '../services/NotificationEngine';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { storageSyncManager } from '../utils/StorageSyncManager';
+import { themeController } from '../core/ThemeController';
+import { PinnedAndForwardHelper } from '../core/PinnedAndForwardHelper';
+import { OpenTelegramLink } from '../core/OpenTelegramLink';
 import {
   messagesController,
   messagesStorage,
@@ -87,7 +93,9 @@ interface TelegramContextType {
     | 'auto-responder'
     | 'smart-ai'
     | 'live-link-discover'
-    | 'user-profile';
+    | 'user-profile'
+    | 'android-notification-shade'
+    | 'restricted-content';
   selectedProfileUser: ProfileUserInfo | null;
   setSelectedProfileUser: (user: ProfileUserInfo | null) => void;
   openUserProfile: (user: ProfileUserInfo) => void;
@@ -161,6 +169,7 @@ interface TelegramContextType {
       | 'premium'
       | 'secret-chat-info'
       | 'group-admin'
+      | 'forum-topics'
       | 'sender'
       | 'monitor'
       | 'my-messages'
@@ -168,6 +177,9 @@ interface TelegramContextType {
       | 'auto-responder'
       | 'smart-ai'
       | 'live-link-discover'
+      | 'user-profile'
+      | 'android-notification-shade'
+      | 'restricted-content'
   ) => void;
   setViewerMedia: (media: { url: string; title?: string; sender?: string; timestamp?: string } | null) => void;
   setReplyingTo: (reply: ReplyInfo | null) => void;
@@ -202,6 +214,9 @@ interface TelegramContextType {
   markChatReadUnread: (chatId: string) => void;
   clearChatHistory: (chatId: string) => void;
   deleteChat: (chatId: string) => void;
+  leaveGroup: (chatId: string) => Promise<void>;
+  deleteGroupMessages: (chatId: string, forEveryone?: boolean) => Promise<void>;
+  deleteGroup: (chatId: string) => Promise<void>;
   
   // Calls
   startCall: (isVideo?: boolean) => void;
@@ -228,6 +243,15 @@ interface TelegramContextType {
   loadMoreChatMessages: (chatId: string) => Promise<{ loadedCount: number; hasMore: boolean }>;
   isChatLoadingOlder: Record<string, boolean>;
   chatHasMoreOlder: Record<string, boolean>;
+
+  // Firebase Cloud Messaging (FCM) & Push Diagnostic Hub
+  fcmDiagnostic: FcmDiagnosticInfo;
+  requestPushPermission: () => Promise<boolean>;
+  testSimulateFcmPush: (customParams?: Partial<FcmPushPacket>) => void;
+  clearFcmDiagnosticHistory: () => void;
+
+  // Screenshot Protection & FLAG_SECURE
+  triggerScreenshotBlocked: (reason?: string) => void;
 }
 
 const TelegramContext = createContext<TelegramContextType | undefined>(undefined);
@@ -241,6 +265,15 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   soundEffects: true,
   autoDownloadMedia: true,
   chatWallpaper: 'default',
+  bubbleCornerRadius: 16,
+  chatListViewMode: 'two_lines',
+  enableAnimations: true,
+  inAppSounds: true,
+  showTranslateButton: true,
+  autoDownloadMobile: true,
+  autoDownloadWifi: true,
+  autoDownloadRoaming: false,
+  streamingEnabled: true,
 };
 
 export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -333,22 +366,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [chats, setChats] = useState<Chat[]>(() => (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0 ? initialActiveAcc.chats : []));
   const [messages, setMessages] = useState<Record<string, Message[]>>(() => (initialActiveAcc?.messages && Object.keys(initialActiveAcc.messages).length > 0 ? initialActiveAcc.messages : {}));
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlDialogId = urlParams.get('dialog_id') || urlParams.get('chat_id') || urlParams.get('dialogId') || urlParams.get('chatId');
-        if (urlDialogId) return urlDialogId;
-
-        const hash = window.location.hash;
-        if (hash) {
-          const match = hash.match(/#\/?chat\/([^/?#]+)/) || hash.match(/^#([a-zA-Z0-9_-]+)/);
-          if (match && match[1]) return match[1];
-        }
-      } catch {}
-    }
-    return initialActiveAcc?.chats?.[0]?.id || null;
-  });
+  const [activeChatId, setActiveChatId] = useState<string | null>(() => initialActiveAcc?.chats?.[0]?.id || null);
   const [typingChatId, setTypingChatId] = useState<string | null>(null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
@@ -383,6 +401,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     | 'smart-ai'
     | 'live-link-discover'
     | 'user-profile'
+    | 'android-notification-shade'
+    | 'restricted-content'
   >('none');
   const [selectedProfileUser, setSelectedProfileUser] = useState<ProfileUserInfo | null>(null);
 
@@ -429,6 +449,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Incremental Pagination & Stream Sync States
   const [isChatLoadingOlder, setIsChatLoadingOlder] = useState<Record<string, boolean>>({});
   const [chatHasMoreOlder, setChatHasMoreOlder] = useState<Record<string, boolean>>({});
+
+  // Firebase Cloud Messaging (FCM) & Push Diagnostic Engine State
+  const [fcmDiagnostic, setFcmDiagnostic] = useState<FcmDiagnosticInfo>(() => {
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem(`tg_fcm_token_${activeAccountId}`) || `fcm_tg_${activeAccountId}_${Math.random().toString(36).substring(2, 10)}`;
+    } catch {}
+    return {
+      status: typeof window !== 'undefined' && 'serviceWorker' in navigator ? 'listening' : 'unsupported',
+      token,
+      endpoint: typeof window !== 'undefined' ? `${window.location.origin}/api/telegram/push/gateway` : undefined,
+      lastHeartbeat: new Date().toISOString(),
+      activeAccountId,
+      activeUserId: currentUser.id,
+      activeDialogId: activeChatId,
+      registrationId: `reg_${activeAccountId}_${currentUser.id || 'anon'}`,
+      lastReceivedPacket: null,
+      history: [],
+      isSubscribedToPush: typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted',
+      permissionState: typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported',
+    };
+  });
 
   // Link Monitor & Auto-Join State
   const [capturedLinks, setCapturedLinks] = useState<CapturedLink[]>(() => {
@@ -617,6 +659,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     storageSyncManager.loadSettings().then((savedSettings) => {
       if (savedSettings) {
         setSettings((prev) => ({ ...prev, ...savedSettings }));
+        if (savedSettings.bubbleCornerRadius !== undefined) {
+          themeController.applyBubbleCornerRadius(savedSettings.bubbleCornerRadius);
+        }
+        if (savedSettings.fontSize !== undefined) {
+          themeController.applyFontSize(savedSettings.fontSize);
+        }
       }
     }).catch(() => {});
 
@@ -700,6 +748,282 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       );
     };
   }, []);
+
+  // Persistent Listener & Dynamic Session Association for FCM / Service Worker Push
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let isMounted = true;
+
+    // 1. Register or connect Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js', { scope: '/' })
+        .then((reg) => {
+          if (!isMounted) return;
+          setFcmDiagnostic((prev) => ({
+            ...prev,
+            status: 'connected',
+            permissionState: 'Notification' in window ? Notification.permission : 'unsupported',
+            isSubscribedToPush: 'Notification' in window && Notification.permission === 'granted',
+            endpoint: `${window.location.origin}/api/telegram/push/gateway`,
+          }));
+
+          // Send active session parameters & dialog_id association to Service Worker
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'SET_PUSH_SESSION',
+              accountId: activeAccountId,
+              userId: currentUser.id,
+              activeDialogId: activeChatId,
+              sessionString: currentUser.sessionString || '',
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn('[FCM Listener] Service Worker registration notice:', err);
+        });
+
+      // 2. Persistent message listener for push packets forwarded from Service Worker
+      const handleServiceWorkerMessage = (event: MessageEvent) => {
+        const data = event.data;
+        if (!data || !data.type) return;
+
+        if (data.type === 'FCM_PUSH_RECEIVED') {
+          const rawPacket = data.packet || data;
+          const dialogId = String(data.dialog_id || rawPacket.dialog_id || '0');
+          const senderId = String(data.sender_id || rawPacket.sender_id || '');
+          const senderName = String(data.sender_name || data.title || rawPacket.title || 'Telegram');
+          const body = String(data.body || rawPacket.body || 'New message');
+          const messageId = String(data.message_id || rawPacket.msg_id || `push_msg_${Date.now()}`);
+
+          const now = Date.now();
+          const isCurrentActiveDialog = activeChatId === dialogId;
+          const isMuted = notificationsController.isDialogMuted(dialogId);
+
+          let routingDecision = 'Dispatched in-app notification banner & unread counter incremented';
+          let packetStatus: FcmPushPacket['status'] = 'alerted';
+
+          if (isCurrentActiveDialog) {
+            routingDecision = `Suppressed audible/banner alert because dialog_id (${dialogId}) is currently open and focused.`;
+            packetStatus = 'suppressed_active_dialog';
+          } else if (isMuted) {
+            routingDecision = `Suppressed audible alert because dialog_id (${dialogId}) is muted by user preferences.`;
+            packetStatus = 'muted';
+          }
+
+          const packet: FcmPushPacket = {
+            id: rawPacket.id || `fcm_${now}_${Math.random().toString(36).substring(2, 7)}`,
+            timestamp: rawPacket.timestamp || new Date(now).toISOString(),
+            receivedAt: now,
+            dialog_id: dialogId,
+            sender_id: senderId,
+            sender_name: senderName,
+            msg_id: messageId,
+            title: senderName,
+            body,
+            sound: rawPacket.sound || 'default',
+            badge: rawPacket.badge || 1,
+            rawPayload: rawPacket.rawPayload || data,
+            status: packetStatus,
+            account_id: activeAccountId,
+            user_id: currentUser.id,
+            routingDecision,
+          };
+
+          // Update diagnostic history & status
+          setFcmDiagnostic((prev) => ({
+            ...prev,
+            lastHeartbeat: new Date().toISOString(),
+            lastReceivedPacket: packet,
+            history: [packet, ...prev.history].slice(0, 25),
+            activeDialogId: activeChatId,
+            activeAccountId,
+            activeUserId: currentUser.id,
+          }));
+
+          // If not in the active dialog and not muted, alert the user with in-app banner & audio chime
+          if (!isCurrentActiveDialog) {
+            if (!isMuted && (settings.soundEffects || settings.inAppSounds)) {
+              telegramAudio.playMessageChime();
+            }
+
+            // Trigger in-app notification banner
+            triggerNotification({
+              category: 'message',
+              title: senderName,
+              body,
+              chatId: dialogId,
+              senderId,
+              senderName,
+              messageId,
+            });
+
+            // Increment unread count for the target chat
+            setChats((prev) =>
+              prev.map((c) =>
+                c.id === dialogId
+                  ? {
+                      ...c,
+                      unreadCount: (c.unreadCount || 0) + 1,
+                      lastMessage: {
+                        id: messageId,
+                        chatId: dialogId,
+                        senderId,
+                        senderName,
+                        text: body,
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        date: new Date().toISOString().split('T')[0],
+                        status: 'delivered',
+                        isOutgoing: false,
+                      },
+                    }
+                  : c
+              )
+            );
+          }
+        } else if (data.type === 'NAVIGATE_TO_DIALOG') {
+          const targetDialogId = data.dialog_id;
+          if (targetDialogId) {
+            setActiveChatId(targetDialogId);
+          }
+        } else if (data.type === 'MARK_DIALOG_READ_BACKGROUND') {
+          const targetDialogId = data.dialog_id;
+          if (targetDialogId) {
+            markChatReadUnread(targetDialogId);
+          }
+        }
+      };
+
+      navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+
+      return () => {
+        isMounted = false;
+        navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+      };
+    }
+  }, [activeAccountId, currentUser.id, currentUser.sessionString, activeChatId, settings.soundEffects, settings.inAppSounds]);
+
+  // Keep dialog_id updated in Service Worker controller and synchronize registration with backend
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'SET_PUSH_SESSION',
+        accountId: activeAccountId,
+        userId: currentUser.id,
+        activeDialogId: activeChatId,
+        sessionString: currentUser.sessionString || '',
+      });
+    }
+
+    setFcmDiagnostic((prev) => ({
+      ...prev,
+      activeAccountId,
+      activeUserId: currentUser.id,
+      activeDialogId: activeChatId,
+      lastHeartbeat: new Date().toISOString(),
+    }));
+
+    // Synchronize push registration state with server
+    fetch('/api/telegram/push/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: activeAccountId,
+        userId: currentUser.id,
+        activeDialogId: activeChatId,
+        fcmToken: fcmDiagnostic.token || `fcm_${activeAccountId}_${currentUser.id}`,
+      }),
+    }).catch(() => {});
+  }, [activeAccountId, currentUser.id, activeChatId]);
+
+  const requestPushPermission = async (): Promise<boolean> => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      showToast('Notifications are not supported in this browser environment', '⚠️');
+      return false;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      const granted = permission === 'granted';
+      setFcmDiagnostic((prev) => ({
+        ...prev,
+        permissionState: permission,
+        isSubscribedToPush: granted,
+        status: granted ? 'connected' : 'permission_denied',
+      }));
+      if (granted) {
+        showToast(
+          settings.language === 'ar'
+            ? 'تم تفعيل إشعارات Push وربطها بالجلسة بنجاح ✅'
+            : 'Push notifications registered successfully ✅',
+          '🔔'
+        );
+      } else {
+        showToast(
+          settings.language === 'ar'
+            ? 'تم رفض إذن الإشعارات من المتصفح ❌'
+            : 'Notification permission denied ❌',
+          '⚠️'
+        );
+      }
+      return granted;
+    } catch (e) {
+      console.warn('[FCM] Permission request error:', e);
+      return false;
+    }
+  };
+
+  const testSimulateFcmPush = (customParams?: Partial<FcmPushPacket>) => {
+    const dialogId = customParams?.dialog_id || activeChatId || 'chat_durov';
+    const targetChat = chats.find((c) => c.id === dialogId);
+    const title = customParams?.title || targetChat?.title || 'Pavel Durov';
+    const body = customParams?.body || 'Test MTProto FCM push message received in background 🚀';
+    const senderId = customParams?.sender_id || targetChat?.id || 'durov';
+
+    // Broadcast through service worker simulation
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'TRIGGER_LOCAL_PUSH_SIMULATION',
+        packet: {
+          dialog_id: dialogId,
+          title,
+          body,
+          sender_id: senderId,
+          sender_name: title,
+          sound: 'default',
+          badge: 1,
+        },
+      });
+    }
+
+    // Also trigger server-side test broadcast to test SSE and live push pipeline
+    fetch('/api/telegram/push/send-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dialog_id: dialogId,
+        title,
+        body,
+        sender_id: senderId,
+        sender_name: title,
+      }),
+    }).catch(() => {});
+
+    showToast(
+      settings.language === 'ar' ? 'تم إرسال حزمة FCM تجريبية' : 'Test FCM Push packet dispatched',
+      '🚀'
+    );
+  };
+
+  const clearFcmDiagnosticHistory = () => {
+    setFcmDiagnostic((prev) => ({
+      ...prev,
+      history: [],
+      lastReceivedPacket: null,
+    }));
+  };
 
   const openSettingsPage = (page: SettingsSubPage = 'main') => {
     setSettingsSubPage(page);
@@ -1252,6 +1576,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateSettings = (newSettings: Partial<AppSettings>) => {
+    if (newSettings.bubbleCornerRadius !== undefined) {
+      themeController.applyBubbleCornerRadius(newSettings.bubbleCornerRadius);
+    }
+    if (newSettings.fontSize !== undefined) {
+      themeController.applyFontSize(newSettings.fontSize);
+    }
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };
       storageSyncManager.saveSettings(updated);
@@ -1269,6 +1599,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       return updated;
     });
+  };
+
+  const triggerScreenshotBlocked = (reason?: string) => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('tg-screenshot-blocked', { detail: { reason } }));
+    }
   };
 
   const testApiLatency = async (): Promise<number> => {
@@ -1464,53 +1800,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         replyText = data.reply || (settings.language === 'ar' ? 'تم استلام رسالتك عبر تيليجرام بنجاح!' : 'Received your message on Telegram!');
       }
 
-      let resolvedSenderId = targetChat?.id || 'peer';
-      let resolvedSenderName = targetChat?.title || (settings.language === 'ar' ? 'الطرف الآخر' : 'Contact');
-      let resolvedSenderAvatar = targetChat?.avatar;
-      let resolvedSenderUsername: string | undefined = undefined;
-
-      if (targetChat?.type === 'group') {
-        const groupMembers = [
-          {
-            id: 'user_tariq',
-            name: 'طارق الأحمدي',
-            avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
-            username: 'tariq_dev',
-          },
-          {
-            id: 'user_khalid',
-            name: 'خالد المنصوري',
-            avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-            username: 'khalid_tech',
-          },
-          {
-            id: 'user_sarah',
-            name: 'سارة المهدي',
-            avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-            username: 'sarah_m',
-          },
-          {
-            id: 'user_alex',
-            name: 'Alex Rivera',
-            avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-            username: 'alex_r',
-          },
-        ];
-        const chosenMember = groupMembers[Math.floor(Date.now() / 1000) % groupMembers.length];
-        resolvedSenderId = chosenMember.id;
-        resolvedSenderName = chosenMember.name;
-        resolvedSenderAvatar = chosenMember.avatar;
-        resolvedSenderUsername = chosenMember.username;
-      }
-
       const botTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const incomingMsg: Message = {
         id: `msg_in_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         chatId: targetChatId,
-        senderId: resolvedSenderId,
-        senderName: resolvedSenderName,
-        senderAvatar: resolvedSenderAvatar,
-        senderUsername: resolvedSenderUsername,
+        senderId: targetChat?.id || 'peer',
+        senderName: targetChat?.title || (settings.language === 'ar' ? 'الطرف الآخر' : 'Contact'),
+        senderAvatar: targetChat?.avatar,
         text: replyText,
         timestamp: botTime,
         date: new Date().toISOString().split('T')[0],
@@ -2202,6 +2498,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       )
     );
 
+    // Execute MTProto RPC call via PinnedAndForwardHelper
+    PinnedAndForwardHelper.forwardMessages(
+      UserConfig.selectedAccount || 0,
+      [msgToForward.id],
+      msgToForward.chatId,
+      targetChatId,
+      false
+    ).catch(() => {});
+
     setActiveChatId(targetChatId);
     setForwardingMessage(null);
     setActiveModal('none');
@@ -2344,6 +2649,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }),
       };
     });
+
+    // Execute MTProto RPC call via PinnedAndForwardHelper
+    PinnedAndForwardHelper.pinMessage(
+      UserConfig.selectedAccount || 0,
+      activeChatId,
+      messageId,
+      false,
+      !isNowPinned
+    ).catch(() => {});
+
     showToast(
       isNowPinned
         ? settings.language === 'ar' ? 'تم تثبيت الرسالة' : 'Message pinned'
@@ -2588,187 +2903,29 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      // Sync global settings & chat alert configs to Service Worker & IndexedDB
-      if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({
-          type: 'FCM_SYNC_APP_SETTINGS',
-          settings: {
-            notificationsEnabled: settings.notificationsEnabled,
-            soundEffects: settings.soundEffects,
-            previewText: settings.previewText,
-            vibrate: true,
-          },
-        });
-
-        // Map chat configs
-        const configs: Record<string, any> = {};
-        chats.forEach((c) => {
-          configs[c.id] = {
-            enabled: !c.isMuted,
-            sound: c.customTone || 'default',
-            vibration: 'default',
-            priority: 'default',
-          };
-        });
-        navigator.serviceWorker.controller.postMessage({
-          type: 'FCM_SYNC_CHAT_NOTIFICATION_CONFIGS',
-          configs,
-        });
-      }
-
       const handleSwMessage = (event: MessageEvent) => {
         const data = event.data;
         if (!data) return;
 
-        const targetDialogId = data.dialog_id || data.dialogId || data.chatId || data.chat_id;
-
-        // 1. Notification Click / Navigation to dialog_id
-        if ((data.type === 'NAVIGATE_TO_CHAT' || data.type === 'SELECT_DIALOG') && targetDialogId) {
-          setActiveChatId(targetDialogId);
-          markChatReadUnread(targetDialogId);
-          return;
-        }
-
-        // 2. Mark chat as read from notification action
-        if (data.type === 'MARK_CHAT_AS_READ' && targetDialogId) {
-          markChatReadUnread(targetDialogId);
-          return;
-        }
-
-        // 3. Inline notification reply action
-        if (data.type === 'INLINE_NOTIFICATION_REPLY' && targetDialogId && data.text) {
-          const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const outgoingReply: Message = {
-            id: `reply_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-            chatId: targetDialogId,
-            senderId: currentUser.id || 'current_user',
-            senderName: currentUser.name || 'You',
-            senderAvatar: currentUser.avatar,
-            text: data.text,
-            timestamp: nowStr,
-            date: new Date().toISOString().split('T')[0],
-            isOutgoing: true,
-            status: 'sent',
-          };
-
-          setMessages((prev) => ({
-            ...prev,
-            [targetDialogId]: [...(prev[targetDialogId] || []), outgoingReply],
-          }));
-
-          setChats((prev) =>
-            prev.map((c) =>
-              c.id === targetDialogId
-                ? {
-                    ...c,
-                    lastMessage: {
-                      id: outgoingReply.id,
-                      senderName: 'You',
-                      text: outgoingReply.text,
-                      timestamp: nowStr,
-                      isOutgoing: true,
-                      status: 'sent',
-                    },
-                  }
-                : c
-            )
-          );
-          return;
-        }
-
-        // 4. Background push / FCM received -> Immediate UI update in main thread
-        if (data.type === 'BACKGROUND_PUSH_RECEIVED' && data.remoteMessage) {
+        if (data.type === 'NAVIGATE_TO_CHAT' && data.chatId) {
+          setActiveChatId(data.chatId);
+        } else if (data.type === 'MARK_CHAT_AS_READ' && data.chatId) {
+          markChatReadUnread(data.chatId);
+        } else if (data.type === 'BACKGROUND_PUSH_RECEIVED' && data.remoteMessage) {
           const remoteData = data.remoteMessage.data || {};
-          const dialogId = targetDialogId || remoteData.dialog_id || remoteData.chat_id || remoteData.chatId || 'chat_general';
-          const senderName = remoteData.sender_name || remoteData.senderName || remoteData.chat_title || 'Telegram User';
-          const text = remoteData.text || data.remoteMessage.notification?.body || 'رسالة جديدة';
-          const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-          const isCurrentChat = dialogId === activeChatId;
-
-          // Insert incoming message into messages state
-          const newPushMsg: Message = {
-            id: `fcm_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-            chatId: dialogId,
-            senderId: remoteData.sender_id || remoteData.from_id || dialogId,
-            senderName,
-            senderAvatar: remoteData.avatar || data.remoteMessage.notification?.icon || '',
-            text,
-            timestamp: timeStr,
-            date: new Date().toISOString().split('T')[0],
-            isOutgoing: false,
-            status: 'delivered',
-          };
-
-          setMessages((prev) => {
-            const existing = prev[dialogId] || [];
-            if (existing.some((m) => m.id === newPushMsg.id || (m.text === text && Math.abs(Date.now() - (m.date ? new Date(m.date).getTime() : 0)) < 3000))) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [dialogId]: [...existing, newPushMsg],
-            };
-          });
-
-          // Update chat unread & last message snippet in sidebar
-          setChats((prev) => {
-            const exists = prev.some((c) => c.id === dialogId);
-            if (!exists) {
-              const newChat: Chat = {
-                id: dialogId,
-                title: remoteData.chat_title || senderName || 'Telegram Chat',
-                avatar: remoteData.avatar || '',
-                type: dialogId.startsWith('user_') ? 'private' : dialogId.includes('channel') ? 'channel' : 'group',
-                unreadCount: isCurrentChat ? 0 : 1,
-                lastMessage: {
-                  id: newPushMsg.id,
-                  senderName,
-                  text,
-                  timestamp: timeStr,
-                  isOutgoing: false,
-                },
-              };
-              return [newChat, ...prev];
-            }
-
-            return prev.map((c) => {
-              if (c.id === dialogId) {
-                return {
-                  ...c,
-                  unreadCount: isCurrentChat ? 0 : (c.unreadCount || 0) + 1,
-                  lastMessage: {
-                    id: newPushMsg.id,
-                    senderName,
-                    text,
-                    timestamp: timeStr,
-                    isOutgoing: false,
-                  },
-                };
-              }
-              return c;
-            });
-          });
-
+          const chatId = remoteData.chat_id || remoteData.chatId || 'chat_general';
           if (settings.soundEffects) {
             telegramAudio.playMessageChime();
           }
-
-          if (!isCurrentChat) {
+          if (chatId !== activeChatId) {
             triggerNotification({
               category: 'message',
-              title: remoteData.chat_title || senderName || 'Telegram',
-              body: text,
-              chatId: dialogId,
-              senderName,
+              title: remoteData.chat_title || 'Telegram',
+              body: remoteData.text || 'رسالة جديدة',
+              chatId,
+              senderName: remoteData.chat_title,
             });
           }
-          return;
-        }
-
-        // 5. Persistent Background Sync triggered
-        if (data.type === 'BACKGROUND_SYNC_TRIGGERED' || data.type === 'SYNC_QUEUE_PROCESSED') {
-          syncInitializationRoutine().catch(() => {});
         }
       };
 
@@ -2777,7 +2934,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         navigator.serviceWorker.removeEventListener('message', handleSwMessage);
       };
     }
-  }, [isAuthenticated, activeChatId, settings.soundEffects, settings.notificationsEnabled, settings.previewText]);
+  }, [isAuthenticated, activeChatId, settings.soundEffects]);
 
   // Real-Time Server-Sent Events (SSE) & Stream Synchronization with Telegram MTProto
   useEffect(() => {
@@ -2994,6 +3151,145 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     showToast(settings.language === 'ar' ? 'تم حذف المحادثة' : 'Chat deleted', '🗑️');
   };
 
+  const leaveGroup = async (chatId: string) => {
+    const isArabic = settings.language === 'ar';
+    try {
+      const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+      const activePhone = currentUser.phone || '';
+
+      // MTProto Server Call
+      fetch('/api/telegram/groups/leave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          phone: activePhone,
+          sessionString: activeSessionStr,
+        }),
+      }).catch((e) => console.warn('[Group] Leave RPC warning:', e));
+
+      // Update local state: insert leaving system event and remove user or group from active list
+      const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const systemLeaveMsg: Message = {
+        id: `msg_sys_left_${Date.now()}`,
+        chatId,
+        senderId: 'sys_action',
+        senderName: 'System',
+        text: isArabic ? 'لقد غادرت هذه المجموعة' : 'You left this group',
+        timestamp,
+        date: new Date().toISOString().split('T')[0],
+        isOutgoing: true,
+        status: 'read',
+      };
+
+      setMessages((prev) => ({
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), systemLeaveMsg],
+      }));
+
+      // Update chat member count & status
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id === chatId) {
+            return {
+              ...c,
+              memberCount: Math.max(0, (c.memberCount || 1) - 1),
+              lastMessage: {
+                id: systemLeaveMsg.id,
+                senderName: 'You',
+                text: systemLeaveMsg.text,
+                timestamp,
+                isOutgoing: true,
+                status: 'read',
+              },
+            };
+          }
+          return c;
+        })
+      );
+
+      // Clean up active dialog
+      messagesController.deleteDialog(chatId, true);
+      showToast(isArabic ? 'تمت مغادرة المجموعة بنجاح' : 'Left group successfully', '🚪');
+    } catch (e: any) {
+      showToast(isArabic ? 'تعذر مغادرة المجموعة' : 'Failed to leave group', '⚠️');
+    }
+  };
+
+  const deleteGroupMessages = async (chatId: string, forEveryone = true) => {
+    const isArabic = settings.language === 'ar';
+    try {
+      const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+      const activePhone = currentUser.phone || '';
+
+      // MTProto Server Call
+      fetch('/api/telegram/groups/clear-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          forEveryone,
+          phone: activePhone,
+          sessionString: activeSessionStr,
+        }),
+      }).catch((e) => console.warn('[Group] Clear history RPC warning:', e));
+
+      // Empties messages for this group in state
+      setMessages((prev) => ({
+        ...prev,
+        [chatId]: [],
+      }));
+
+      // Clear last message & unread in chats list
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId ? { ...c, lastMessage: undefined, unreadCount: 0 } : c
+        )
+      );
+
+      messagesController.deleteDialog(chatId, true);
+      showToast(isArabic ? 'تم حذف جميع رسائل المجموعة بنجاح' : 'All group messages deleted successfully', '🧹');
+    } catch (e: any) {
+      showToast(isArabic ? 'تعذر حذف رسائل المجموعة' : 'Failed to clear group messages', '⚠️');
+    }
+  };
+
+  const deleteGroup = async (chatId: string) => {
+    const isArabic = settings.language === 'ar';
+    try {
+      const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+      const activePhone = currentUser.phone || '';
+
+      // MTProto Server Call
+      fetch('/api/telegram/groups/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          phone: activePhone,
+          sessionString: activeSessionStr,
+        }),
+      }).catch((e) => console.warn('[Group] Delete RPC warning:', e));
+
+      // Permanently remove chat and messages
+      setChats((prev) => prev.filter((c) => c.id !== chatId));
+      setMessages((prev) => {
+        const copy = { ...prev };
+        delete copy[chatId];
+        return copy;
+      });
+
+      if (activeChatId === chatId) {
+        setActiveChatId(null);
+      }
+
+      messagesController.deleteDialog(chatId, false);
+      showToast(isArabic ? 'تم حذف المجموعة نهائياً' : 'Group deleted permanently', '🗑️');
+    } catch (e: any) {
+      showToast(isArabic ? 'تعذر حذف المجموعة' : 'Failed to delete group', '⚠️');
+    }
+  };
+
   const startCall = (isVideo: boolean = false) => {
     if (!activeChat) return;
     const sampleEmojis: [string, string, string, string] = ['🔐', '🌲', '💎', '🚀'];
@@ -3070,8 +3366,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           {
             id: `msg_welcome_${Date.now()}`,
             chatId: newJoinedChat.id,
-            senderId: newJoinedChat.type === 'channel' ? 'sys_channel' : 'user_admin',
-            senderName: newJoinedChat.type === 'channel' ? newJoinedChat.title : (settings.language === 'ar' ? 'مشرف المجموعة' : 'Group Admin'),
+            senderId: 'sys_channel',
+            senderName: newJoinedChat.title,
             text: `👋 Welcome to ${newJoinedChat.title}!\n\nThis ${newJoinedChat.type} is connected via MTProto 2.0 (Layer 184) under Telegram API_ID ${apiConfig.apiId}.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             date: new Date().toISOString().split('T')[0],
@@ -3090,15 +3386,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const resolveTelegramLink = async (urlOrQuery: string) => {
     try {
-      const res = await fetch('/api/telegram/links/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: urlOrQuery }),
-      });
-      const data = await res.json();
-      if (data.success && data.inviteInfo) {
-        window.dispatchEvent(new CustomEvent('tg-open-invite', { detail: data.inviteInfo }));
-      }
+      await OpenTelegramLink.openTelegramLink(
+        UserConfig.selectedAccount || 0,
+        urlOrQuery,
+        (chatId) => {
+          setActiveChatId(chatId);
+        },
+        (inviteInfo) => {
+          window.dispatchEvent(new CustomEvent('tg-open-invite', { detail: inviteInfo }));
+        }
+      );
     } catch {
       showToast(
         settings.language === 'ar' ? 'تعذر فتح الرابط' : 'Failed to resolve link',
@@ -3317,6 +3614,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         markChatReadUnread,
         clearChatHistory,
         deleteChat,
+        leaveGroup,
+        deleteGroupMessages,
+        deleteGroup,
         startCall,
         endCall,
         toggleCallMute,
@@ -3338,6 +3638,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         loadMoreChatMessages,
         isChatLoadingOlder,
         chatHasMoreOlder,
+        fcmDiagnostic,
+        requestPushPermission,
+        testSimulateFcmPush,
+        clearFcmDiagnosticHistory,
+        triggerScreenshotBlocked,
       }}
     >
       {children}

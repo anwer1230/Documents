@@ -734,6 +734,63 @@ export namespace TLRPC {
     public readParams(stream: any, exception: boolean): void {}
   }
 
+  export class TL_channels_leaveChannel extends TLObject {
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_deleteChatUser extends TLObject {
+    public chat_id: number | string = 0;
+    public user_id: InputUser | string = { _: 'inputUserSelf' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_channels_getFullChannel extends TLObject {
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_getFullChat extends TLObject {
+    public chat_id: number | string = 0;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_chatFull extends TLObject {
+    public full_chat: any;
+    public chats: Chat[] = [];
+    public users: User[] = [];
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_updatePinnedMessage extends TLObject {
+    public peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public id: number | string = 0;
+    public silent: boolean = false;
+    public unpin: boolean = false;
+    public pm_oneside?: boolean;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_forwardMessages extends TLObject {
+    public from_peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public to_peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public id: (number | string)[] = [];
+    public random_id: number[] = [];
+    public silent?: boolean;
+    public background?: boolean;
+    public with_my_score?: boolean;
+    public drop_author?: boolean;
+    public drop_media_captions?: boolean;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
   export class TL_channels_editAdmin extends TLObject {
     public channel: string = '';
     public user_id: string = '';

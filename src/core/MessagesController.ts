@@ -8,12 +8,12 @@
 
 import { Chat, Message } from '../types';
 import { TLRPC } from './TLRPC';
-import { ChatObject } from './ChatObject';
 import { NotificationCenter } from './NotificationCenter';
 import { MessagesStorage } from './MessagesStorage';
 import { ConnectionsManager } from './ConnectionsManager';
 import { DialogsController } from './messenger/DialogsController';
 import { UserConfig } from './messenger/UserConfig';
+import { KeywordMonitor } from './messenger/KeywordMonitor';
 
 export interface ChatParticipantInfo {
   userId: string;
@@ -282,22 +282,15 @@ export class MessagesController {
     // Check if user is owner / admin
     const chatRoles = this.participantsMap.get(chat.id);
     const userRole = chatRoles?.get(currentUserId);
-    const isAdminOrCreator = Boolean(
-      chat.creator ||
-      chat.isCreator ||
-      chat.isAdmin ||
-      chat.admin_rights?.post_messages ||
-      chat.admin_rights?.send_messages ||
-      (userRole && (userRole.role === 'creator' || userRole.role === 'admin'))
-    );
+    const isAdminOrCreator = Boolean(chat.creator || chat.isCreator || chat.isAdmin || (userRole && (userRole.role === 'creator' || userRole.role === 'admin')));
 
     if (isAdminOrCreator) {
       return { canSend: true };
     }
 
     // If chat is a broadcast channel (and not a supergroup/group)
-    const isBroadcastChannel = ChatObject.isChannelAndNotMegaGroup(chat);
-    if (isBroadcastChannel || (chat.isReadOnly && !ChatObject.isMegagroup(chat))) {
+    const isBroadcastChannel = chat.type === 'channel' && !chat.megagroup && !chat.isGroup;
+    if (isBroadcastChannel || chat.isReadOnly) {
       return {
         canSend: false,
         reason: 'القنوات مخصصة لبث الرسائل بواسطة المشرفين فقط',
@@ -791,6 +784,8 @@ export class MessagesController {
         storage.saveMessage(msg);
       }
 
+      KeywordMonitor.getInstance(this.currentAccount).inspectMessage(msg);
+
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.didReceiveNewMessages,
         msg.chatId || msg.peer_id,
@@ -878,10 +873,7 @@ export class MessagesController {
       req.new_settings = newSettings;
 
       const res = await conn.sendRequest<any>(req);
-      const ok = !!(res && (res._ === 'boolTrue' || res === true || res._ === 'TL_boolTrue'));
-      if (res && typeof res === 'object' && (res._ === 'updates' || res.updates)) {
-        this.processUpdates(res, false);
-      }
+      const ok = !!(res && (res._ === 'boolTrue' || res === true));
       if (ok) {
         await this.loadPasswordSettings();
       }
@@ -926,18 +918,11 @@ export class MessagesController {
       req.rules = rules;
 
       const res = await conn.sendRequest<TLRPC.TL_account_privacyRules>(req);
-      const ok = !!(res && (res._ === 'account.privacyRules' || res._ === 'account_privacyRules'));
-      if (res && typeof res === 'object' && (res._ === 'updates' || res.updates)) {
-        this.processUpdates(res, false);
-      }
+      const ok = !!(res && res._ === 'account.privacyRules');
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.privacyRulesUpdated,
         key,
         res?.rules || rules
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.updateInterfaces,
-        NotificationCenter.UPDATE_MASK_ALL
       );
       return ok;
     } catch (e) {
@@ -1284,177 +1269,77 @@ export class MessagesController {
       return null;
     }
   }
-  // ==========================================================
-  // 11. Channel & Group Actions (Join, Leave, Pin, Forward, ImportInvite)
-  // Replicated directly from DrKLO MessagesController.java
-  // ==========================================================
-  public async joinChannel(chatId: string | number): Promise<boolean> {
-    try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_channels_joinChannel();
-      req._ = 'channels.joinChannel';
-      req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
 
-      const res = await conn.sendRequest<any>(req);
-      const ok = !!(res && (res._ === 'updates' || res.updates || res.chats || res._ === 'TL_updates'));
+  /**
+   * Checks for application update via MTProto / Backend (TLRPC.TL_help_getAppUpdate)
+   * Replicated from DrKLO/Telegram Android: org.telegram.messenger.MessagesController.checkAppUpdate
+   */
+  public async checkAppUpdate(isManual: boolean = false, context?: any): Promise<void> {
+    const { appUpdateController } = await import('./messenger/AppUpdateController');
+    await appUpdateController.checkAppUpdate(isManual);
+  }
 
-      // Process updates to notify all client controllers and push sync
-      if (res) {
-        this.processUpdates(res, false);
+  /**
+   * Puts users into in-memory/cache storage (DrKLO MessagesController.putUsers)
+   */
+  public putUsers(users: any[], fromCache: boolean = false): void {
+    if (!users || !Array.isArray(users)) return;
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    for (const u of users) {
+      if (u && u.id) {
+        this.users.set(String(u.id), u);
       }
-
-      const chat = this.chats.get(String(chatId));
-      if (chat) {
-        chat.isMember = true;
-        chat.memberCount = (chat.memberCount || 1000) + 1;
-        this.chats.set(String(chatId), chat);
-      }
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.chatInfoDidLoad,
-        String(chatId),
-        chat
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.updateInterfaces,
-        NotificationCenter.UPDATE_MASK_ALL
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-      return ok;
-    } catch (e) {
-      console.warn('[MessagesController] joinChannel failed:', e);
-      return false;
+    }
+    if (!fromCache) {
+      storage.putUsersAndChats(users, [], false, true);
     }
   }
 
-  public async importChatInvite(hash: string): Promise<any> {
-    try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_messages_importChatInvite();
-      req._ = 'messages.importChatInvite';
-      req.hash = hash.replace(/^(https?:\/\/)?(t\.me\/(\+|joinchat\/)?)/, '');
-
-      const res = await conn.sendRequest<any>(req);
-      if (res) {
-        // Feed returned Updates directly to central Updates Processor
-        this.processUpdates(res, false);
+  /**
+   * Puts chats/channels into in-memory/cache storage (DrKLO MessagesController.putChats)
+   */
+  public putChats(chats: any[], fromCache: boolean = false): void {
+    if (!chats || !Array.isArray(chats)) return;
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    for (const c of chats) {
+      if (c && c.id) {
+        this.chats.set(String(c.id), c);
       }
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-      return res;
-    } catch (e) {
-      console.warn('[MessagesController] importChatInvite failed:', e);
-      return null;
+    }
+    if (!fromCache) {
+      storage.putUsersAndChats([], chats, false, true);
     }
   }
 
-  public async leaveChat(chatId: string | number): Promise<boolean> {
-    try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_channels_leaveChannel();
-      req._ = 'channels.leaveChannel';
-      req.channel = { _: 'inputChannel', channel_id: Number(chatId) || 0, access_hash: '0' };
-
-      const res = await conn.sendRequest<any>(req);
-      if (res) {
-        this.processUpdates(res, false);
-      }
-
-      const chat = this.chats.get(String(chatId));
-      if (chat) {
-        chat.isMember = false;
-        if (chat.memberCount && chat.memberCount > 1) chat.memberCount--;
-      }
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.chatInfoDidLoad,
-        String(chatId),
-        chat
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-      return true;
-    } catch (e) {
-      console.warn('[MessagesController] leaveChat failed:', e);
-      return false;
-    }
+  /**
+   * Loads full chat / channel information (DrKLO MessagesController.loadFullChat)
+   */
+  public loadFullChat(chatId: string | number, classGuidOrForce: number | boolean = 0, force: boolean = false): void {
+    const cid = String(chatId).replace(/^-100/, '').replace(/^-/, '');
+    const req = new TLRPC.TL_channels_getFullChannel();
+    req.channel = cid;
+    const conn = ConnectionsManager.getInstance(this.currentAccount);
+    conn.sendRequest(req, {
+      onSuccess: (response: any) => {
+        if (response && response.full_chat) {
+          NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+            NotificationCenter.chatInfoDidLoad,
+            chatId,
+            response.full_chat
+          );
+        }
+      },
+      onError: (err: any) => {
+        console.warn('[MessagesController] loadFullChat failed:', err);
+      },
+    }).catch(() => {});
   }
 
-  public async pinMessage(peerId: string | number, msgId: number, unpin: boolean = false, silent: boolean = false): Promise<boolean> {
+  public get pendingAppUpdate(): TLRPC.TL_help_appUpdate | null {
     try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_messages_updatePinnedMessage();
-      req._ = 'messages.updatePinnedMessage';
-      req.peer = { _: 'inputPeerChat', chat_id: Number(peerId) || 0 };
-      req.id = msgId;
-      req.unpin = unpin;
-      req.silent = silent;
-
-      const res = await conn.sendRequest<any>(req);
-      if (res) {
-        this.processUpdates(res, false);
-      }
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.pinnedInfoDidLoad,
-        String(peerId),
-        msgId
-      );
-      return true;
-    } catch (e) {
-      console.warn('[MessagesController] pinMessage failed:', e);
-      return false;
-    }
-  }
-
-  public async forwardMessages(
-    fromPeerId: string | number,
-    toPeerId: string | number,
-    messageIds: number[],
-    silent: boolean = false
-  ): Promise<boolean> {
-    try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_messages_forwardMessages();
-      req._ = 'messages.forwardMessages';
-      req.from_peer = { _: 'inputPeerChat', chat_id: Number(fromPeerId) || 0 };
-      req.to_peer = { _: 'inputPeerChat', chat_id: Number(toPeerId) || 0 };
-      req.id = messageIds;
-      req.random_id = messageIds.map(() => Math.floor(Math.random() * 1000000000));
-      req.silent = silent;
-
-      const res = await conn.sendRequest<any>(req);
-      if (res) {
-        this.processUpdates(res, false);
-      }
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.messagesDidLoad,
-        String(toPeerId)
-      );
-      return true;
-    } catch (e) {
-      console.warn('[MessagesController] forwardMessages failed:', e);
-      return false;
-    }
-  }
-
-  public async resolveUsername(username: string): Promise<any> {
-    try {
-      const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_contacts_resolveUsername();
-      req._ = 'contacts.resolveUsername';
-      req.username = username.replace(/^@/, '');
-
-      const res = await conn.sendRequest<any>(req);
-      return res;
-    } catch (e) {
-      console.warn('[MessagesController] resolveUsername failed:', e);
+      const { appUpdateController } = require('./messenger/AppUpdateController');
+      return appUpdateController.pendingAppUpdate;
+    } catch {
       return null;
     }
   }

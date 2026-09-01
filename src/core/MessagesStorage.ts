@@ -143,20 +143,23 @@ export class SQLiteDatabase {
 }
 
 export class MessagesStorage {
+  public static readonly MAX_ACCOUNT_COUNT: number = 4;
   private static instances = new Map<number, MessagesStorage>();
-  private currentAccount: number;
+  public readonly currentAccount: number;
   public database: SQLiteDatabase;
 
   public static getInstance(account: number = 0): MessagesStorage {
-    if (!MessagesStorage.instances.has(account)) {
-      MessagesStorage.instances.set(account, new MessagesStorage(account));
+    const validAccount = Math.max(0, Math.min(account, MessagesStorage.MAX_ACCOUNT_COUNT - 1));
+    if (!MessagesStorage.instances.has(validAccount)) {
+      MessagesStorage.instances.set(validAccount, new MessagesStorage(validAccount));
     }
-    return MessagesStorage.instances.get(account)!;
+    return MessagesStorage.instances.get(validAccount)!;
   }
 
   private constructor(account: number = 0) {
     this.currentAccount = account;
-    this.database = new SQLiteDatabase(`telegram_${account}.db`);
+    const dbName = account === 0 ? 'cache4.db' : `cache4_${account}.db`;
+    this.database = new SQLiteDatabase(dbName);
     this.loadFromLocalStorage();
   }
 
@@ -171,6 +174,10 @@ export class MessagesStorage {
     this.database.execute('DELETE FROM drafts');
     if (typeof window !== 'undefined' && isLogout) {
       localStorage.removeItem(`tg_persisted_chats_${this.currentAccount}`);
+      localStorage.removeItem(`tg_diff_params_${this.currentAccount}`);
+      if (this.currentAccount === 0) {
+        localStorage.removeItem('tg_persisted_chats');
+      }
     }
   }
 
@@ -194,17 +201,82 @@ export class MessagesStorage {
     return dialogs;
   }
 
+  public putDialogs(dialogsRes: any): void {
+    if (!dialogsRes) return;
+    const dialogList: Chat[] = Array.isArray(dialogsRes.dialogs) ? dialogsRes.dialogs : (Array.isArray(dialogsRes) ? dialogsRes : []);
+    dialogList.forEach((c) => {
+      if (c && c.id) {
+        this.database.insertOrReplace('dialogs', {
+          dialog_id: c.id,
+          id: c.id,
+          unread_count: c.unreadCount || 0,
+          pinned: c.isPinned ? 1 : 0,
+          flags: (c.isPinned ? 1 : 0) | (c.isMuted ? 2 : 0) | (c.isArchived ? 4 : 0),
+          data: c,
+        });
+      }
+    });
+    this.saveToLocalStorage();
+  }
+
+  public putUsersAndChats(users: any[], chats: any[], withTransaction: boolean = false, fromQueue: boolean = false): void {
+    if (users && Array.isArray(users)) {
+      users.forEach((u) => {
+        if (u && u.id) {
+          this.database.insertOrReplace('users', {
+            id: u.id,
+            user_id: u.id,
+            data: u,
+          });
+        }
+      });
+    }
+    if (chats && Array.isArray(chats)) {
+      chats.forEach((c) => {
+        if (c && c.id) {
+          this.database.insertOrReplace('chats', {
+            id: c.id,
+            chat_id: c.id,
+            data: c,
+          });
+        }
+      });
+    }
+  }
+
+  public putPrivacyRules(rules: any[], type: number): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(`tg_privacy_rules_${this.currentAccount}_${type}`, JSON.stringify(rules));
+    } catch {}
+  }
+
+  public getPrivacyRules(type: number): any[] | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const saved = localStorage.getItem(`tg_privacy_rules_${this.currentAccount}_${type}`);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  }
+
   private loadFromLocalStorage(): void {
     if (typeof window === 'undefined') return;
     try {
-      const savedChats = localStorage.getItem('tg_persisted_chats');
+      const storageKey = `tg_persisted_chats_${this.currentAccount}`;
+      let savedChats = localStorage.getItem(storageKey);
+      if (!savedChats && this.currentAccount === 0) {
+        savedChats = localStorage.getItem('tg_persisted_chats');
+      }
+
       if (savedChats) {
         const chats: Chat[] = JSON.parse(savedChats);
         chats.forEach((c) => {
           this.database.insertOrReplace('dialogs', {
             dialog_id: c.id,
             id: c.id,
-            unread_count: c.unreadCount,
+            unread_count: c.unreadCount || 0,
             pinned: c.isPinned ? 1 : 0,
             flags: (c.isPinned ? 1 : 0) | (c.isMuted ? 2 : 0) | (c.isArchived ? 4 : 0),
             data: c,
@@ -212,7 +284,21 @@ export class MessagesStorage {
         });
       }
     } catch (e) {
-      console.warn('[MessagesStorage] Failed to restore from localStorage:', e);
+      console.warn(`[MessagesStorage ${this.currentAccount}] Failed to restore from localStorage:`, e);
+    }
+  }
+
+  public saveToLocalStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const dialogs = this.getDialogs(0, 500);
+      const storageKey = `tg_persisted_chats_${this.currentAccount}`;
+      localStorage.setItem(storageKey, JSON.stringify(dialogs));
+      if (this.currentAccount === 0) {
+        localStorage.setItem('tg_persisted_chats', JSON.stringify(dialogs));
+      }
+    } catch (e) {
+      console.warn(`[MessagesStorage ${this.currentAccount}] Failed to save to localStorage:`, e);
     }
   }
 
@@ -334,6 +420,52 @@ export class MessagesStorage {
       id,
       text
     );
+  }
+  /**
+   * DrKLO MessagesStorage.saveChatScrollPosition
+   * Persists scroll position metrics (position, topOffset, messageId, isBottom)
+   */
+  public saveChatScrollPosition(
+    dialogId: string | number,
+    position: number,
+    topOffset: number,
+    messageId: string | number = 0,
+    isAtBottom: boolean = false
+  ): void {
+    const id = String(dialogId);
+    try {
+      if (typeof window !== 'undefined') {
+        const payload = {
+          dialogId: id,
+          position,
+          topOffset,
+          messageId: String(messageId),
+          isAtBottom,
+          timestamp: Date.now(),
+        };
+        localStorage.setItem(`tg_scroll_pos_${this.currentAccount}_${id}`, JSON.stringify(payload));
+      }
+    } catch (e) {}
+  }
+
+  /**
+   * DrKLO MessagesStorage.getChatScrollPosition
+   */
+  public getChatScrollPosition(dialogId: string | number): {
+    dialogId: string;
+    position: number;
+    topOffset: number;
+    messageId: string;
+    isAtBottom: boolean;
+  } | null {
+    const id = String(dialogId);
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem(`tg_scroll_pos_${this.currentAccount}_${id}`);
+        return saved ? JSON.parse(saved) : null;
+      }
+    } catch (e) {}
+    return null;
   }
 }
 

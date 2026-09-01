@@ -10,6 +10,11 @@ import {
   Link2,
   MoreVertical,
   Zap,
+  Bell,
+  Smartphone,
+  LayoutList,
+  ShieldAlert,
+  CameraOff,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
@@ -21,9 +26,12 @@ export const ChatListHeader: React.FC = () => {
     setActiveModal,
     resolveTelegramLink,
     settings,
+    updateSettings,
+    showToast,
     autoJoinLinksEnabled,
     capturedLinks,
     isSyncing,
+    triggerScreenshotBlocked,
   } = useTelegram();
 
   const [isSearchActive, setIsSearchActive] = useState(false);
@@ -53,6 +61,19 @@ export const ChatListHeader: React.FC = () => {
   const handleCloseSearch = () => {
     setSearchQuery('');
     setIsSearchActive(false);
+  };
+
+  const isThreeLines = settings.chatListViewMode === 'three_lines';
+
+  const toggleChatListViewMode = () => {
+    const nextMode = isThreeLines ? 'two_lines' : 'three_lines';
+    updateSettings({ chatListViewMode: nextMode });
+    showToast(
+      nextMode === 'three_lines'
+        ? (isArabic ? 'تم تفعيل نمط القائمة: 3 أسطر' : 'Chat List View: 3 Lines')
+        : (isArabic ? 'تم تفعيل نمط القائمة: سطرين' : 'Chat List View: 2 Lines'),
+      '📋'
+    );
   };
 
   return (
@@ -108,7 +129,7 @@ export const ChatListHeader: React.FC = () => {
           /* Normal Action Bar Mode */
           <>
             {/* Left: Hamburger Menu + Brand Title */}
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
               <button
                 id="tg-menu-button"
                 onClick={() => setIsDrawerOpen(true)}
@@ -118,23 +139,11 @@ export const ChatListHeader: React.FC = () => {
                 <Menu className="w-5 h-5" />
               </button>
 
-              {/* Animated Multi-Color Brand Icon */}
-              <div
-                onClick={() => setIsDrawerOpen(true)}
-                className="relative shrink-0 w-7 h-7 rounded-full tg-multicolor-gradient flex items-center justify-center shadow-md cursor-pointer hover:scale-105 transition-transform"
-                title="Telegram_anwer saif (DrKLO Official Build)"
-              >
-                <div className="tg-multicolor-glow" />
-                <svg className="w-4 h-4 text-white -translate-x-0.5 relative z-10 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.52 2.77-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .37z" />
-                </svg>
-              </div>
-
               <div className="flex flex-col min-w-0">
-                <span className="font-bold text-sm text-white tracking-tight leading-none truncate max-w-[140px] sm:max-w-[190px]">
+                <span className="font-bold text-base text-white tracking-tight leading-none">
                   Telegram
                 </span>
-                <span className="text-[9.5px] text-sky-400 font-mono mt-0.5 leading-none">
+                <span className="text-[10px] text-sky-400 font-mono mt-0.5 leading-none">
                   {isSyncing ? (isArabic ? 'جاري التحديث...' : 'Updating...') : 'v12.9.2'}
                 </span>
               </div>
@@ -169,6 +178,17 @@ export const ChatListHeader: React.FC = () => {
                 )}
               </button>
 
+              {/* Android Notification Shade Preview Button */}
+              <button
+                id="tg-android-shade-btn"
+                onClick={() => setActiveModal('android-notification-shade' as any)}
+                className="p-2 rounded-full text-cyan-400 hover:bg-cyan-500/15 transition-colors relative"
+                title={isArabic ? 'شريط إشعارات الجوال الأندرويد (خارج التطبيق)' : 'Android Notification Shade'}
+              >
+                <Bell className="w-5 h-5" />
+                <span className="absolute top-1 right-1 rtl:right-auto rtl:left-1 w-2 h-2 rounded-full bg-cyan-400" />
+              </button>
+
               {/* Direct APK Install Button */}
               <button
                 id="tg-apk-installer-btn"
@@ -201,32 +221,86 @@ export const ChatListHeader: React.FC = () => {
 
                 {isMoreMenuOpen && (
                   <div
-                    className="absolute right-0 rtl:right-auto rtl:left-0 top-12 w-52 bg-[#17212b] border border-[#2b394a] rounded-2xl shadow-2xl py-1.5 z-50 text-xs font-semibold text-gray-200 animate-in fade-in zoom-in-95"
+                    className="absolute right-0 rtl:right-auto rtl:left-0 top-12 w-64 bg-[#17212b] border border-[#2b394a] rounded-2xl shadow-2xl py-1.5 z-50 text-xs font-semibold text-gray-200 animate-in fade-in zoom-in-95 divide-y divide-white/5"
                     onClick={() => setIsMoreMenuOpen(false)}
                   >
-                    <button
-                      onClick={() => setActiveModal('apk-installer')}
-                      className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
-                    >
-                      <Download className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>{isArabic ? 'تثبيت تطبيق الجوال (APK)' : 'Install Mobile App (APK)'}</span>
-                    </button>
+                    <div className="py-1">
+                      {/* Fast 2 Lines vs 3 Lines Toggle */}
+                      <button
+                        id="tg-toggle-list-view-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleChatListViewMode();
+                          setIsMoreMenuOpen(false);
+                        }}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center justify-between text-left rtl:text-right text-amber-300 hover:text-amber-200"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <LayoutList className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>{isArabic ? 'نمط القائمة' : 'Chat List Layout'}</span>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono font-bold">
+                          {isThreeLines ? (isArabic ? '3 أسطر' : '3 Lines') : (isArabic ? 'سطرين' : '2 Lines')}
+                        </span>
+                      </button>
 
-                    <button
-                      onClick={() => setActiveModal('sender')}
-                      className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
-                    >
-                      <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
-                      <span>{isArabic ? 'الإرسال والمراقبة الذكية' : 'Smart Sender & Monitor'}</span>
-                    </button>
+                      <button
+                        onClick={() => setActiveModal('android-notification-shade' as any)}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-cyan-300 hover:text-cyan-200"
+                      >
+                        <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
+                        <span>{isArabic ? 'شريط إشعارات الجوال (Android UI)' : 'Android Notification Shade'}</span>
+                      </button>
 
-                    <button
-                      onClick={() => setActiveModal('link-monitor')}
-                      className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
-                    >
-                      <Radio className="w-4 h-4 text-cyan-400 shrink-0" />
-                      <span>{isArabic ? 'رادار الروابط والانضمام' : 'Links Radar & Joiner'}</span>
-                    </button>
+                      <button
+                        onClick={() => setActiveModal('apk-installer')}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
+                      >
+                        <Download className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>{isArabic ? 'تثبيت تطبيق الجوال (APK)' : 'Install Mobile App (APK)'}</span>
+                      </button>
+                    </div>
+
+                    <div className="py-1">
+                      {/* Security & Restricted Testing Controls */}
+                      <button
+                        onClick={() => {
+                          setActiveModal('restricted-content');
+                        }}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-rose-300 hover:text-rose-200"
+                      >
+                        <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+                        <span>{isArabic ? 'تجربة لافتة المحتوى الحساس والمقيد' : 'Test Restricted Content Modal'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          triggerScreenshotBlocked();
+                        }}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-300 hover:text-white"
+                      >
+                        <CameraOff className="w-4 h-4 text-orange-400 shrink-0" />
+                        <span>{isArabic ? 'تجربة حظر لقطات الشاشة (FLAG_SECURE)' : 'Test Screenshot Block Alert'}</span>
+                      </button>
+                    </div>
+
+                    <div className="py-1">
+                      <button
+                        onClick={() => setActiveModal('sender')}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
+                      >
+                        <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+                        <span>{isArabic ? 'الإرسال والمراقبة الذكية' : 'Smart Sender & Monitor'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveModal('link-monitor')}
+                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
+                      >
+                        <Radio className="w-4 h-4 text-cyan-400 shrink-0" />
+                        <span>{isArabic ? 'رادار الروابط والانضمام' : 'Links Radar & Joiner'}</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

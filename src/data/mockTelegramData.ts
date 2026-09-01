@@ -197,6 +197,25 @@ export const INITIAL_CHATS: Chat[] = [
       status: 'read',
     },
   },
+  {
+    id: 'chat_restricted_sample',
+    title: 'المجموعة المحظورة (محتوى مقيد) 🚫',
+    type: 'group',
+    username: 'restricted_channel_demo',
+    avatar: 'https://images.unsplash.com/photo-1594322436404-5a0526db4d13?w=150&auto=format&fit=crop&q=80',
+    unreadCount: 0,
+    isRestricted: true,
+    restrictionReason: 'لا يمكن عرض هذه المجموعة بسبب استخدامها لنشر محتوى إباحي في السابق.',
+    description: 'هذه المجموعة محظورة ومقيدة طبقاً لسياسات تيليجرام للأمان وحماية المستخدمين.',
+    lastMessage: {
+      id: 'm_restr_1',
+      senderName: 'Telegram Security',
+      text: '🚫 هذه المجموعة غير متاحة بسبب انتهاك شروط الخدمة.',
+      timestamp: '12:00 PM',
+      isOutgoing: false,
+      status: 'read',
+    },
+  },
 ];
 
 export const INITIAL_MESSAGES: Record<string, Message[]> = {
@@ -391,6 +410,19 @@ export const INITIAL_MESSAGES: Record<string, Message[]> = {
       text: 'رصيدك الحالي: 250 ⭐️ نجمة تيليجرام. جاهزة للاستخدام في الهدايا والتطبيقات المصغرة.',
       timestamp: 'Yesterday',
       date: '2026-08-28',
+      isOutgoing: false,
+      status: 'read',
+    },
+  ],
+  chat_restricted_sample: [
+    {
+      id: 'm_restr_msg_1',
+      chatId: 'chat_restricted_sample',
+      senderId: 'bot_security',
+      senderName: 'Telegram Security',
+      text: '🚫 تم تقييد هذه المجموعة وحظر محتواها بناءً على تقارير المستخدمين وانتهاك سياسات شروط الخدمة.',
+      timestamp: '12:00 PM',
+      date: '2026-08-29',
       isOutgoing: false,
       status: 'read',
     },
