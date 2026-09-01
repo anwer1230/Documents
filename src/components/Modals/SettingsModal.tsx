@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -58,6 +58,7 @@ import {
   Image,
   Cloud,
   Layers,
+  RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
@@ -83,6 +84,9 @@ import {
   AdsSettingsView,
   BackupRestoreView,
 } from './ExtendedSettingsViews';
+import { MessagesController } from '../../core/MessagesController';
+import { NotificationCenter } from '../../core/NotificationCenter';
+import { TLRPC } from '../../core/TLRPC';
 
 export const SettingsModal: React.FC = () => {
   const {
@@ -1181,8 +1185,109 @@ const PrivacySecurityView: React.FC<{
 }> = ({ onBack, onSelectPrivacyTarget }) => {
   const { settings, showToast, setSettingsSubPage } = useTelegram();
   const isArabic = settings.language === 'ar';
-  const twoStepState = twoStepController.getState();
-  const privacyState = privacyController.getState();
+  
+  const [twoStepLoading, setTwoStepLoading] = useState<boolean>(false);
+  const [sessionsLoading, setSessionsLoading] = useState<boolean>(false);
+  const [hasPassword, setHasPassword] = useState<boolean>(twoStepController.getState().hasPassword);
+  const [activeSessionsCount, setActiveSessionsCount] = useState<number>(privacyController.getState().activeSessionsCount || 1);
+  const [privacyState, setPrivacyState] = useState(privacyController.getState());
+
+  // Fetch real account state via TLRPC.TL_account_getPassword & TLRPC.TL_account_getAuthorizations
+  const loadRealAccountSecurityState = async (showFeedback: boolean = false) => {
+    setTwoStepLoading(true);
+    setSessionsLoading(true);
+
+    try {
+      // 1. TLRPC.TL_account_getPassword
+      const passPromise = MessagesController.getInstance().loadPasswordSettings();
+      // 2. TLRPC.TL_account_getAuthorizations
+      const authPromise = MessagesController.getInstance().loadAuthorizations(true);
+
+      const [passRes, authRes] = await Promise.all([passPromise, authPromise]);
+
+      if (passRes) {
+        setHasPassword(!!passRes.has_password);
+      } else {
+        setHasPassword(twoStepController.getState().hasPassword);
+      }
+
+      if (authRes && Array.isArray(authRes)) {
+        setActiveSessionsCount(authRes.length);
+      } else {
+        setActiveSessionsCount(privacyController.getState().activeSessionsCount || 1);
+      }
+
+      setPrivacyState(privacyController.getState());
+
+      if (showFeedback) {
+        showToast(isArabic ? 'تم تحديث حالة الأمان والخصوصية من الخادم' : 'Security status refreshed from server', '🛡️');
+      }
+    } catch (e) {
+      console.warn('[PrivacySecurityView] Failed to fetch real security status:', e);
+    } finally {
+      setTwoStepLoading(false);
+      setSessionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRealAccountSecurityState();
+
+    // Listen to real-time notification events
+    const delegate = {
+      didReceivedNotification: (id: number | string, _account: number, ...args: any[]) => {
+        if (id === NotificationCenter.twoStepStateUpdated) {
+          const pass = args[0];
+          if (pass) {
+            setHasPassword(!!pass.has_password);
+          }
+        } else if (id === NotificationCenter.authorizationsUpdated) {
+          const list = args[0];
+          if (Array.isArray(list)) {
+            setActiveSessionsCount(list.length);
+          }
+        } else if (id === NotificationCenter.privacyRulesUpdated) {
+          setPrivacyState(privacyController.getState());
+        }
+      },
+    };
+
+    NotificationCenter.getInstance().addObserver(delegate, NotificationCenter.twoStepStateUpdated);
+    NotificationCenter.getInstance().addObserver(delegate, NotificationCenter.authorizationsUpdated);
+    NotificationCenter.getInstance().addObserver(delegate, NotificationCenter.privacyRulesUpdated);
+
+    return () => {
+      NotificationCenter.getInstance().removeObserver(delegate, NotificationCenter.twoStepStateUpdated);
+      NotificationCenter.getInstance().removeObserver(delegate, NotificationCenter.authorizationsUpdated);
+      NotificationCenter.getInstance().removeObserver(delegate, NotificationCenter.privacyRulesUpdated);
+    };
+  }, []);
+
+  const handleOpenTwoStep = async () => {
+    setTwoStepLoading(true);
+    try {
+      await MessagesController.getInstance().loadPasswordSettings();
+      await twoStepController.getPassword();
+    } catch {
+      // fallback
+    } finally {
+      setTwoStepLoading(false);
+      setSettingsSubPage('two_step_verification');
+    }
+  };
+
+  const handleOpenSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      await MessagesController.getInstance().loadAuthorizations(true);
+      await privacyController.loadAuthorizations();
+    } catch {
+      // fallback
+    } finally {
+      setSessionsLoading(false);
+      setSettingsSubPage('sessions');
+    }
+  };
 
   const getOptionLabel = (opt: string) => {
     if (opt === 'everybody') return isArabic ? 'الجميع' : 'Everybody';
@@ -1197,20 +1302,47 @@ const PrivacySecurityView: React.FC<{
     return isArabic ? 'معطلة' : 'Off';
   };
 
+  const getSessionsLabel = () => {
+    if (sessionsLoading) return isArabic ? 'جاري الفحص...' : 'Checking...';
+    if (activeSessionsCount <= 1) return isArabic ? '1 جهاز (هذا الجهاز)' : '1 device';
+    return isArabic ? `${activeSessionsCount} أجهزة` : `${activeSessionsCount} devices`;
+  };
+
+  const getTwoStepLabel = () => {
+    if (twoStepLoading) return isArabic ? 'جاري الفحص...' : 'Checking...';
+    return hasPassword ? (isArabic ? 'مفعّل' : 'On') : (isArabic ? 'معطّل' : 'Off');
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0e1621]">
-      <SubPageHeader title={isArabic ? 'الخصوصية والأمان' : 'Privacy and Security'} onBack={onBack} />
+      <SubPageHeader
+        title={isArabic ? 'الخصوصية والأمان' : 'Privacy and Security'}
+        onBack={onBack}
+        rightElement={
+          <button
+            onClick={() => loadRealAccountSecurityState(true)}
+            disabled={twoStepLoading || sessionsLoading}
+            className="p-1.5 rounded-full hover:bg-white/15 transition-colors text-white"
+            title={isArabic ? 'تحديث حالة الأمان' : 'Refresh Security State'}
+          >
+            <RefreshCw className={`w-4 h-4 ${twoStepLoading || sessionsLoading ? 'animate-spin' : ''}`} />
+          </button>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Security Group */}
         <div className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
-          <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase">{isArabic ? 'الأمان' : 'Security'}</div>
+          <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase flex items-center justify-between">
+            <span>{isArabic ? 'الأمان' : 'Security'}</span>
+            <span className="text-[10px] text-gray-400 font-mono">MTProto Cloud RPC</span>
+          </div>
 
           <SecurityRow
             icon={<ShieldCheck className="w-5 h-5 text-emerald-400" />}
             title={isArabic ? 'التحقق بخطوتين' : 'Two-Step Verification'}
-            value={twoStepState.hasPassword ? (isArabic ? 'مفعّل' : 'On') : (isArabic ? 'معطّل' : 'Off')}
-            onClick={() => setSettingsSubPage('two_step_verification')}
+            value={getTwoStepLabel()}
+            onClick={handleOpenTwoStep}
           />
           <SecurityRow
             icon={<Clock className="w-5 h-5 text-cyan-400" />}
@@ -1238,9 +1370,9 @@ const PrivacySecurityView: React.FC<{
           />
           <SecurityRow
             icon={<MonitorSmartphone className="w-5 h-5 text-sky-400" />}
-            title={isArabic ? 'الجلسات النشطة' : 'Active Sessions'}
-            value={String(privacyState.activeSessionsCount)}
-            onClick={() => setSettingsSubPage('sessions')}
+            title={isArabic ? 'الجلسات النشطة والأجهزة' : 'Active Sessions & Devices'}
+            value={getSessionsLabel()}
+            onClick={handleOpenSessions}
           />
         </div>
 
@@ -1730,21 +1862,28 @@ const FeaturesView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 };
 
 // Sub-Page Header Helper
-const SubPageHeader: React.FC<{ title: string; onBack: () => void }> = ({ title, onBack }) => {
+const SubPageHeader: React.FC<{
+  title: string;
+  onBack: () => void;
+  rightElement?: React.ReactNode;
+}> = ({ title, onBack, rightElement }) => {
   const { settings } = useTelegram();
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3.5 bg-[#2481cc] text-white shrink-0 shadow-md">
-      <button
-        onClick={onBack}
-        className="p-1.5 rounded-full hover:bg-white/15 transition-colors"
-        title={isArabic ? 'رجوع' : 'Back'}
-      >
-        <BackIcon className="w-5 h-5" />
-      </button>
-      <span className="font-bold text-base">{title}</span>
+    <div className="flex items-center justify-between px-4 py-3.5 bg-[#2481cc] text-white shrink-0 shadow-md">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onBack}
+          className="p-1.5 rounded-full hover:bg-white/15 transition-colors"
+          title={isArabic ? 'رجوع' : 'Back'}
+        >
+          <BackIcon className="w-5 h-5" />
+        </button>
+        <span className="font-bold text-base">{title}</span>
+      </div>
+      {rightElement && <div>{rightElement}</div>}
     </div>
   );
 };
