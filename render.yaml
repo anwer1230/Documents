@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: telegram-anwer-web
+    runtime: node
+    plan: free
+    region: frankfurt # or oregon, ohio, singapore
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/telegram/status
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_ID
+        value: "22043994"
+      - key: API_HASH
+        value: "56f64582b363d367280db96586b97801"
+      - key: TDLIB_API_HASH
+        value: "56f64582b363d367280db96586b97801"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

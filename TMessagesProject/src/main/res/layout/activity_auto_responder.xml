@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#17212B">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="🤖 الردود التلقائية والذكاء الاصطناعي"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="تفعيل الرد التلقائي الذكي"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <Switch
+            android:id="@+id/responder_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/trigger_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="الكلمة المفتاحية للرد (مثال: السعر, تفاصيل, السلام)"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#7F8C8D"
+        android:background="#242F3D"
+        android:padding="12dp"
+        android:layout_marginBottom="12dp" />
+
+    <EditText
+        android:id="@+id/response_input"
+        android:layout_width="match_parent"
+        android:layout_height="100dp"
+        android:gravity="top"
+        android:hint="نص الرد التلقائي..."
+        android:textColor="#FFFFFF"
+        android:textColorHint="#7F8C8D"
+        android:background="#242F3D"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/add_rule_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="➕ إضافة قاعدة رد جديدة"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#5288C1" />
+
+</LinearLayout>

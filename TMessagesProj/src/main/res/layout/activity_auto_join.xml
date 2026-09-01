@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#17212B">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="🔍 الانضمام التلقائي ورادار الروابط"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="رادار التقاط الروابط المباشر"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <Switch
+            android:id="@+id/radar_switch"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/links_input"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:gravity="top"
+        android:hint="ألصق روابط المجموعات والقنوات هنا (t.me/...)"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#7F8C8D"
+        android:background="#242F3D"
+        android:padding="12dp"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/start_join_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="بدء الانضمام المتسلسل"
+        android:textColor="#FFFFFF"
+        android:backgroundTint="#5288C1"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:id="@+id/progress_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="الحالة: بانتظار بدء العملية..."
+        android:textColor="#BDC3C7"
+        android:gravity="center" />
+
+</LinearLayout>

@@ -1,0 +1,91 @@
+name: Android CI Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Sign Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Gradle Cache & Environment
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Signing Keystore & Configuration
+        run: |
+          mkdir -p TMessagesProj/config
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > TMessagesProj/config/debug.keystore
+            cp TMessagesProj/config/debug.keystore TMessagesProj/config/release.keystore
+          elif [ ! -f TMessagesProj/config/release.keystore ]; then
+            keytool -genkeypair -v -keystore TMessagesProj/config/release.keystore \
+              -alias Telegram_Anwer -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass 772997043aa -keypass 772997043aa \
+              -dname "CN=Telegram Anwer, OU=Mobile, O=Telegram, L=City, S=State, C=US"
+            cp TMessagesProj/config/release.keystore TMessagesProj/config/debug.keystore
+          else
+            cp TMessagesProj/config/release.keystore TMessagesProj/config/debug.keystore
+          fi
+
+      - name: Verify Google Services Config
+        run: |
+          if [ ! -f TMessagesProj/google-services.json ] && [ -f google-services.json ]; then
+            cp google-services.json TMessagesProj/google-services.json
+          fi
+
+      - name: Build APK (Debug & Release)
+        env:
+          RELEASE_STORE_FILE: config/release.keystore
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD || '772997043aa' }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'Telegram_Anwer' }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || '772997043aa' }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew :TMessagesProj:assembleDebug :TMessagesProj:assembleRelease --stacktrace \
+              -PRELEASE_STORE_FILE="$RELEASE_STORE_FILE" \
+              -PRELEASE_STORE_PASSWORD="$RELEASE_STORE_PASSWORD" \
+              -PRELEASE_KEY_ALIAS="$RELEASE_KEY_ALIAS" \
+              -PRELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+          else
+            gradle :TMessagesProj:assembleDebug :TMessagesProj:assembleRelease --stacktrace \
+              -PRELEASE_STORE_FILE="$RELEASE_STORE_FILE" \
+              -PRELEASE_STORE_PASSWORD="$RELEASE_STORE_PASSWORD" \
+              -PRELEASE_KEY_ALIAS="$RELEASE_KEY_ALIAS" \
+              -PRELEASE_KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+          fi
+
+      - name: Collect & Organize APK Artifacts
+        run: |
+          mkdir -p output_apks
+          find . -name "*.apk" -type f -exec cp -v {} output_apks/ \;
+          echo "=== Generated & Signed APK Files ==="
+          ls -lh output_apks/
+
+      - name: Upload APKs as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-Android-APKs
+          path: output_apks/*.apk
+          retention-days: 14
+          if-no-files-found: error
