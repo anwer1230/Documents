@@ -952,6 +952,46 @@ export namespace TLRPC {
     public readParams(stream: any, exception: boolean): void {}
   }
 
+  export class TL_updateNewMessage extends TLObject {
+    public static constructorId = 521456191;
+    public message!: Message;
+    public pts!: number;
+    public pts_count!: number;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_updateChannel extends TLObject {
+    public static constructorId = -1227598253;
+    public channel_id!: number;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_updateNotifySettings extends TLObject {
+    public static constructorId = -139824993;
+    public peer: any;
+    public notify_settings: any;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_updateChannelAvailableReactions extends TLObject {
+    public static constructorId = 194883446;
+    public channel_id!: number;
+    public available_reactions: any;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_updateChatDefaultBannedRights extends TLObject {
+    public static constructorId = 1421875180;
+    public peer: any;
+    public default_banned_rights: any;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
   // Full Channel / Group Info
   export interface TL_channelFull {
     id: string;

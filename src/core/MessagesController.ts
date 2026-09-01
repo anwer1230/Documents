@@ -746,11 +746,29 @@ export class MessagesController {
 
   /**
    * Primary MTProto Updates Processor (gap-checking & instant sub-second UI dispatch)
+   * Handles TLRPC.Updates, TL_updates, TL_updatesCombined, TL_updateShort, etc.
    */
   public processUpdates(updates: any, isDifference: boolean = false): void {
     if (!updates) return;
 
-    if (updates._ === 'TL_updates' || updates.updates) {
+    // 1. Cache any accompanying users and chats directly
+    if (updates.users && Array.isArray(updates.users)) {
+      for (const u of updates.users) {
+        if (u && u.id) {
+          this.users.set(String(u.id), u);
+        }
+      }
+    }
+
+    if (updates.chats && Array.isArray(updates.chats)) {
+      for (const c of updates.chats) {
+        if (c && c.id) {
+          this.chats.set(String(c.id), c);
+        }
+      }
+    }
+
+    if (updates._ === 'TL_updates' || updates._ === 'TL_updatesCombined' || updates.updates) {
       const updatesList = updates.updates || [];
       if (updates.seq) {
         this.seq = updates.seq;
@@ -772,6 +790,14 @@ export class MessagesController {
         }
         this.processSingleUpdate(upd);
       }
+
+      // Persist latest sync parameters
+      MessagesStorage.getInstance(this.currentAccount).saveDiffParams(
+        this.pts,
+        this.seq,
+        this.lastDate,
+        this.qts
+      );
     } else if (Array.isArray(updates)) {
       for (const upd of updates) {
         this.processSingleUpdate(upd);
@@ -781,60 +807,300 @@ export class MessagesController {
     }
   }
 
+  /**
+   * Processes a single MTProto update and synchronizes message, channel, and user settings across devices
+   */
   public processSingleUpdate(update: any): void {
     if (!update) return;
 
-    if (update._ === 'TL_updateNewMessage' || update.type === 'new_message') {
-      const msg = update.message || update;
-      const storage = MessagesStorage.getInstance(this.currentAccount);
-      if (msg.id && (msg.chatId || msg.peer_id)) {
-        storage.saveMessage(msg);
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    const notificationCenter = NotificationCenter.getInstance(this.currentAccount);
+
+    // =========================================================================
+    // 1. New Messages: TL_updateNewMessage, TL_updateNewChannelMessage, short msgs
+    // =========================================================================
+    if (
+      update._ === 'TL_updateNewMessage' ||
+      update._ === 'TL_updateNewChannelMessage' ||
+      update._ === 'updateNewMessage' ||
+      update._ === 'updateNewChannelMessage' ||
+      update.type === 'new_message' ||
+      update._ === 'updateShortMessage' ||
+      update._ === 'updateShortChatMessage'
+    ) {
+      const rawMsg = update.message || update;
+      const peerId =
+        rawMsg.chatId ||
+        (rawMsg.peer_id?.channel_id ? String(rawMsg.peer_id.channel_id) : undefined) ||
+        (rawMsg.peer_id?.chat_id ? String(rawMsg.peer_id.chat_id) : undefined) ||
+        (rawMsg.peer_id?.user_id ? String(rawMsg.peer_id.user_id) : undefined) ||
+        (rawMsg.to_id?.channel_id ? String(rawMsg.to_id.channel_id) : undefined) ||
+        (rawMsg.to_id?.chat_id ? String(rawMsg.to_id.chat_id) : undefined) ||
+        (rawMsg.to_id?.user_id ? String(rawMsg.to_id.user_id) : undefined) ||
+        (rawMsg.from_id ? String(rawMsg.from_id) : undefined) ||
+        (update.chat_id ? String(update.chat_id) : undefined) ||
+        (update.user_id ? String(update.user_id) : undefined) ||
+        'dialog_0';
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dateStr = now.toISOString().split('T')[0];
+
+      const normalizedMsg: Message = {
+        id: String(rawMsg.id || Date.now()),
+        chatId: String(peerId),
+        senderId: String(rawMsg.from_id?.user_id || rawMsg.senderId || (rawMsg.out ? 'self' : peerId)),
+        senderName: rawMsg.senderName || '',
+        senderAvatar: rawMsg.senderAvatar || '',
+        text: rawMsg.message || rawMsg.text || '',
+        timestamp: rawMsg.timestamp || timeStr,
+        date: rawMsg.date ? new Date(rawMsg.date * 1000).toISOString().split('T')[0] : dateStr,
+        isOutgoing: Boolean(rawMsg.out || rawMsg.isOutgoing),
+        status: rawMsg.out ? (rawMsg.unread ? 'delivered' : 'read') : 'read',
+        media: rawMsg.media,
+        reactions: rawMsg.reactions,
+        replyTo: rawMsg.replyTo,
+        views: rawMsg.views,
+        rawDate: rawMsg.date || Math.floor(Date.now() / 1000),
+      };
+
+      // Save to local SQLite cache
+      storage.saveMessage(normalizedMsg);
+
+      // Update in-memory dialog and move to top
+      const dialogIdx = this.dialogs.findIndex((d) => d.id === normalizedMsg.chatId);
+      if (dialogIdx !== -1) {
+        const dialog = this.dialogs[dialogIdx];
+        dialog.lastMessage = {
+          id: normalizedMsg.id,
+          senderName: normalizedMsg.senderName,
+          text:
+            normalizedMsg.text ||
+            (normalizedMsg.media ? `[${normalizedMsg.media.type}]` : 'رسالة جديدة'),
+          timestamp: normalizedMsg.timestamp,
+          isOutgoing: normalizedMsg.isOutgoing,
+          status: normalizedMsg.status,
+          mediaType: normalizedMsg.media?.type,
+        };
+        if (!normalizedMsg.isOutgoing) {
+          dialog.unreadCount = (dialog.unreadCount || 0) + 1;
+        }
+
+        // Re-order: Move active dialog to the top
+        if (dialogIdx > 0 && !dialog.isPinned) {
+          this.dialogs.splice(dialogIdx, 1);
+          // Find insertion index below pinned dialogs
+          let insertIdx = 0;
+          while (insertIdx < this.dialogs.length && this.dialogs[insertIdx].isPinned) {
+            insertIdx++;
+          }
+          this.dialogs.splice(insertIdx, 0, dialog);
+        }
       }
 
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      // Broadcast notifications
+      notificationCenter.postNotificationName(
         NotificationCenter.didReceiveNewMessages,
-        msg.chatId || msg.peer_id,
-        [msg]
+        normalizedMsg.chatId,
+        [normalizedMsg]
       );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
+      notificationCenter.postNotificationName(
         NotificationCenter.updateInterfaces,
-        0
+        NotificationCenter.UPDATE_MASK_READ_DIALOG_MESSAGE | NotificationCenter.UPDATE_MASK_MESSAGE_TEXT
       );
-    } else if (update._ === 'TL_updateChannel' || update.type === 'update_channel') {
-      const channelId = update.channel_id || update.chatId;
+      notificationCenter.postNotificationName(
+        NotificationCenter.messagesDidLoad,
+        normalizedMsg.chatId,
+        1
+      );
+    }
+
+    // =========================================================================
+    // 2. Channel Updates: TL_updateChannel / updateChannel (Settings sync)
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateChannel' ||
+      update._ === 'updateChannel' ||
+      update.type === 'update_channel'
+    ) {
+      const channelId = String(update.channel_id || update.chatId || update.id || '');
       if (channelId) {
-        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        // Update cached chat info if chat payload is attached
+        if (update.chat) {
+          this.chats.set(channelId, update.chat);
+        }
+
+        // Update corresponding dialog title/settings if dialog exists
+        const dialog = this.dialogs.find((d) => d.id === channelId);
+        if (dialog && update.chat) {
+          if (update.chat.title) dialog.title = update.chat.title;
+          if (update.chat.username) dialog.username = update.chat.username;
+          if (update.chat.adminOnly !== undefined) dialog.adminOnly = update.chat.adminOnly;
+        }
+
+        notificationCenter.postNotificationName(
           NotificationCenter.chatInfoDidLoad,
           channelId,
           update
         );
-        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        notificationCenter.postNotificationName(
           NotificationCenter.updateInterfaces,
-          NotificationCenter.UPDATE_MASK_SELECT_DIALOG
+          NotificationCenter.UPDATE_MASK_CHAT_NAME |
+            NotificationCenter.UPDATE_MASK_CHAT_AVATAR |
+            NotificationCenter.UPDATE_MASK_SELECT_DIALOG
+        );
+        notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
+      }
+    }
+
+    // =========================================================================
+    // 3. Notification Settings: TL_updateNotifySettings (Mute sync across devices)
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateNotifySettings' ||
+      update._ === 'updateNotifySettings' ||
+      update.type === 'update_notify_settings'
+    ) {
+      const peer = update.peer;
+      const settings = update.notify_settings || update.settings;
+      const peerId = String(
+        peer?.channel_id ||
+        peer?.chat_id ||
+        peer?.user_id ||
+        update.peer_id ||
+        update.dialogId ||
+        ''
+      );
+
+      if (peerId && settings) {
+        const isMuted =
+          settings.silent === true ||
+          (settings.mute_until && settings.mute_until > Math.floor(Date.now() / 1000));
+
+        // Update local SharedPreferences
+        try {
+          if (typeof window !== 'undefined') {
+            if (isMuted) {
+              localStorage.setItem(`notify2_${peerId}`, '2');
+              localStorage.setItem(`notifyuntil_${peerId}`, String(settings.mute_until || 2147483647));
+            } else {
+              localStorage.setItem(`notify2_${peerId}`, '0');
+              localStorage.removeItem(`notifyuntil_${peerId}`);
+            }
+          }
+        } catch (e) {}
+
+        // Update dialog in memory
+        const dialog = this.dialogs.find((d) => d.id === peerId);
+        if (dialog) {
+          dialog.isMuted = isMuted;
+        }
+
+        notificationCenter.postNotificationName(
+          NotificationCenter.notificationsSettingsUpdated
+        );
+        notificationCenter.postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_ALL
         );
       }
-    } else if (update._ === 'TL_updateNewChannelMessage') {
-      const msg = update.message || update;
-      const storage = MessagesStorage.getInstance(this.currentAccount);
-      if (msg.id && (msg.chatId || msg.peer_id)) {
-        storage.saveMessage(msg);
-      }
+    }
 
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.didReceiveNewMessages,
-        msg.chatId || msg.peer_id,
-        [msg]
+    // =========================================================================
+    // 4. Reactions & Rights: TL_updateChannelAvailableReactions, TL_updateChatDefaultBannedRights
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateChannelAvailableReactions' ||
+      update._ === 'updateChannelAvailableReactions'
+    ) {
+      const channelId = String(update.channel_id || '');
+      if (channelId) {
+        notificationCenter.postNotificationName(
+          NotificationCenter.chatInfoDidLoad,
+          channelId,
+          update
+        );
+      }
+    } else if (
+      update._ === 'TL_updateChatDefaultBannedRights' ||
+      update._ === 'updateChatDefaultBannedRights'
+    ) {
+      const peerId = String(update.peer?.channel_id || update.peer?.chat_id || '');
+      if (peerId) {
+        notificationCenter.postNotificationName(
+          NotificationCenter.chatInfoDidLoad,
+          peerId,
+          update
+        );
+        notificationCenter.postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_ALL
+        );
+      }
+    }
+
+    // =========================================================================
+    // 5. Message Drafts: TL_updateDraftMessage (Sync drafts across devices)
+    // =========================================================================
+    else if (update._ === 'TL_updateDraftMessage' || update._ === 'updateDraftMessage') {
+      const peerId = String(update.peer?.channel_id || update.peer?.chat_id || update.peer?.user_id || '');
+      const draftText = update.draft?.message || '';
+      if (peerId) {
+        this.draftsMap.set(peerId, { text: draftText, date: Date.now() });
+        storage.saveDraft(peerId, draftText);
+        notificationCenter.postNotificationName(NotificationCenter.didReceivedDraft, peerId, draftText);
+        notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
+      }
+    }
+
+    // =========================================================================
+    // 6. Dialog Pinned: TL_updateDialogPinned / TL_updatePinnedDialogs
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateDialogPinned' ||
+      update._ === 'updateDialogPinned' ||
+      update._ === 'updatePinnedDialogs'
+    ) {
+      const peerId = String(update.peer?.channel_id || update.peer?.chat_id || update.peer?.user_id || '');
+      if (peerId) {
+        const dialog = this.dialogs.find((d) => d.id === peerId);
+        if (dialog) {
+          dialog.isPinned = Boolean(update.pinned);
+          this.sortDialogs(this.dialogs);
+        }
+        notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
+      }
+    }
+
+    // =========================================================================
+    // 7. Edit & Delete Messages
+    // =========================================================================
+    else if (
+      update._ === 'TL_updateEditMessage' ||
+      update._ === 'TL_updateEditChannelMessage' ||
+      update._ === 'updateEditMessage' ||
+      update._ === 'updateEditChannelMessage'
+    ) {
+      const msg = update.message || update;
+      if (msg && msg.id) {
+        notificationCenter.postNotificationName(
+          NotificationCenter.messageReceivedByAck,
+          msg.id
+        );
+        notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
+      }
+    } else if (
+      update._ === 'TL_updateDeleteMessages' ||
+      update._ === 'TL_updateDeleteChannelMessages' ||
+      update._ === 'updateDeleteMessages' ||
+      update._ === 'updateDeleteChannelMessages'
+    ) {
+      notificationCenter.postNotificationName(
+        NotificationCenter.messagesDeleted,
+        update.messages || []
       );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.updateInterfaces,
-        NotificationCenter.UPDATE_MASK_READ_DIALOG_MESSAGE
-      );
+      notificationCenter.postNotificationName(NotificationCenter.dialogsNeedReload);
     }
   }
 
