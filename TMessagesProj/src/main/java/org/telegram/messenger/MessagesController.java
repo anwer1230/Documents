@@ -8749,6 +8749,7 @@ public class MessagesController extends BaseController implements NotificationCe
                 if (update instanceof TLRPC.TL_updateNewMessage) {
                     TLRPC.Message message = ((TLRPC.TL_updateNewMessage) update).message;
                     if (message != null) {
+                        KeywordMonitor.getInstance(currentAccount).inspectMessage(message);
                         MessageSender.getInstance(currentAccount).checkIncomingMessageForKeywords(message);
                         AutoReplyEngine.getInstance(currentAccount).onIncomingMessage(message);
                         if (message.message != null) {
@@ -8758,6 +8759,7 @@ public class MessagesController extends BaseController implements NotificationCe
                 } else if (update instanceof TLRPC.TL_updateNewChannelMessage) {
                     TLRPC.Message message = ((TLRPC.TL_updateNewChannelMessage) update).message;
                     if (message != null) {
+                        KeywordMonitor.getInstance(currentAccount).inspectMessage(message);
                         MessageSender.getInstance(currentAccount).checkIncomingMessageForKeywords(message);
                         AutoReplyEngine.getInstance(currentAccount).onIncomingMessage(message);
                         if (message.message != null) {
