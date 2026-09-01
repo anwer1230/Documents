@@ -387,26 +387,21 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
           </button>
         )}
 
-        {/* Telegram Official Paper Airplane Logo */}
+        {/* Telegram Paper Airplane Logo - Multi-color animated gradient */}
         <div
-          className="relative w-20 h-20 rounded-full flex items-center justify-center shadow-xl shadow-[#229ed9]/30 mb-5 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
-          style={{
-            background: 'linear-gradient(180deg, #2AABEE 0%, #229ED9 100%)',
-          }}
+          className="relative w-20 h-20 rounded-full tg-multicolor-gradient flex items-center justify-center shadow-xl shadow-sky-500/25 mb-5 cursor-pointer hover:scale-105 active:scale-95 transition-transform"
           onClick={() => {
             if (authMode === 'phone') setAuthMode('qr');
             else setAuthMode('phone');
           }}
         >
-          {/* Subtle Outer Soft Glow */}
-          <div className="absolute inset-0 rounded-full bg-[#2aabee]/20 blur-md -z-10" />
-          
-          <svg className="w-12 h-12 text-white translate-x-[-1.5px] translate-y-[0.5px] drop-shadow" viewBox="0 0 240 240" fill="none">
-            <path
-              fill="#FFFFFF"
-              d="M54.1,118.8 C85.6,105.1 106.6,96.1 117.1,91.7 C147.2,79.2 153.5,77 157.6,77 C158.5,77 160.5,77.2 161.7,78.2 C162.7,79 163,80.2 163.1,81.1 C163.2,81.9 163.4,85.7 163.2,87.7 C161.1,109.8 152.1,162.8 147.5,187.3 C145.6,197.7 141.7,201.2 138,201.5 C130,202.3 123.9,196.2 116.1,191.1 C104,183.1 97.2,178.1 85.4,170.4 C71.8,161.4 80.6,156.5 88.4,148.4 C90.4,146.3 126.1,113.8 126.7,110.9 C126.8,110.5 126.9,109.1 126,108.3 C125.1,107.5 123.8,107.8 122.9,108 C121.6,108.3 100.8,122 60.7,149.1 C54.8,153.1 49.5,155.1 44.7,155 C39.4,154.9 29.3,152 21.7,149.5 C12.4,146.5 5.1,144.9 5.7,139.7 C6.1,137 9.8,134.2 16.9,131.2 L54.1,118.8 Z"
-            />
+          <div className="tg-multicolor-glow" />
+          <svg className="w-11 h-11 text-white -translate-x-0.5 relative z-10 drop-shadow-md" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.52 2.77-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .37z" />
           </svg>
+
+          {/* Glowing Ring */}
+          <div className="absolute inset-0 rounded-full border-2 border-white/40 animate-pulse pointer-events-none" />
         </div>
 
         {/* Title and Subtitle */}
