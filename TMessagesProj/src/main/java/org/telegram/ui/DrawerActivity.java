@@ -22,6 +22,13 @@ public class DrawerActivity {
     public static final int ITEM_SETTINGS = 6;
     public static final int ITEM_NIGHT_MODE = 7;
 
+    // Automation & Pro Tools Section (الأتمتة والأدوات الاحترافية)
+    public static final int ITEM_SECTION_AUTOMATION_HEADER = 100;
+    public static final int ITEM_SENDER_MONITOR = 101;     // الإرسال والمراقبة
+    public static final int ITEM_MY_MESSAGES = 102;        // رسائلي - الدفعات
+    public static final int ITEM_AUTO_JOINER = 103;        // الانضمام التلقائي
+    public static final int ITEM_AUTO_RESPONDER = 104;     // الردود التلقائية
+
     public static void onDrawerItemClick(int id, BaseFragment parentFragment) {
         if (parentFragment == null) return;
         int account = UserConfig.selectedAccount;
@@ -39,6 +46,18 @@ public class DrawerActivity {
                 Bundle chatArgs = new Bundle();
                 chatArgs.putLong("user_id", UserConfig.getInstance(account).getClientUserId());
                 parentFragment.presentFragment(new ChatActivity(chatArgs));
+                break;
+            case ITEM_SENDER_MONITOR:
+                parentFragment.presentFragment(new SenderActivity());
+                break;
+            case ITEM_MY_MESSAGES:
+                parentFragment.presentFragment(new MyMessagesActivity());
+                break;
+            case ITEM_AUTO_JOINER:
+                parentFragment.presentFragment(new AutoJoinActivity());
+                break;
+            case ITEM_AUTO_RESPONDER:
+                parentFragment.presentFragment(new AutoResponderActivity());
                 break;
             default:
                 break;
