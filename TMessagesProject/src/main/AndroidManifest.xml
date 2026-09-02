@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.telegram.messenger">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Telegram"
+        android:theme="@style/Theme.Telegram"
+        android:name="org.telegram.messenger.ApplicationLoader">
+
+        <service
+            android:name="org.telegram.messenger.GcmPushListenerService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Telegram Native Automation Activities -->
+        <activity android:name="org.telegram.ui.SenderActivity" android:screenOrientation="portrait" />
+        <activity android:name="org.telegram.ui.MonitorActivity" android:screenOrientation="portrait" />
+        <activity android:name="org.telegram.ui.AutoJoinActivity" android:screenOrientation="portrait" />
+        <activity android:name="org.telegram.ui.SearchJoinActivity" android:screenOrientation="portrait" />
+        <activity android:name="org.telegram.ui.MyMessagesActivity" android:screenOrientation="portrait" />
+        <activity android:name="org.telegram.ui.AutoResponderActivity" android:screenOrientation="portrait" />
+
+    </application>
+</manifest>

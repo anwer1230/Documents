@@ -1,0 +1,74 @@
+apply plugin: 'com.android.application'
+apply plugin: 'com.google.gms.google-services'
+
+android {
+    compileSdkVersion 35
+    buildToolsVersion "35.0.0"
+    ndkVersion "27.2.12479018"
+    namespace "org.telegram.messenger"
+
+    defaultConfig {
+        applicationId "org.telegram.messenger.anwer"
+        minSdkVersion 23
+        targetSdkVersion 35
+        versionCode 4980
+        versionName "12.9.2"
+        multiDexEnabled true
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        manifestPlaceholders = [
+            appName: "Telegram_Anwer",
+            appId: "22043994"
+        ]
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("config/release.keystore")
+            storePassword project.hasProperty('RELEASE_STORE_PASSWORD') ? project.property('RELEASE_STORE_PASSWORD') : "772997043a**"
+            keyAlias project.hasProperty('RELEASE_KEY_ALIAS') ? project.property('RELEASE_KEY_ALIAS') : "Telegram_Anwer"
+            keyPassword project.hasProperty('RELEASE_KEY_PASSWORD') ? project.property('RELEASE_KEY_PASSWORD') : "772997043a**"
+            v1SigningEnabled true
+            v2SigningEnabled true
+        }
+        debug {
+            storeFile file("config/release.keystore")
+            storePassword "772997043a**"
+            keyAlias "Telegram_Anwer"
+            keyPassword "772997043a**"
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            signingConfig signingConfigs.debug
+            applicationIdSuffix ".debug"
+            debuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-messaging'
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.palette:palette:1.0.0'
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
+    implementation 'com.google.android.gms:play-services-maps:19.0.0'
+    implementation 'com.google.android.gms:play-services-auth:21.2.0'
+}
