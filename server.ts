@@ -2002,6 +2002,36 @@ async function startServer() {
     });
   });
 
+  // Global Plus Settings Store for Multi-Session Cloud Sync
+  let globalPlusSettingsStore: Record<string, any> = {};
+  let globalPlusSettingsUpdatedAt: number = Date.now();
+
+  app.get('/api/telegram/plus-settings', (req, res) => {
+    const { accountId } = req.query;
+    return res.json({
+      success: true,
+      config: globalPlusSettingsStore[String(accountId || 'global')] || globalPlusSettingsStore['global'] || {},
+      updatedAt: globalPlusSettingsUpdatedAt,
+    });
+  });
+
+  app.post('/api/telegram/plus-settings/sync', (req, res) => {
+    const { accountId = 'global', config, updatedAt = Date.now() } = req.body;
+    if (config && typeof config === 'object') {
+      const current = globalPlusSettingsStore[accountId] || {};
+      globalPlusSettingsStore[accountId] = { ...current, ...config };
+      globalPlusSettingsStore['global'] = { ...(globalPlusSettingsStore['global'] || {}), ...config };
+      globalPlusSettingsUpdatedAt = updatedAt;
+    }
+    return res.json({
+      success: true,
+      accountId,
+      config: globalPlusSettingsStore[accountId] || {},
+      updatedAt: globalPlusSettingsUpdatedAt,
+      syncedAcrossSessions: true,
+    });
+  });
+
   // 6. Telegram TL Schema Inspector (schema documentation endpoint)
   app.get('/api/telegram/schema', (req, res) => {
     res.json({
