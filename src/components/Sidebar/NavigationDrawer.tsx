@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
+import { PWAInstallButton } from '../Common/PWAInstallButton';
 
 export const NavigationDrawer: React.FC = () => {
   const {
@@ -665,6 +666,11 @@ export const NavigationDrawer: React.FC = () => {
                     </motion.button>
                   );
                 })()}
+
+                {/* In-App PWA Quick Install Banner */}
+                <div className="px-4 py-1.5">
+                  <PWAInstallButton isArabic={isArabic} className="w-full justify-center" />
+                </div>
 
                 {/* Settings */}
                 {(() => {

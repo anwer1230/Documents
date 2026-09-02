@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { TelegramClient, Api, sessions } from 'telegram';
 import { NewMessage } from 'telegram/events';
+import webpush from 'web-push';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
 
 // Dynamic Environment & Credentials Resolution (from .env or hardcoded fallbacks)
@@ -14,6 +15,34 @@ const TDLIB_API_HASH = process.env.TDLIB_API_HASH || TELEGRAM_API_HASH;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tg_session_anwer_foud_secure_key_2026';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+
+// ==========================================
+// VAPID & WEB PUSH NOTIFICATION SUBSYSTEM
+// ==========================================
+let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@telegram-anwer.app';
+
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  // Generate consistent deterministic fallback keys or fresh pair if not in environment
+  try {
+    const generatedVapidKeys = webpush.generateVAPIDKeys();
+    VAPID_PUBLIC_KEY = generatedVapidKeys.publicKey;
+    VAPID_PRIVATE_KEY = generatedVapidKeys.privateKey;
+    console.log('[WebPush] Auto-generated dynamic VAPID keys for this instance.');
+  } catch (err) {
+    console.warn('[WebPush] Failed to generate VAPID keys:', err);
+  }
+}
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    console.log('[WebPush] VAPID configuration initialized successfully.');
+  } catch (err) {
+    console.warn('[WebPush] setVapidDetails error:', err);
+  }
+}
 
 const DC_CLUSTERS = [
   { id: 1, name: 'DC1 - Miami (Production)', ip: '149.154.175.50', port: 443 },
@@ -3483,6 +3512,233 @@ async function startServer() {
       };
 
       res.json(fcmSimulation);
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // ==========================================
+  // WEB PUSH & BACKGROUND SUBSCRIPTION ENGINE
+  // ==========================================
+
+  interface WebPushSubscriptionRecord {
+    id: string;
+    subscription: webpush.PushSubscription;
+    phone?: string;
+    sessionString?: string;
+    accountId?: string;
+    createdAt: number;
+    lastActive: number;
+    userAgent?: string;
+  }
+
+  const webPushSubscriptions = new Map<string, WebPushSubscriptionRecord>();
+
+  // Helper to send Web Push Notification to registered clients (even when closed)
+  const sendWebPushNotificationToSubscribers = async (
+    payload: {
+      title: string;
+      body: string;
+      icon?: string;
+      badge?: string;
+      tag?: string;
+      data?: any;
+    },
+    filter?: { phone?: string; sessionString?: string; accountId?: string }
+  ) => {
+    const payloadString = JSON.stringify(payload);
+    const results: Array<{ endpoint: string; success: boolean; error?: string }> = [];
+
+    for (const [id, record] of webPushSubscriptions.entries()) {
+      if (filter) {
+        if (filter.phone && record.phone && formatE164Phone(filter.phone) !== formatE164Phone(record.phone)) {
+          continue;
+        }
+        if (filter.sessionString && record.sessionString && filter.sessionString !== record.sessionString) {
+          continue;
+        }
+        if (filter.accountId && record.accountId && filter.accountId !== record.accountId) {
+          continue;
+        }
+      }
+
+      try {
+        await webpush.sendNotification(record.subscription, payloadString, {
+          TTL: 86400,
+        });
+        record.lastActive = Date.now();
+        results.push({ endpoint: record.subscription.endpoint, success: true });
+      } catch (err: any) {
+        console.warn(`[WebPush] Failed sending push to ${id.substring(0, 20)}...:`, err?.statusCode || err?.message || err);
+        // If subscription is 404 or 410 (Gone), delete it
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          webPushSubscriptions.delete(id);
+        }
+        results.push({ endpoint: record.subscription.endpoint, success: false, error: err?.message || String(err) });
+      }
+    }
+
+    return results;
+  };
+
+  // Helper to revoke session and notify subscribers
+  const handleSessionRevocation = async (sessionKey: string, reason: string = 'SESSION_REVOKED') => {
+    console.warn(`[MTProto] Session Revocation detected for [${sessionKey.substring(0, 15)}...]. Reason: ${reason}`);
+
+    // 1. Remove from active authenticated Telegram clients
+    if (authenticatedTelegramClients.has(sessionKey)) {
+      try {
+        await authenticatedTelegramClients.get(sessionKey)?.disconnect();
+      } catch (_) {}
+      authenticatedTelegramClients.delete(sessionKey);
+    }
+    const formattedPhone = formatE164Phone(sessionKey);
+    if (formattedPhone && realTelegramSessions.has(formattedPhone)) {
+      try {
+        await realTelegramSessions.get(formattedPhone)?.client?.disconnect();
+      } catch (_) {}
+      realTelegramSessions.delete(formattedPhone);
+    }
+    if (activeSessions.has(sessionKey)) {
+      activeSessions.delete(sessionKey);
+    }
+
+    // 2. Broadcast real-time SSE event to all open tabs
+    const revokeEvent = {
+      type: 'SESSION_REVOKED',
+      reason,
+      sessionKey: sessionKey.substring(0, 15),
+      timestamp: Date.now(),
+      message: 'تم إلغاء الجلسة من جهاز آخر أو انتهت صلاحية مفتاح المصادقة.',
+    };
+
+    activeSseClients.forEach((res) => {
+      try {
+        res.write(`data: ${JSON.stringify(revokeEvent)}\n\n`);
+      } catch (_) {
+        activeSseClients.delete(res);
+      }
+    });
+
+    // 3. Send Web Push Notification to background device (outside browser)
+    await sendWebPushNotificationToSubscribers(
+      {
+        title: '⚠️ تيليجرام: تم إلغاء الجلسة',
+        body: 'تم إنهاء جلستك من جهاز آخر أو تم تسجيل الخروج. يرجى تسجيل الدخول مجدداً.',
+        icon: 'https://telegram.org/img/t_logo.png',
+        badge: '/telegram-logo.svg',
+        tag: 'tg_session_revoked',
+        data: {
+          type: 'SESSION_REVOKED',
+          reason,
+          url: '/#/login',
+          timestamp: Date.now(),
+        },
+      },
+      { sessionString: sessionKey, phone: sessionKey }
+    );
+  };
+
+  // 1. Get Public VAPID Key Endpoint
+  app.get('/api/web-push/vapid-public-key', (req, res) => {
+    res.json({
+      success: true,
+      publicKey: VAPID_PUBLIC_KEY,
+      subject: VAPID_SUBJECT,
+    });
+  });
+
+  // 2. Subscribe to Web Push Endpoint
+  app.post('/api/web-push/subscribe', (req, res) => {
+    try {
+      const { subscription, phone, sessionString, accountId, userAgent } = req.body;
+      if (!subscription || !subscription.endpoint || !subscription.keys) {
+        return res.status(400).json({ success: false, error: 'INVALID_SUBSCRIPTION_PAYLOAD' });
+      }
+
+      const id = crypto.createHash('sha256').update(subscription.endpoint).digest('hex');
+      const record: WebPushSubscriptionRecord = {
+        id,
+        subscription,
+        phone: phone ? formatE164Phone(phone) : undefined,
+        sessionString,
+        accountId,
+        createdAt: Date.now(),
+        lastActive: Date.now(),
+        userAgent: userAgent || req.headers['user-agent'],
+      };
+
+      webPushSubscriptions.set(id, record);
+      console.log(`[WebPush] Subscription saved successfully (ID: ${id.substring(0, 10)}..., Total: ${webPushSubscriptions.size})`);
+
+      res.json({
+        success: true,
+        subscriptionId: id,
+        totalSubscriptions: webPushSubscriptions.size,
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 3. Unsubscribe from Web Push Endpoint
+  app.post('/api/web-push/unsubscribe', (req, res) => {
+    try {
+      const { endpoint } = req.body;
+      if (endpoint) {
+        const id = crypto.createHash('sha256').update(endpoint).digest('hex');
+        webPushSubscriptions.delete(id);
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 4. Trigger Web Push Test Notification
+  app.post('/api/web-push/test', async (req, res) => {
+    try {
+      const { title = 'تيليجرام: إشعار دفع تجريبي', body = 'تم استقبال إشعار Web Push بنجاح في الخلفية!', data } = req.body;
+      const results = await sendWebPushNotificationToSubscribers({
+        title,
+        body,
+        icon: 'https://telegram.org/img/t_logo.png',
+        badge: '/telegram-logo.svg',
+        tag: `tg_test_push_${Date.now()}`,
+        data: data || { url: '/', timestamp: Date.now() },
+      });
+
+      res.json({
+        success: true,
+        subscribersCount: webPushSubscriptions.size,
+        results,
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // 5. Broadcast Settings Sync via SSE & WebPush
+  app.post('/api/web-push/sync-settings', async (req, res) => {
+    try {
+      const { accountId = 'global', settings, source = 'web' } = req.body;
+
+      // Broadcast settings update to all active SSE browser clients
+      const sseUpdate = {
+        type: 'SETTINGS_SYNCED',
+        accountId,
+        settings,
+        source,
+        timestamp: Date.now(),
+      };
+
+      activeSseClients.forEach((clientRes) => {
+        try {
+          clientRes.write(`data: ${JSON.stringify(sseUpdate)}\n\n`);
+        } catch (_) {}
+      });
+
+      res.json({ success: true, broadcasted: true, timestamp: Date.now() });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message });
     }

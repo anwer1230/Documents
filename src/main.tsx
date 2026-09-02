@@ -1,6 +1,7 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Buffer} from 'buffer';
+import {registerSW} from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
@@ -19,16 +20,23 @@ window.addEventListener('error', (event) => {
   }
 });
 
-// Register Telegram Service Worker with automatic update checks and FCM background handling
+// PWA Service Worker Registration with automatic update checks
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((registration) => {
-      // Check for updates periodically
-      registration.update().catch(() => {});
-      console.log('[Telegram SW] Service Worker active and registered:', registration.scope);
-    }).catch((err) => {
-      console.log('Service Worker registration note:', err);
-    });
+  registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      console.log('[PWA] New content available, reloading...');
+      window.location.reload();
+    },
+    onOfflineReady() {
+      console.log('[PWA] App is ready to work offline.');
+    },
+    onRegistered(r) {
+      console.log('[PWA] Service Worker registered successfully:', r?.scope);
+    },
+    onRegisterError(error) {
+      console.warn('[PWA] Service Worker registration failed:', error);
+    },
   });
 }
 
