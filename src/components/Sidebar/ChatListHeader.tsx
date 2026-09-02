@@ -15,6 +15,10 @@ import {
   LayoutList,
   ShieldAlert,
   CameraOff,
+  Send,
+  Layers,
+  MessageSquare,
+  UserPlus,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
@@ -285,20 +289,51 @@ export const ChatListHeader: React.FC = () => {
                     </div>
 
                     <div className="py-1">
+                      <div className="px-3.5 py-1 text-[10px] font-bold text-sky-400 font-mono uppercase tracking-wider">
+                        {isArabic ? '⚡ أدوات الأتمتة' : '⚡ Automation Suite'}
+                      </div>
                       <button
                         onClick={() => setActiveModal('sender')}
-                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
+                        className="w-full px-3.5 py-2 hover:bg-white/5 flex items-center justify-between text-left rtl:text-right text-gray-200 hover:text-white"
                       >
-                        <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
-                        <span>{isArabic ? 'الإرسال والمراقبة الذكية' : 'Smart Sender & Monitor'}</span>
+                        <div className="flex items-center gap-2.5">
+                          <Send className="w-4 h-4 text-sky-400 shrink-0" />
+                          <span>{isArabic ? 'الإرسال والمراقبة' : 'Sender & Monitor'}</span>
+                        </div>
+                        <span className="text-[9px] font-bold bg-sky-500/20 text-sky-300 px-1 rounded font-mono">TLRPC</span>
                       </button>
 
                       <button
-                        onClick={() => setActiveModal('link-monitor')}
-                        className="w-full px-3.5 py-2.5 hover:bg-white/5 flex items-center gap-2.5 text-left rtl:text-right text-gray-200 hover:text-white"
+                        onClick={() => setActiveModal('my-messages')}
+                        className="w-full px-3.5 py-2 hover:bg-white/5 flex items-center justify-between text-left rtl:text-right text-gray-200 hover:text-white"
                       >
-                        <Radio className="w-4 h-4 text-cyan-400 shrink-0" />
-                        <span>{isArabic ? 'رادار الروابط والانضمام' : 'Links Radar & Joiner'}</span>
+                        <div className="flex items-center gap-2.5">
+                          <Layers className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>{isArabic ? 'رسائلي (سجل الدفعات)' : 'My Messages'}</span>
+                        </div>
+                        <span className="text-[9px] font-bold bg-amber-500/20 text-amber-300 px-1 rounded font-mono">BATCH</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveModal('auto-responder')}
+                        className="w-full px-3.5 py-2 hover:bg-white/5 flex items-center justify-between text-left rtl:text-right text-gray-200 hover:text-white"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <MessageSquare className="w-4 h-4 text-purple-400 shrink-0" />
+                          <span>{isArabic ? 'الردود التلقائية' : 'Auto Responder'}</span>
+                        </div>
+                        <span className="text-[9px] font-bold bg-purple-500/20 text-purple-300 px-1 rounded font-mono">AUTO</span>
+                      </button>
+
+                      <button
+                        onClick={() => setActiveModal('auto-joiner')}
+                        className="w-full px-3.5 py-2 hover:bg-white/5 flex items-center justify-between text-left rtl:text-right text-gray-200 hover:text-white"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <UserPlus className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>{isArabic ? 'الانضمام المتقدم' : 'Auto-Joiner'}</span>
+                        </div>
+                        <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-1 rounded font-mono">REGEX</span>
                       </button>
                     </div>
                   </div>

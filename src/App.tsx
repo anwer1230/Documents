@@ -72,16 +72,20 @@ const TelegramAppContent: React.FC = () => {
           }
         } else if (id === NotificationCenter.appUpdateNotModified) {
           showToast(isArabic ? 'أنت تستخدم أحدث إصدار من تيليجرام بنجاح' : "You're already using the latest version of Telegram", '✅');
+        } else if (id === NotificationCenter.appDidLogout) {
+          setActiveModal(null);
         }
       },
     };
 
     NotificationCenter.getGlobalInstance().addObserver(observer, NotificationCenter.appUpdateAvailable);
     NotificationCenter.getGlobalInstance().addObserver(observer, NotificationCenter.appUpdateNotModified);
+    NotificationCenter.getGlobalInstance().addObserver(observer, NotificationCenter.appDidLogout);
 
     return () => {
       NotificationCenter.getGlobalInstance().removeObserver(observer, NotificationCenter.appUpdateAvailable);
       NotificationCenter.getGlobalInstance().removeObserver(observer, NotificationCenter.appUpdateNotModified);
+      NotificationCenter.getGlobalInstance().removeObserver(observer, NotificationCenter.appDidLogout);
     };
   }, [isArabic, showToast]);
 

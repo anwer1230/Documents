@@ -99,6 +99,40 @@ export class MessagesController {
   }
 
   /**
+   * DrKLO MessagesController: Remote Forced Logout & Session Revocation
+   * Replicated from DrKLO/Telegram Android MessagesController.java
+   */
+  public performForcedLogout(reason: string = 'AUTH_KEY_UNREGISTERED'): void {
+    console.warn(
+      `[MessagesController] performForcedLogout triggered (reason: ${reason}) on account ${this.currentAccount}`
+    );
+
+    // 1. Terminate network connections
+    ConnectionsManager.getInstance(this.currentAccount).cleanup(false);
+
+    // 2. Wipe memory caches
+    this.cleanup();
+
+    // 3. Clear database tables & cached files
+    MessagesStorage.getInstance(this.currentAccount).cleanUp(true);
+
+    // 4. Wipe UserConfig and clear active credentials/tokens
+    UserConfig.getInstance(this.currentAccount).clearConfig(true);
+
+    // 5. Broadcast to NotificationCenter for UI stack reset (LaunchActivity -> LoginActivity)
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.appDidLogout,
+      this.currentAccount,
+      reason
+    );
+    NotificationCenter.getGlobalInstance().postNotificationName(
+      NotificationCenter.appDidLogout,
+      this.currentAccount,
+      reason
+    );
+  }
+
+  /**
    * Loads dialogs either from persistent storage or cloud MTProto service
    */
   public loadDialogs(offset: number = 0, count: number = 100, fromCache: boolean = true): void {
@@ -811,6 +845,18 @@ export class MessagesController {
           NotificationCenter.UPDATE_MASK_SELECT_DIALOG
         );
       }
+    } else if (
+      update._ === 'TL_updateNewAuthorization' ||
+      update._ === 'updateNewAuthorization' ||
+      update.type === 'updateNewAuthorization'
+    ) {
+      if (update.unregistered || update.is_current_revoked || update.hash === 'revoked' || update.hash === 'all') {
+        this.performForcedLogout('REMOTE_SESSION_REVOKED');
+        return;
+      }
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.authorizationsUpdated
+      );
     } else if (update._ === 'TL_updateNewChannelMessage') {
       const msg = update.message || update;
       const storage = MessagesStorage.getInstance(this.currentAccount);

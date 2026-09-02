@@ -3,9 +3,21 @@ import { ArrowDown, Pin, X, Loader2, Shield, Lock, ChevronUp } from 'lucide-reac
 import { useTelegram } from '../../context/TelegramContext';
 import { MessageBubble } from './MessageBubble';
 import { messagesController } from '../../core/MessagesController';
-import { chatScrollManager } from '../../core/ChatScrollManager';
 
-const PAGE_CHUNK_SIZE = 30;
+const PAGE_CHUNK_SIZE = 40;
+
+interface ChatScrollState {
+  scrollTop: number;
+  scrollHeight: number;
+  isNearBottom: boolean;
+  anchorMessageId?: string;
+  anchorOffsetTop?: number;
+  visibleCount: number;
+  unreadDividerMaxId?: string;
+}
+
+// Persistent scroll state across all chats (replicates DrKLO/Telegram Android RecyclerListView scroll manager)
+const chatScrollRegistry = new Map<string, ChatScrollState>();
 
 export const MessageList: React.FC = () => {
   const {
@@ -17,19 +29,20 @@ export const MessageList: React.FC = () => {
     loadMoreChatMessages,
     isChatLoadingOlder,
     chatHasMoreOlder,
+    markChatAsRead,
   } = useTelegram();
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
 
-  // Pagination Windowing state for incremental rendering
   const [visibleCount, setVisibleCount] = useState<number>(PAGE_CHUNK_SIZE);
   const [showScrollBottom, setShowScrollBottom] = useState<boolean>(false);
   const [unreadStreamCount, setUnreadStreamCount] = useState<number>(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [readInboxMaxId, setReadInboxMaxId] = useState<string | undefined>(undefined);
 
-  // Scroll anchor preservation state
+  // Scroll anchor preservation state for upward pagination
   const scrollAnchorRef = useRef<{
     previousScrollHeight: number;
     previousScrollTop: number;
@@ -42,6 +55,8 @@ export const MessageList: React.FC = () => {
 
   const prevMessagesLengthRef = useRef<number>(0);
   const isUserNearBottomRef = useRef<boolean>(true);
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  const isInitialScrollDoneRef = useRef<boolean>(false);
 
   const currentMessages = (activeChatId && messages[activeChatId]) || [];
   const pinnedMessages = currentMessages.filter((m) => m.isPinned);
@@ -49,49 +64,126 @@ export const MessageList: React.FC = () => {
   const isLoadingOlder = activeChatId ? Boolean(isChatLoadingOlder[activeChatId]) : false;
   const hasMoreOnServer = activeChatId ? (chatHasMoreOlder[activeChatId] ?? true) : true;
 
-  // Initialize / restore pagination slice and scroll metrics when switching chats
-  useEffect(() => {
-    if (!activeChatId) return;
+  // Save current scroll position helper
+  const saveCurrentScrollState = useCallback((chatId: string | null) => {
+    if (!chatId || !scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isNearBottom = distanceToBottom < 80;
 
-    const savedState = chatScrollManager.getScrollPosition(activeChatId);
-    if (savedState) {
-      setVisibleCount(Math.max(PAGE_CHUNK_SIZE, savedState.visibleCount));
-      setShowScrollBottom(!savedState.isNearBottom);
-      isUserNearBottomRef.current = savedState.isNearBottom;
-    } else {
-      setVisibleCount(PAGE_CHUNK_SIZE);
-      setShowScrollBottom(false);
-      isUserNearBottomRef.current = true;
+    let anchorId: string | undefined = undefined;
+    let anchorOffset = 0;
+
+    const messageEls = container.querySelectorAll('[data-msg-id]');
+    const containerRect = container.getBoundingClientRect();
+
+    for (let i = 0; i < messageEls.length; i++) {
+      const el = messageEls[i] as HTMLElement;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom > containerRect.top + 10) {
+        anchorId = el.getAttribute('data-msg-id') || undefined;
+        anchorOffset = rect.top - containerRect.top;
+        break;
+      }
     }
 
+    chatScrollRegistry.set(chatId, {
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      isNearBottom,
+      anchorMessageId: anchorId,
+      anchorOffsetTop: anchorOffset,
+      visibleCount,
+      unreadDividerMaxId: readInboxMaxId,
+    });
+  }, [visibleCount, readInboxMaxId]);
+
+  // Handle Chat Switching & Initialization (Exact logic from Telegram Android ChatActivity)
+  useEffect(() => {
+    const prevChatId = activeChatIdRef.current;
+    if (prevChatId && prevChatId !== activeChatId) {
+      saveCurrentScrollState(prevChatId);
+    }
+    activeChatIdRef.current = activeChatId;
+
+    if (!activeChatId) return;
+
+    isInitialScrollDoneRef.current = false;
+    setShowScrollBottom(false);
     setUnreadStreamCount(0);
     prevMessagesLengthRef.current = currentMessages.length;
 
-    // Restore scroll position accurately
-    const frameId = requestAnimationFrame(() => {
-      if (scrollContainerRef.current) {
-        chatScrollManager.restoreScroll(activeChatId, scrollContainerRef.current, true);
-      }
-    });
+    const savedState = chatScrollRegistry.get(activeChatId);
+    const unreadCount = activeChat?.unreadCount || 0;
 
-    const timeout = setTimeout(() => {
-      if (scrollContainerRef.current) {
-        chatScrollManager.restoreScroll(activeChatId, scrollContainerRef.current, true);
+    let unreadDividerId: string | undefined = undefined;
+    let targetMsgIdToScroll: string | undefined = undefined;
+
+    if (unreadCount > 0 && currentMessages.length > 0) {
+      const firstUnreadIndex = Math.max(0, currentMessages.length - unreadCount);
+      if (firstUnreadIndex > 0 && currentMessages[firstUnreadIndex - 1]) {
+        unreadDividerId = currentMessages[firstUnreadIndex - 1].id;
       }
-    }, 60);
+      targetMsgIdToScroll = currentMessages[firstUnreadIndex]?.id;
+      setReadInboxMaxId(unreadDividerId);
+      // Ensure visible window covers all unread messages plus context
+      setVisibleCount(Math.max(PAGE_CHUNK_SIZE, unreadCount + 20, currentMessages.length - firstUnreadIndex + 10));
+    } else if (savedState) {
+      setReadInboxMaxId(savedState.unreadDividerMaxId);
+      setVisibleCount(Math.max(PAGE_CHUNK_SIZE, savedState.visibleCount));
+    } else {
+      setReadInboxMaxId(undefined);
+      setVisibleCount(Math.max(PAGE_CHUNK_SIZE, Math.min(currentMessages.length, 60)));
+    }
+
+    // Perform exact and resilient scroll positioning
+    const performInitialScroll = () => {
+      if (!scrollContainerRef.current) return;
+      const container = scrollContainerRef.current;
+
+      if (unreadCount > 0 && targetMsgIdToScroll) {
+        const targetEl = container.querySelector(`[data-msg-id="${targetMsgIdToScroll}"]`) as HTMLElement;
+        if (targetEl) {
+          targetEl.scrollIntoView({ block: 'center', behavior: 'auto' });
+          isUserNearBottomRef.current = false;
+          setShowScrollBottom(true);
+        } else {
+          container.scrollTop = container.scrollHeight;
+          isUserNearBottomRef.current = true;
+        }
+      } else if (savedState && !savedState.isNearBottom && savedState.anchorMessageId) {
+        const anchorEl = container.querySelector(`[data-msg-id="${savedState.anchorMessageId}"]`) as HTMLElement;
+        if (anchorEl) {
+          const containerRect = container.getBoundingClientRect();
+          const anchorRect = anchorEl.getBoundingClientRect();
+          container.scrollTop += (anchorRect.top - containerRect.top) - (savedState.anchorOffsetTop || 0);
+          isUserNearBottomRef.current = false;
+          setShowScrollBottom(true);
+        } else {
+          container.scrollTop = savedState.scrollTop;
+          isUserNearBottomRef.current = false;
+          setShowScrollBottom(true);
+        }
+      } else {
+        container.scrollTop = container.scrollHeight;
+        isUserNearBottomRef.current = true;
+        setShowScrollBottom(false);
+      }
+
+      isInitialScrollDoneRef.current = true;
+    };
+
+    // Multi-pass execution to ensure DOM, fonts and bubble layouts are stabilized
+    const t1 = setTimeout(performInitialScroll, 20);
+    const t2 = setTimeout(performInitialScroll, 120);
+
+    // Auto mark chat history as read upon opening
+    markChatAsRead(activeChatId);
 
     return () => {
-      cancelAnimationFrame(frameId);
-      clearTimeout(timeout);
-      // Save scroll state on exit (ChatActivity.onPause replication)
-      if (scrollContainerRef.current && activeChatId) {
-        chatScrollManager.saveScrollPosition(
-          activeChatId,
-          scrollContainerRef.current,
-          visibleCount,
-          isUserNearBottomRef.current
-        );
-      }
+      clearTimeout(t1);
+      clearTimeout(t2);
+      saveCurrentScrollState(activeChatId);
     };
   }, [activeChatId]);
 
@@ -106,7 +198,6 @@ export const MessageList: React.FC = () => {
   const handleLoadOlder = useCallback(async () => {
     if (!activeChatId || isLoadingOlder) return;
 
-    // Save current scroll metrics before state change for anchor restoration
     if (scrollContainerRef.current) {
       scrollAnchorRef.current = {
         previousScrollHeight: scrollContainerRef.current.scrollHeight,
@@ -116,10 +207,8 @@ export const MessageList: React.FC = () => {
     }
 
     if (hasMoreLocally) {
-      // Expand local visible window
       setVisibleCount((prev) => prev + PAGE_CHUNK_SIZE);
     } else if (hasMoreOnServer) {
-      // Fetch older history from Telegram API
       const result = await loadMoreChatMessages(activeChatId);
       if (result.loadedCount > 0) {
         setVisibleCount((prev) => prev + result.loadedCount);
@@ -127,7 +216,7 @@ export const MessageList: React.FC = () => {
     }
   }, [activeChatId, isLoadingOlder, hasMoreLocally, hasMoreOnServer, loadMoreChatMessages]);
 
-  // Restore scroll anchor smoothly without jumping
+  // Restore scroll anchor smoothly without jumping when older messages are loaded
   useLayoutEffect(() => {
     if (scrollAnchorRef.current.shouldRestore && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
@@ -143,19 +232,19 @@ export const MessageList: React.FC = () => {
     const currentCount = currentMessages.length;
     prevMessagesLengthRef.current = currentCount;
 
-    if (currentCount > prevCount) {
+    if (currentCount > prevCount && isInitialScrollDoneRef.current) {
       const addedCount = currentCount - prevCount;
-      // Auto-expand visible slice so newest messages are always rendered
       setVisibleCount((prev) => prev + addedCount);
 
       if (isUserNearBottomRef.current) {
-        // User was at the bottom -> auto scroll to bottom smoothly
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 60);
+        requestAnimationFrame(() => {
+          if (scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+          }
+        });
       } else {
-        // User was looking at history -> notify via floating unread badge
         setUnreadStreamCount((prev) => prev + addedCount);
+        setShowScrollBottom(true);
       }
     }
   }, [currentMessages.length]);
@@ -187,7 +276,7 @@ export const MessageList: React.FC = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
     const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    const isNearBottom = distanceToBottom < 100;
+    const isNearBottom = distanceToBottom < 90;
     isUserNearBottomRef.current = isNearBottom;
 
     setShowScrollBottom(!isNearBottom);
@@ -196,37 +285,34 @@ export const MessageList: React.FC = () => {
       setUnreadStreamCount(0);
     }
 
-    // Secondary fallback for fast mouse wheeling near top
     if (scrollTop < 80 && !isLoadingOlder && hasMore) {
       handleLoadOlder();
-    }
-
-    if (activeChatId) {
-      chatScrollManager.saveScrollPosition(
-        activeChatId,
-        scrollContainerRef.current,
-        visibleCount,
-        isNearBottom
-      );
     }
   };
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    if (scrollContainerRef.current) {
+      if (behavior === 'smooth') {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      }
+    }
     setUnreadStreamCount(0);
+    setShowScrollBottom(false);
+    isUserNearBottomRef.current = true;
   };
 
-  // Jump to specific message handler (e.g. from search or reply click)
+  // Jump to specific message handler (e.g. from search, reply or keyword alert)
   useEffect(() => {
     const handleScrollToMessage = (e: any) => {
       const detail = e.detail;
       if (!detail || !detail.messageId) return;
 
       const targetMsgId = detail.messageId;
-      // If target message is outside current visible slice, expand visible window
       const targetIndex = currentMessages.findIndex((m) => m.id === targetMsgId);
       if (targetIndex !== -1 && targetIndex < startIndex) {
-        setVisibleCount(totalMessagesCount - targetIndex + 10);
+        setVisibleCount(totalMessagesCount - targetIndex + 15);
       }
 
       setHighlightedMessageId(targetMsgId);
@@ -247,8 +333,8 @@ export const MessageList: React.FC = () => {
     return () => window.removeEventListener('tg-scroll-to-message', handleScrollToMessage);
   }, [currentMessages, startIndex, totalMessagesCount]);
 
-  // DrKLO MessagesAdapter precise grouping algorithm on the visible slice
-  const groupedItems = messagesController.sortAndGroupMessages(visibleMessages);
+  // DrKLO MessagesAdapter precise grouping algorithm with unread divider support
+  const groupedItems = messagesController.sortAndGroupMessages(visibleMessages, readInboxMaxId);
 
   return (
     <div id="tg-message-list-root" className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -379,7 +465,7 @@ export const MessageList: React.FC = () => {
               return (
                 <div key={item.id} className="flex items-center gap-3 my-3 select-none">
                   <div className="flex-1 h-[1px] bg-[#2481cc]/40" />
-                  <span className="px-3 py-0.5 rounded-full text-[11px] font-bold bg-[#2481cc]/20 text-[#2481cc] border border-[#2481cc]/30">
+                  <span className="px-3 py-0.5 rounded-full text-[11px] font-bold bg-[#2481cc]/20 text-[#2481cc] border border-[#2481cc]/30 shadow-xs">
                     {item.dateText}
                   </span>
                   <div className="flex-1 h-[1px] bg-[#2481cc]/40" />

@@ -894,6 +894,18 @@ export namespace TLRPC {
     public readParams(stream: any, exception: boolean): void {}
   }
 
+  export class TL_updateNewAuthorization extends TLObject {
+    public static constructorId = 0x89539c37;
+    public hash: number | string = 0;
+    public date: number = 0;
+    public device: string = '';
+    public location: string = '';
+    public unregistered: boolean = false;
+    public is_current_revoked?: boolean = false;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
   // ==========================================
   // Stories Synchronization
   // ==========================================
@@ -1040,6 +1052,34 @@ export namespace TLRPC {
     is_blocked: boolean;
     common_chats_count: number;
     pinned_msg_id?: string;
+  }
+
+  export interface TL_help_appUpdate {
+    _: 'help.appUpdate';
+    flags?: number;
+    can_not_skip?: boolean;
+    id?: number;
+    version: string;
+    text: string;
+    entities?: any[];
+    document?: any;
+    url?: string;
+    sticker?: any;
+  }
+
+  export interface TL_help_noAppUpdate {
+    _: 'help.noAppUpdate';
+  }
+
+  export interface TL_help_getAppUpdate {
+    _: 'help.getAppUpdate';
+    source?: string;
+  }
+
+  export interface TL_account_sendVerifyEmailCode {
+    _: 'account.sendVerifyEmailCode';
+    purpose?: any;
+    email?: string;
   }
 
   export const DEFAULT_ADMIN_RIGHTS: TL_chatAdminRights = {

@@ -281,16 +281,17 @@ export class UserConfig {
   }
 
   /**
-   * Clears configuration, wipes local user session, only if explicitly requested on logout.
-   * Prevents accidental wipes during initialization or updates.
+   * Clears configuration, wipes local user session, only if explicitly requested on logout or revocation.
+   * Replicated from DrKLO/Telegram Android UserConfig.java clearConfig
    */
-  public clearConfig(fromUserLogout: boolean = false): void {
+  public clearConfig(fromUserLogout: boolean = true): void {
     if (!fromUserLogout) {
       console.warn('[UserConfig] clearConfig() called without fromUserLogout=true during runtime. Ignored to preserve session.');
       return;
     }
 
     this.currentUser = null;
+    this.clientUserId = '0';
     this.isClientActivated = false;
     this.passcodeHash = '';
     this.passcodeSalt = '';
@@ -298,6 +299,13 @@ export class UserConfig {
     if (typeof window !== 'undefined') {
       SecureSessionStorage.removeItem(`tg_user_config_${this.currentAccount}`);
       SecureSessionStorage.removeItem(`tg_mtproto_session_${this.currentAccount}`);
+      if (this.currentAccount === UserConfig.selectedAccount || this.currentAccount === 0) {
+        SecureSessionStorage.removeItem('tg_session_string');
+        SecureSessionStorage.removeItem('tg_user');
+        SecureSessionStorage.removeItem('tg_phone');
+        SecureSessionStorage.removeItem('tg_auth_token');
+        SecureSessionStorage.removeItem('tg_current_user');
+      }
     }
     AuthTokensHelper.getInstance().clearAccountTokens(this.currentAccount);
   }

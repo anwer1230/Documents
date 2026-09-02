@@ -51,6 +51,11 @@ export class NotificationCenter {
   public static readonly sponsoredMessagesLoaded = 38;
   public static readonly cloudSettingsUpdated = 39;
   public static readonly downloadSettingsUpdated = 40;
+  public static readonly appUpdateAvailable = 41;
+  public static readonly appUpdateNotModified = 42;
+  public static readonly appUpdateProgress = 43;
+  public static readonly appUpdateInstallReady = 44;
+  public static readonly appDidLogout = 45;
   public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0001;
   public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0002;
   public static readonly UPDATE_MASK_SEND_STATE = 0x0004;

@@ -168,18 +168,18 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
           transition: isDragging ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)',
           backgroundColor: isActive ? 'rgba(36, 129, 204, 0.12)' : 'var(--tg-theme-surface)',
         }}
-        className={`relative z-10 group flex items-center gap-3 px-3 cursor-pointer select-none transition-colors duration-100 ${
-          isThreeLines ? 'py-3' : 'py-2.5'
+        className={`relative z-10 group flex items-center gap-3 px-3 cursor-pointer select-none transition-colors duration-100 min-h-[72px] ${
+          isThreeLines ? 'py-3' : 'py-2'
         } ${
           isActive
             ? 'border-l-4 rtl:border-l-0 rtl:border-r-4 border-[#2481cc]'
             : 'hover:bg-white/5 active:bg-white/10'
         }`}
       >
-        {/* Avatar / Icon */}
+        {/* Avatar / Icon (DrKLO DialogCell 54dp x 54dp) */}
         <div
           className={`relative shrink-0 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-tr from-sky-600 to-cyan-500 text-white font-bold shadow-sm ${
-            isThreeLines ? 'w-13 h-13 text-xl' : 'w-12 h-12 text-lg'
+            isThreeLines ? 'w-[56px] h-[56px] text-xl' : 'w-[54px] h-[54px] text-lg'
           }`}
         >
           {isSavedMessages ? (
@@ -208,12 +208,12 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
           )}
         </div>
 
-        {/* Chat Details */}
+        {/* Chat Details (DrKLO DialogCell 16sp title, 15sp message, 12sp time) */}
         <div className="flex-1 min-w-0">
           {/* Top Row: Title + Verification + Restricted + Time */}
           <div className="flex items-center justify-between gap-1 mb-0.5">
             <div className="flex items-center gap-1 min-w-0">
-              <span className="font-semibold text-sm truncate" style={{ color: 'var(--tg-theme-bubble-in-text)' }}>
+              <span className="font-semibold text-[16px] leading-tight truncate" style={{ color: 'var(--tg-theme-bubble-in-text)' }}>
                 {chat.title}
               </span>
               {chat.isVerified && (
@@ -238,7 +238,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
               )}
             </div>
 
-            <span className="text-xs text-gray-400 shrink-0 whitespace-nowrap font-mono">
+            <span className="text-[12px] text-gray-400 shrink-0 whitespace-nowrap font-mono">
               {chat.draft ? chat.draftTimestamp || chat.lastMessage?.timestamp : chat.lastMessage?.timestamp}
             </span>
           </div>
@@ -265,7 +265,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
           {/* Bottom Row: Last Message Snippet OR Draft + Status + Unread / Pin */}
           <div className="flex items-center justify-between gap-2">
             {chat.draft ? (
-              <div className="flex items-center gap-1 min-w-0 text-xs truncate">
+              <div className="flex items-center gap-1 min-w-0 text-[15px] truncate">
                 <span className="text-[#e53935] font-semibold shrink-0">
                   {settings.language === 'ar' ? 'مسودة:' : 'Draft:'}
                 </span>
@@ -274,7 +274,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
                 </span>
               </div>
             ) : (
-              <div className="flex items-center gap-1 min-w-0 text-xs text-gray-400 truncate">
+              <div className="flex items-center gap-1 min-w-0 text-[15px] text-gray-400 truncate">
                 {chat.lastMessage?.isOutgoing && renderStatusCheck(chat.lastMessage.status)}
                 {!isThreeLines && chat.lastMessage?.senderName && !chat.lastMessage.isOutgoing && chat.type !== 'private' && (
                   <span className="font-medium text-sky-400/90 truncate">
@@ -294,11 +294,11 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
               {chat.unreadCount > 0 && (
                 <span
                   id={`chat-unread-badge-${chat.id}`}
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                  className={`min-w-[20px] h-[20px] text-[11px] font-bold px-1.5 flex items-center justify-center rounded-full ${
                     chat.isMuted ? 'bg-gray-600 text-gray-200' : 'bg-[#2481cc] text-white shadow-sm'
                   }`}
                 >
-                  {chat.unreadCount}
+                  {chat.unreadCount > 999 ? '999+' : chat.unreadCount}
                 </span>
               )}
             </div>

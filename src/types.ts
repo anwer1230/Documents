@@ -221,6 +221,19 @@ export type SettingsSubPage =
   | 'main'
   | 'account'
   | 'plus_settings'
+  | 'plus_general'
+  | 'plus_chats'
+  | 'plus_stories'
+  | 'plus_messages'
+  | 'plus_topics'
+  | 'plus_drawer'
+  | 'plus_profile'
+  | 'plus_notifications'
+  | 'plus_privacy'
+  | 'plus_shared_media'
+  | 'plus_downloads'
+  | 'plus_ads'
+  | 'plus_media'
   | 'theme_coloring'
   | 'chat_settings'
   | 'privacy_security'
@@ -247,6 +260,12 @@ export type SettingsSubPage =
   | 'shared_media'
   | 'ads_settings'
   | 'backup_restore'
+  | 'fcm_diagnostics'
+  | 'gift_auctions'
+  | 'channel_boosts'
+  | 'member_requests'
+  | 'cache_by_chats'
+  | 'app_update'
   | 'premium';
 
 export interface AppSettings {
@@ -493,4 +512,274 @@ export interface LiveDiscoveredLink {
 
 // 8. Protocol Buffers & Diagnostics Types
 export { GoogleProtobuf } from './core/ProtobufCodec';
+
+// 9. FCM Push Notifications & Diagnostics
+export interface FcmPushPacket {
+  id: string;
+  timestamp: string;
+  receivedAt: number;
+  dialog_id: string;
+  sender_id: string;
+  sender_name: string;
+  msg_id: string;
+  title: string;
+  body: string;
+  sound?: string;
+  badge?: number;
+  rawPayload?: any;
+  status: 'alerted' | 'suppressed_active_dialog' | 'muted' | 'background_synced' | 'error' | string;
+  account_id: number | string;
+  user_id: string;
+  routingDecision: string;
+}
+
+export interface FcmDiagnosticInfo {
+  status: 'listening' | 'unsupported' | 'registered' | 'connected' | 'permission_denied' | 'error' | string;
+  token: string | null;
+  endpoint?: string;
+  lastHeartbeat: string;
+  activeAccountId: number | string;
+  activeUserId: string;
+  activeDialogId: string | null;
+  registrationId: string;
+  lastReceivedPacket: FcmPushPacket | null;
+  history: FcmPushPacket[];
+  isSubscribedToPush: boolean;
+  permissionState: NotificationPermission | 'unsupported';
+}
+
+// 10. AI Tone Selection
+export type AiToneId = 'neutral' | 'formal' | 'casual' | 'concise' | 'friendly' | 'poetic' | string;
+
+export interface AiComposeTone {
+  id: AiToneId;
+  name: string;
+  nameAr: string;
+  icon: string;
+  description: string;
+  descriptionAr: string;
+}
+
+// 11. Contact Birthdays
+export interface ContactBirthday {
+  userId: string;
+  name: string;
+  avatar: string;
+  username: string;
+  birthDate: string;
+  isToday: boolean;
+  daysRemaining: number;
+  age: number;
+  hasCelebrated?: boolean;
+}
+
+// 12. Cache Usage By Chats
+export interface ChatCacheUsageInfo {
+  chatId: string;
+  chatTitle: string;
+  chatAvatar: string;
+  photosBytes: number;
+  videosBytes: number;
+  audioBytes: number;
+  documentsBytes: number;
+  totalBytes: number;
+  keepMediaMode: '3_days' | '1_week' | '1_month' | 'forever' | string;
+}
+
+// 13. Channel Boosts
+export interface ChannelBoostPerk {
+  level: number;
+  title: string;
+  titleAr: string;
+  description: string;
+  isUnlocked: boolean;
+}
+
+export interface ChannelBoostData {
+  chatId: string;
+  currentLevel: number;
+  currentBoosts: number;
+  boostsToNextLevel: number;
+  myBoostsCount: number;
+  canBoost: boolean;
+  boostUrl: string;
+  unlockedPerks: ChannelBoostPerk[];
+}
+
+// 14. Fact-Checking
+export interface MessageFactCheck {
+  messageId: string;
+  chatId: string;
+  country: string;
+  organization: string;
+  organizationLogo?: string;
+  text: string;
+  sourceUrl: string;
+  checkedAt: string;
+  isExpanded: boolean;
+}
+
+// 15. Star Gifts & Auctions
+export interface StarGiftItem {
+  id: string;
+  title: string;
+  emoji: string;
+  starsPrice: number;
+  isLimited?: boolean;
+  totalAvailable?: number;
+  soldCount?: number;
+  badge?: string;
+}
+
+export interface GiftAuctionBid {
+  bidId: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  amountStars: number;
+  timestamp: string;
+}
+
+export interface GiftAuctionAttribute {
+  key: string;
+  value: string;
+  rarityPercentage: number;
+}
+
+export interface GiftAuctionItem {
+  id: string;
+  giftId: string;
+  title: string;
+  symbol: string;
+  currentBidStars: number;
+  highestBidderId: string;
+  highestBidderName: string;
+  highestBidderAvatar: string;
+  minNextBid: number;
+  endsAt: number;
+  totalBidsCount: number;
+  recentBids: GiftAuctionBid[];
+  attributes: GiftAuctionAttribute[];
+}
+
+// 16. Member Join Requests
+export interface MemberJoinRequestItem {
+  id: string;
+  chatId: string;
+  chatTitle: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  userBio?: string;
+  requestedAt: string;
+  status: 'pending' | 'accepted' | 'approved' | 'declined' | 'dismissed';
+}
+
+// 17. Plus Configuration Types
+export interface PlusConfig {
+  // 1. General (عام)
+  fontFamily: string;
+  keepScreenOn: boolean;
+  proximitySensor: boolean;
+  useExternalBrowser: boolean;
+  hapticFeedback: boolean;
+  bigEmojis: boolean;
+  showDirectShare: boolean;
+  cacheLimitGb: number;
+
+  // 2. Chats (المحادثات)
+  tabsEnabled: boolean;
+  tabsPosition: 'top' | 'bottom';
+  showUnreadTabsCounter: boolean;
+  hideMutedTabs: boolean;
+  showOnlineStatusDot: boolean;
+  doubleTapAction: 'reply' | 'reaction' | 'copy' | 'pin';
+  chatSwipeAction: 'archive' | 'mute' | 'delete' | 'pin' | 'read';
+  confirmBeforeCall: boolean;
+
+  // 3. Stories (القصص)
+  hideStoriesBar: boolean;
+  stealthModeStories: boolean;
+  autoSaveStories: boolean;
+  highQualityPlayback: boolean;
+  storySpeed: '1x' | '1.5x' | '2x';
+  storyExpirationAlert: boolean;
+
+  // 4. Messages (الرسائل)
+  forwardWithoutQuote: boolean;
+  showUserIdOnMessages: boolean;
+  showExactSeconds: boolean;
+  showEditedHistory: boolean;
+  confirmVoiceNotes: boolean;
+  confirmStickers: boolean;
+  autoTranslateIncoming: boolean;
+  translationProvider: 'telegram' | 'google' | 'deepl';
+
+  // 5. Topics (المواضيع)
+  topicsAsTabs?: boolean;
+  autoOpenGeneralTopic?: boolean;
+  unreadTopicBadges?: boolean;
+  quickTopicSearch?: boolean;
+  lastTopicMessagePreview?: boolean;
+
+  // 6. Navigation Drawer (درج التصفح)
+  drawerShowNightMode?: boolean;
+  drawerShowSavedMessages?: boolean;
+  drawerShowCalls?: boolean;
+  drawerShowContacts?: boolean;
+  drawerShowPlusSettings?: boolean;
+  drawerShowAccounts?: boolean;
+  drawerHeaderStyle?: 'standard' | 'minimal' | 'custom';
+
+  // 7. Profile (الملف الشخصي)
+  profileShowUserId?: boolean;
+  profileCopyIdOnTap?: boolean;
+  profileShowCommonGroups?: boolean;
+  profileHidePhone?: boolean;
+  profileQuickActions?: boolean;
+
+  // 8. Notifications (الإشعارات)
+  inAppNotificationStyle?: 'banner' | 'pill' | 'silent';
+  repeatUnreadAlerts?: 'off' | '5min' | '15min';
+  customPrivateTone?: string;
+  customGroupTone?: string;
+  vipPriorityAlerts?: boolean;
+  filterSpamAlerts?: boolean;
+
+  // 9. Privacy & Security (الخصوصية والأمان)
+  ghostMode?: boolean;
+  hideOnlineStatus?: boolean;
+  hideReadReceipts?: boolean;
+  hideTypingIndicator?: boolean;
+  antiDeleteMessages?: boolean;
+  antiEditMessages?: boolean;
+  appLockPasscode?: string;
+  isAppLockEnabled?: boolean;
+  biometricsEnabled?: boolean;
+  hiddenChatsLocked?: boolean;
+
+  // 10. Shared Media (الوسائط المتبادلة)
+  defaultMediaTab?: 'photos' | 'videos' | 'files' | 'audio' | 'links' | 'voice';
+  gridColumnsCount?: number;
+  highResThumbnailPreview?: boolean;
+  pipFloatingVideo?: boolean;
+  autoPauseAudioOnVideo?: boolean;
+  customMediaPath?: string;
+
+  // 11. Downloads (التحميلات)
+  autoDownloadWifi?: boolean;
+  autoDownloadCellular?: boolean;
+  downloadBooster?: boolean;
+  maxConcurrentDownloads?: number;
+  downloadFinishSound?: boolean;
+  autoResumeDownloads?: boolean;
+
+  // 12. Ads (الإعلانات)
+  blockSponsoredMessages?: boolean;
+  hidePromotedChannels?: boolean;
+  blockBotAds?: boolean;
+  disablePromoAlerts?: boolean;
+  cleanChatBackground?: boolean;
+}
+
 

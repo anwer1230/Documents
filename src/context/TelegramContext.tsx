@@ -212,6 +212,7 @@ interface TelegramContextType {
   toggleMuteChat: (chatId: string) => void;
   togglePinChat: (chatId: string) => void;
   markChatReadUnread: (chatId: string) => void;
+  markChatAsRead: (chatId: string) => void;
   clearChatHistory: (chatId: string) => void;
   deleteChat: (chatId: string) => void;
   leaveGroup: (chatId: string) => Promise<void>;
@@ -741,13 +742,58 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       CoreNotificationCenter.dialogsNeedReload
     );
 
+    const handleLogoutNotification = {
+      didReceivedNotification: (id: number | string, _account: number, ...args: any[]) => {
+        if (id === CoreNotificationCenter.appDidLogout) {
+          console.warn('[TelegramContext] Forced logout / session revoked via NotificationCenter:', args);
+          setIsAuthenticated(false);
+          setActiveModal('none');
+          setActiveChatId(null);
+          setChats([]);
+          setMessages({});
+          try {
+            SecureSessionStorage.setItem('tg_explicitly_logged_out', 'true');
+            SecureSessionStorage.removeItem('tg_auth_session_active');
+            SecureSessionStorage.removeItem('tg_multi_accounts_v3');
+            SecureSessionStorage.removeItem('tg_active_account_id_v3');
+            SecureSessionStorage.removeItem('tg_session_string');
+            SecureSessionStorage.removeItem('tg_user');
+            SecureSessionStorage.removeItem('tg_phone');
+          } catch {}
+          showToast(
+            settings.language === 'ar'
+              ? 'تم إلغاء الجلسة عن بُعد أو تسجيل الخروج'
+              : 'Session was revoked remotely or logged out',
+            '🔒'
+          );
+        }
+      },
+    };
+
+    CoreNotificationCenter.getGlobalInstance().addObserver(
+      handleLogoutNotification,
+      CoreNotificationCenter.appDidLogout
+    );
+    CoreNotificationCenter.getInstance(0).addObserver(
+      handleLogoutNotification,
+      CoreNotificationCenter.appDidLogout
+    );
+
     return () => {
       CoreNotificationCenter.getInstance(0).removeObserver(
         handleDialogsReload,
         CoreNotificationCenter.dialogsNeedReload
       );
+      CoreNotificationCenter.getGlobalInstance().removeObserver(
+        handleLogoutNotification,
+        CoreNotificationCenter.appDidLogout
+      );
+      CoreNotificationCenter.getInstance(0).removeObserver(
+        handleLogoutNotification,
+        CoreNotificationCenter.appDidLogout
+      );
     };
-  }, []);
+  }, [settings.language]);
 
   // Persistent Listener & Dynamic Session Association for FCM / Service Worker Push
   useEffect(() => {
@@ -2792,6 +2838,36 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
+  const markChatAsRead = (chatId: string) => {
+    if (!chatId) return;
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
+    );
+    setMessages((prev) => {
+      const currentList = prev[chatId];
+      if (!currentList || currentList.length === 0) return prev;
+      const hasUnread = currentList.some((m) => !m.isOutgoing && m.status !== 'read');
+      if (!hasUnread) return prev;
+      return {
+        ...prev,
+        [chatId]: currentList.map((m) => (!m.isOutgoing ? { ...m, status: 'read' } : m)),
+      };
+    });
+    messagesController.markDialogAsRead(chatId, 'max');
+
+    try {
+      const activeSessionStr = localStorage.getItem('tg_session_string') || '';
+      const activePhone = currentUser.phone || '';
+      if (activeSessionStr || activePhone) {
+        fetch('/api/telegram/messages/read-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatId, maxId: 'max', sessionString: activeSessionStr, phone: activePhone }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+
   const markChatReadUnread = (chatId: string) => {
     let newUnread = 0;
     setChats((prev) =>
@@ -2804,7 +2880,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
     );
     if (newUnread === 0) {
-      messagesController.markDialogAsRead(chatId, 'max');
+      markChatAsRead(chatId);
     }
   };
 
@@ -2945,7 +3021,21 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     let lastUpdateEpoch = Date.now();
 
     const handleIncomingUpdate = (update: any) => {
-      if (!update || update.type !== 'new_message' || !update.message) return;
+      if (!update) return;
+
+      // Handle remote session revocation or auth updates (TL_updateNewAuthorization)
+      if (
+        update._ === 'TL_updateNewAuthorization' ||
+        update._ === 'updateNewAuthorization' ||
+        update.type === 'updateNewAuthorization'
+      ) {
+        import('../core/MessagesController').then(({ MessagesController }) => {
+          MessagesController.getInstance().processUpdates(update);
+        }).catch(() => {});
+        return;
+      }
+
+      if (update.type !== 'new_message' || !update.message) return;
       const msg: Message = update.message;
       const targetChatId = msg.chatId || update.chatId;
       if (!targetChatId) return;
@@ -3612,6 +3702,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         toggleMuteChat,
         togglePinChat,
         markChatReadUnread,
+        markChatAsRead,
         clearChatHistory,
         deleteChat,
         leaveGroup,

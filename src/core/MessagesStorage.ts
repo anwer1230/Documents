@@ -181,6 +181,10 @@ export class MessagesStorage {
     }
   }
 
+  public cleanup(isLogout: boolean = true): void {
+    this.cleanUp(isLogout);
+  }
+
   /**
    * DrKLO MessagesStorage.getDialogs
    */

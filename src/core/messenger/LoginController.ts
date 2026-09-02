@@ -355,10 +355,11 @@ export class LoginController {
   ): Promise<{ success: boolean; emailPattern?: string; error?: string; message?: string }> {
     try {
       const conn = ConnectionsManager.getInstance(this.currentAccount);
-      const req = new TLRPC.TL_account_sendVerifyEmailCode();
-      req._ = 'account.sendVerifyEmailCode';
-      req.email = email;
-      req.purpose = purpose;
+      const req: TLRPC.TL_account_sendVerifyEmailCode = {
+        _: 'account.sendVerifyEmailCode',
+        email,
+        purpose,
+      };
 
       const res = await conn.sendRequest<any>(req);
       return {

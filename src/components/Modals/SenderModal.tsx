@@ -155,20 +155,24 @@ export const SenderModal: React.FC = () => {
       .filter(Boolean);
 
     // Map targets to chat IDs or titles
-    const targetChatIds = groupList.map((g) => {
+    const targetChatIds: string[] = groupList.map((g) => {
       const matched = chats.find(
         (c) =>
           c.title.toLowerCase() === g.toLowerCase() ||
           (c.username && `@${c.username.toLowerCase()}` === g.toLowerCase())
       );
-      return matched ? matched.id : `custom_${g}`;
+      return matched ? String(matched.id) : `custom_${g}`;
     });
 
     const batch = await notificationsService.executeSendBatch({
       text: messageText,
       images: uploadedImages,
-      targetChatIds: targetChatIds.length > 0 ? targetChatIds : chats.map((c) => c.id),
-      allChats: chats,
+      targetChatIds: targetChatIds.length > 0 ? targetChatIds : chats.map((c) => String(c.id)),
+      allChats: chats.map((c) => ({
+        id: String(c.id),
+        title: c.title || (c as any).name || 'Chat',
+        type: c.type,
+      })),
       protectionMode: (sanitizeMode === 'smart' ? 'smart_clean' : sanitizeMode === 'always' ? 'permanent_clean' : sanitizeMode === 'off' ? 'disabled' : sanitizeMode) as ProtectionMode,
       isScheduled: sendType === 'scheduled',
       intervalMinutes: intervalMinutes,

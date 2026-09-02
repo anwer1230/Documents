@@ -15,7 +15,6 @@ import {
   Megaphone,
   Lock,
   Clock,
-  AlertCircle,
 } from 'lucide-react';
 import { Message } from '../../types';
 import { useTelegram } from '../../context/TelegramContext';
@@ -32,9 +31,6 @@ import {
 import { useSwipeToReply, useLongPress } from '../../hooks/useTouchGestures';
 
 import { themeController } from '../../core/ThemeController';
-import { MessageObject } from '../../core/MessageObject';
-import { ChatObject } from '../../core/ChatObject';
-import { UserObject } from '../../core/UserObject';
 
 // Authentic Telegram Peer Colors (Red, Orange, Violet, Green, Cyan, Blue, Pink)
 const PEER_COLORS = [
@@ -86,7 +82,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     resolveTelegramLink,
     openUserProfile,
     settings,
-    sendMessage,
   } = useTelegram();
 
   const [showQuickReactions, setShowQuickReactions] = useState(false);
@@ -97,11 +92,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const isSelected = selectedMessageIds.includes(message.id);
   const isMultiSelectMode = selectedMessageIds.length > 0;
   const isArabic = settings.language === 'ar';
-
-  const messageObject = React.useMemo(
-    () => new MessageObject(message, 0, activeChat || undefined),
-    [message, activeChat]
-  );
 
   const isStandaloneSticker =
     message.media?.type === 'sticker' && !message.text && !message.replyTo && !message.forwardedFrom;
@@ -126,40 +116,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const renderStatus = () => {
     if (!isOutgoing) return null;
-    if (message.status === 'read') {
-      return (
-        <span title={isArabic ? 'مقروءة' : 'Read'} className="inline-flex items-center">
-          <CheckCheck className="w-3.5 h-3.5 text-[#4fae4e]" />
-        </span>
-      );
-    }
-    if (message.status === 'delivered' || message.status === 'sent') {
-      return (
-        <span title={isArabic ? 'تم الإرسال والتسليم' : 'Sent'} className="inline-flex items-center">
-          <Check className="w-3.5 h-3.5 text-gray-400" />
-        </span>
-      );
-    }
-    if (message.status === 'error') {
-      return (
-        <span
-          title={isArabic ? 'فشل الإرسال، اضغط لإعادة المحاولة' : 'Failed to send, click to retry'}
-          className="inline-flex items-center text-red-500 hover:text-red-400 cursor-pointer animate-bounce"
-          onClick={(e) => {
-            e.stopPropagation();
-            sendMessage(message.text);
-          }}
-        >
-          <AlertCircle className="w-3.5 h-3.5" />
-        </span>
-      );
-    }
-    // Sending / clock state
-    return (
-      <span title={isArabic ? 'جاري الإرسال...' : 'Sending...'} className="inline-flex items-center text-sky-400/80">
-        <Clock className="w-3 h-3 animate-spin" />
-      </span>
-    );
+    if (message.status === 'read') return <CheckCheck className="w-3.5 h-3.5 text-[#4fae4e]" />;
+    if (message.status === 'delivered' || message.status === 'sent')
+      return <Check className="w-3.5 h-3.5 text-gray-400" />;
+    return <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />;
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -225,11 +185,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     }
 
     // Incoming sender resolution
-    const senderTitle = messageObject.getSenderTitle();
-    const senderId = message.senderId || `user_${senderTitle.replace(/\s+/g, '_')}`;
-    const senderName = senderTitle;
-    const senderAvatar = message.senderAvatar || (activeChat?.type === 'private' ? activeChat?.avatar : '');
-    const senderUsername = message.senderUsername || (activeChat?.type === 'private' ? activeChat?.username : undefined);
+    const senderId = message.senderId || `user_${message.senderName?.replace(/\s+/g, '_') || 'anonymous'}`;
+    const senderName = message.senderName || activeChat?.title || 'User';
+    const senderAvatar = message.senderAvatar || activeChat?.avatar || '';
+    const senderUsername = message.senderUsername || (activeChat?.type === 'private' ? activeChat?.username : undefined) || senderName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
 
     openUserProfile({
       id: senderId,
@@ -250,7 +209,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const triggerReply = () => {
     setReplyingTo({
       messageId: message.id,
-      senderName: messageObject.getSenderTitle() || (isOutgoing ? currentUser.name : 'User'),
+      senderName: message.senderName || (isOutgoing ? currentUser.name : 'User'),
       textSnippet: message.text || (message.media ? `[${message.media.type}]` : ''),
       mediaType: message.media?.type as 'photo' | 'audio' | 'document' | 'video' | undefined,
     });
@@ -278,7 +237,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   return (
     <div
       id={`msg-bubble-container-${message.id}`}
-      data-message-id={message.id}
+      data-msg-id={message.id}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
       onTouchStart={(e) => {
@@ -341,36 +300,32 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         </button>
       )}
 
-      {/* Sender Avatar for incoming messages - Telegram Standard in groups and channels */}
+      {/* Sender Avatar for incoming messages - Official Telegram Standard (35dp x 35dp) with click to view profile */}
       {!isOutgoing && (
-        <div className="w-8 h-8 shrink-0 self-end mb-1">
-          {(!grouping || grouping.isGroupEnd || grouping.isSingle) ? (
-            <button
-              type="button"
-              onClick={handleSenderClick}
-              title={messageObject.getSenderTitle() || (isArabic ? 'الملف الشخصي' : 'Profile')}
-              className="w-8 h-8 rounded-full overflow-hidden block cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
+        <button
+          type="button"
+          onClick={handleSenderClick}
+          title={message.senderName || (isArabic ? 'الملف الشخصي' : 'Profile')}
+          className="w-[35px] h-[35px] rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
+        >
+          {message.senderAvatar ? (
+            <img
+              src={message.senderAvatar}
+              alt={message.senderName || 'Avatar'}
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div
+              className="w-full h-full text-white font-bold text-xs flex items-center justify-center shadow-inner"
+              style={{
+                backgroundColor: getPeerColor(String(message.senderId || message.senderName || 'U')),
+              }}
             >
-              {message.senderAvatar ? (
-                <img
-                  src={message.senderAvatar}
-                  alt={messageObject.getSenderTitle() || 'Avatar'}
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div
-                  className="w-full h-full text-white font-bold text-xs flex items-center justify-center shadow-inner"
-                  style={{
-                    backgroundColor: getPeerColor(message.senderId || messageObject.getSenderTitle()),
-                  }}
-                >
-                  {messageObject.getSenderTitle()?.charAt(0).toUpperCase() || 'U'}
-                </div>
-              )}
-            </button>
-          ) : null}
-        </div>
+              {message.senderName?.charAt(0).toUpperCase() || 'U'}
+            </div>
+          )}
+        </button>
       )}
 
       {/* Bubble Container */}
@@ -460,49 +415,39 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                 : 'var(--tg-theme-bubble-in)',
             }}
           >
-            {/* Sender Name / Admin Post Signature for incoming messages - Telegram Peer Colors + Profile */}
-            {messageObject.shouldDrawSenderName(activeChat || undefined, grouping) && (
-              messageObject.isChannelPostVal ? (
-                messageObject.isPostAuthorVisible && messageObject.postAuthor ? (
-                  <div className="font-semibold text-[11px] mb-1 flex items-center gap-1.5 text-sky-400/90 select-none">
-                    <span>✍️ {messageObject.postAuthor}</span>
-                    <span className="text-[9px] px-1 py-0.2 rounded bg-sky-500/15 text-sky-300 border border-sky-500/20 font-mono">
-                      {isArabic ? 'مشرف القناة' : 'Admin'}
-                    </span>
-                  </div>
-                ) : null
-              ) : (
+            {/* Sender Name for incoming messages - Telegram Peer Colors + Click to open Profile + Rank Badge */}
+            {!isOutgoing && (message.senderName || activeChat?.title) && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-1">
                 <button
                   type="button"
                   onClick={handleSenderClick}
-                  className="font-bold text-xs mb-1 flex items-center gap-1.5 hover:underline cursor-pointer transition-opacity active:opacity-75 text-left rtl:text-right focus:outline-none flex-wrap"
+                  className="font-bold text-xs flex items-center gap-1 hover:underline cursor-pointer transition-opacity active:opacity-75 text-left rtl:text-right focus:outline-none"
                   style={{
-                    color: getPeerColor(message.senderId || messageObject.getSenderTitle()),
+                    color: getPeerColor(String(message.senderId || message.senderName || activeChat?.title)),
                   }}
                 >
-                  <span>{messageObject.getSenderTitle()}</span>
+                  <span>{message.senderName || activeChat?.title}</span>
                   {message.senderUsername && (
                     <span className="text-[10px] font-normal text-gray-400 font-mono">
-                      @{message.senderUsername.replace(/^@/, '')}
-                    </span>
-                  )}
-                  {/* Telegram Group Role / Custom Rank Badge */}
-                  {(message.senderRole === 'owner' || message.senderRole === 'admin' || message.senderRank) && (
-                    <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold tracking-wider flex items-center gap-0.5 select-none ${
-                        message.senderRole === 'owner'
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                          : message.senderRole === 'admin'
-                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      }`}
-                    >
-                      {message.senderRole === 'owner' ? '👑 ' : message.senderRole === 'admin' ? '🛡️ ' : ''}
-                      {message.senderRank || (message.senderRole === 'owner' ? (isArabic ? 'مالك' : 'owner') : isArabic ? 'مشرف' : 'admin')}
+                      @{message.senderUsername}
                     </span>
                   )}
                 </button>
-              )
+
+                {/* DrKLO ChatMessageCell Admin/Creator/Restricted Rank Badge */}
+                {((message as any).senderRole === 'creator' || (message as any).senderRank?.includes('مالك') || (message as any).senderRank?.includes('owner') || (message as any).senderRank?.includes('creator')) && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#33FFB300] text-[#FFD54F] border border-[#FFD54F]/30 flex items-center gap-0.5">
+                    <span>👑</span>
+                    <span>{(message as any).senderRank || (isArabic ? 'مالك' : 'Owner')}</span>
+                  </span>
+                )}
+                {((message as any).senderRole === 'admin' || (message as any).senderRank?.includes('مشرف') || (message as any).senderRank?.includes('admin')) && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#3329B6F6] text-[#4FC3F7] border border-[#4FC3F7]/30 flex items-center gap-0.5">
+                    <span>🛡️</span>
+                    <span>{(message as any).senderRank || (isArabic ? 'مشرف' : 'Admin')}</span>
+                  </span>
+                )}
+              </div>
             )}
 
             {/* Forwarded Header */}
@@ -555,7 +500,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                     url: message.media!.url!,
                     title: message.text,
                     sender: message.senderName || (isOutgoing ? currentUser.name : 'User'),
-                    timestamp: message.timestamp,
+                    timestamp: String(message.timestamp),
                   });
                 }}
                 className="my-1 rounded-xl overflow-hidden cursor-pointer relative group/media max-h-80"

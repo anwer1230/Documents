@@ -421,243 +421,8 @@ export const NavigationDrawer: React.FC = () => {
                   );
                 })()}
 
-                {/* 1. وظيفة الإرسال والمراقبة (فوري ومجدول) */}
-                {(() => {
-                  const isActive = activeModal === ('sender' as any) || activeModal === ('send-only' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-sender"
-                      onClick={() => handleItemClick(() => setActiveModal('sender'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-indigo-500/20 text-indigo-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-indigo-500'
-                          : 'hover:bg-indigo-500/10 text-indigo-400 hover:text-indigo-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Send className="w-5 h-5 text-indigo-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'الإرسال والمراقبة (فوري ومجدول)' : 'Message Sender & Monitor'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-indigo-500/20 text-indigo-300 rounded-full font-mono">
-                        TLRPC
-                      </span>
-                    </motion.button>
-                  );
-                })()}
 
-                {/* 2. وظيفة مراقبة الروابط والانضمام الفوري */}
-                {(() => {
-                  const isActive = activeModal === ('link-monitor' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-link-monitor"
-                      onClick={() => handleItemClick(() => setActiveModal('link-monitor'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-cyan-500/20 text-cyan-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-cyan-500'
-                          : 'hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Radio className="w-5 h-5 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'مراقبة وانضمام فوري' : 'Live Link Monitor & Join'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/20 text-cyan-300 rounded-full font-mono">
-                        RADAR
-                      </span>
-                    </motion.button>
-                  );
-                })()}
 
-                {/* 3. وظيفة المراقبة اللحظية (الكلمات المفتاحية) */}
-                {(() => {
-                  const isActive = activeModal === ('monitor' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-monitor"
-                      onClick={() => handleItemClick(() => setActiveModal('monitor'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-amber-500/20 text-amber-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-amber-500'
-                          : 'hover:bg-amber-500/10 text-amber-400 hover:text-amber-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Eye className="w-5 h-5 text-amber-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'رصد الكلمات والتنبيهات' : 'Keyword Alert Monitor'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300 rounded-full font-mono">
-                        ALERT
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 3. وظيفة رسائلي (سجل الدفعات) */}
-                {(() => {
-                  const isActive = activeModal === ('my-messages' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-my-messages"
-                      onClick={() => handleItemClick(() => setActiveModal('my-messages'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-blue-500/20 text-blue-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-blue-500'
-                          : 'hover:bg-blue-500/10 text-blue-400 hover:text-blue-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Layers className="w-5 h-5 text-blue-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'وظيفة "رسائلي" (سجل الدفعات)' : 'My Messages & Batches'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-blue-500/20 text-blue-300 rounded-full font-mono">
-                        BATCH
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 4. الانضمام التلقائي المتقدم */}
-                {(() => {
-                  const isActive = activeModal === ('auto-joiner' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-auto-joiner"
-                      onClick={() => handleItemClick(() => setActiveModal('auto-joiner'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-500'
-                          : 'hover:bg-emerald-500/10 text-emerald-400 hover:text-emerald-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <UserPlus className="w-5 h-5 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'الانضمام التلقائي المتقدم' : 'Advanced Auto-Joiner'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300 rounded-full font-mono">
-                        REGEX
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 5. وظيفة الردود التلقائية */}
-                {(() => {
-                  const isActive = activeModal === ('auto-responder' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-auto-responder"
-                      onClick={() => handleItemClick(() => setActiveModal('auto-responder'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-cyan-500/20 text-cyan-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-cyan-500'
-                          : 'hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <MessageSquare className="w-5 h-5 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'وظيفة الردود التلقائية' : 'Auto Responder Rules'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/20 text-cyan-300 rounded-full font-mono">
-                        AUTO
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 6. وظيفة التعلم الذكي (Groq LLM) */}
-                {(() => {
-                  const isActive = activeModal === ('smart-ai' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-smart-ai"
-                      onClick={() => handleItemClick(() => setActiveModal('smart-ai'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-purple-500/20 text-purple-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-purple-500'
-                          : 'hover:bg-purple-500/10 text-purple-400 hover:text-purple-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <BrainCircuit className="w-5 h-5 text-purple-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <span>{isArabic ? 'التعلم الذكي (Groq LLM)' : 'Smart AI Learning (Groq)'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-500/20 text-purple-300 rounded-full font-mono">
-                        GROQ
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 7. وظيفة البحث والانضمام الفوري (الرادار) */}
-                {(() => {
-                  const isActive = activeModal === ('live-link-discover' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-live-discover"
-                      onClick={() => handleItemClick(() => setActiveModal('live-link-discover'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-teal-500/20 text-teal-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-teal-500'
-                          : 'hover:bg-teal-500/10 text-teal-400 hover:text-teal-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className="relative">
-                          <Search className="w-5 h-5 text-teal-400 shrink-0 group-hover:scale-110 transition-transform" />
-                          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-                        </div>
-                        <span>{isArabic ? 'البحث والانضمام الفوري' : 'Live Link Radar & Join'}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 text-[9px] font-bold bg-teal-500/20 text-teal-300 rounded-full flex items-center gap-0.5">
-                          <Zap className="w-2.5 h-2.5" />
-                          <span>RADAR</span>
-                        </span>
-                      </div>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 8. وظيفة مراقبة الروابط والانضمام الفوري */}
-                {(() => {
-                  const isActive = activeModal === ('link-monitor' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-func-link-monitor"
-                      onClick={() => handleItemClick(() => setActiveModal('link-monitor' as any))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all group func-btn rounded-xl my-0.5 ${
-                        isActive
-                          ? 'active bg-cyan-500/20 text-[#22d3ee] font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-[#22d3ee]'
-                          : 'hover:bg-cyan-500/10 text-gray-200 hover:text-white'
-                      }`}
-                      style={{ borderColor: 'rgba(6,182,212,0.3)' }}
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className="relative">
-                          <Radio className="w-5 h-5 text-[#22d3ee] shrink-0 group-hover:scale-110 transition-transform animate-pulse" />
-                          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#22d3ee] animate-ping" />
-                        </div>
-                        <span className="label font-semibold text-white">{isArabic ? 'مراقبة وانضمام فوري' : 'Link Monitor & Auto-Join'}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="px-2 py-0.5 text-[9px] font-extrabold bg-cyan-500/20 text-[#22d3ee] border border-cyan-500/30 rounded-full flex items-center gap-0.5 font-mono">
-                          <Zap className="w-2.5 h-2.5" />
-                          <span>INSTANT</span>
-                        </span>
-                      </div>
-                    </motion.button>
-                  );
-                })()}
 
                 {/* Telegram Mini Apps (TMA) */}
                 {(() => {
@@ -683,6 +448,138 @@ export const NavigationDrawer: React.FC = () => {
                     </motion.button>
                   );
                 })()}
+              </div>
+
+              {/* Automation & Smart Tools Suite (4 Main Functions Requested) */}
+              <div className="py-1.5 space-y-0.5 bg-sky-950/20 border-y border-sky-500/15">
+                <div className="px-4 pt-1 pb-0.5 text-[11px] font-bold text-sky-400/80 uppercase tracking-wider flex items-center justify-between">
+                  <span>{isArabic ? '⚡ الأدوات والوظائف الذكية' : '⚡ Automation & Smart Suite'}</span>
+                  <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.2 rounded font-mono">PRO</span>
+                </div>
+
+                {/* 1. الإرسال والمراقبة */}
+                {(() => {
+                  const isActive = activeModal === 'sender';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-send-monitor"
+                      onClick={() => handleItemClick(() => setActiveModal('sender'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-sky-500/20 text-sky-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-sky-400'
+                          : 'hover:bg-sky-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Send className={`w-5 h-5 shrink-0 ${isActive ? 'text-sky-300' : 'text-sky-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الإرسال والمراقبة' : 'Send & Monitor'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'نشر دوري ورصد فوري للكلمات' : 'Broadcast & keyword monitor'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-sky-500/25 text-sky-200 border border-sky-400/30 rounded font-mono">
+                        TLRPC
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 2. رسائلي */}
+                {(() => {
+                  const isActive = activeModal === 'my-messages';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-my-messages"
+                      onClick={() => handleItemClick(() => setActiveModal('my-messages'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-amber-500/20 text-amber-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-amber-400'
+                          : 'hover:bg-amber-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Layers className={`w-5 h-5 shrink-0 ${isActive ? 'text-amber-300' : 'text-amber-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'رسائلي (سجل الدفعات)' : 'My Messages (Batches)'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'إدارة الرسائل المرسلة والمجدولة' : 'Manage sent & queued batches'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/25 text-amber-200 border border-amber-400/30 rounded font-mono">
+                        BATCH
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 3. الردود التلقائية */}
+                {(() => {
+                  const isActive = activeModal === 'auto-responder';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-auto-responder"
+                      onClick={() => handleItemClick(() => setActiveModal('auto-responder'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-purple-500/20 text-purple-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-purple-400'
+                          : 'hover:bg-purple-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <MessageSquare className={`w-5 h-5 shrink-0 ${isActive ? 'text-purple-300' : 'text-purple-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الردود التلقائية' : 'Auto Responder'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'قواعد رد ذكية مع فلترة فورية' : 'Smart reply rules & filters'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-500/25 text-purple-200 border border-purple-400/30 rounded font-mono">
+                        AUTO
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 4. الانضمام المتقدم */}
+                {(() => {
+                  const isActive = activeModal === 'auto-joiner';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-auto-joiner"
+                      onClick={() => handleItemClick(() => setActiveModal('auto-joiner'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-400'
+                          : 'hover:bg-emerald-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <UserPlus className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-300' : 'text-emerald-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الانضمام المتقدم' : 'Advanced Auto-Joiner'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'استخراج روابط القنوات والجروبات' : 'Extract & join links queue'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 rounded font-mono">
+                        REGEX
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+              </div>
+
+              {/* Core Folders & Calls Group */}
+              <div className="py-1 space-y-0.5">
 
                 {/* Chat Folders */}
                 {(() => {

@@ -2037,6 +2037,36 @@ async function startServer() {
     return res.json({ success: false, avatar: '' });
   });
 
+  // Global Plus Settings Store for Multi-Session Cloud Sync
+  let globalPlusSettingsStore: Record<string, any> = {};
+  let globalPlusSettingsUpdatedAt: number = Date.now();
+
+  app.get('/api/telegram/plus-settings', (req, res) => {
+    const { accountId } = req.query;
+    return res.json({
+      success: true,
+      config: globalPlusSettingsStore[String(accountId || 'global')] || globalPlusSettingsStore['global'] || {},
+      updatedAt: globalPlusSettingsUpdatedAt,
+    });
+  });
+
+  app.post('/api/telegram/plus-settings/sync', (req, res) => {
+    const { accountId = 'global', config, updatedAt = Date.now() } = req.body;
+    if (config && typeof config === 'object') {
+      const current = globalPlusSettingsStore[accountId] || {};
+      globalPlusSettingsStore[accountId] = { ...current, ...config };
+      globalPlusSettingsStore['global'] = { ...(globalPlusSettingsStore['global'] || {}), ...config };
+      globalPlusSettingsUpdatedAt = Number(updatedAt) || Date.now();
+    }
+    return res.json({
+      success: true,
+      accountId,
+      config: globalPlusSettingsStore[accountId] || {},
+      updatedAt: globalPlusSettingsUpdatedAt,
+      syncedAcrossSessions: true,
+    });
+  });
+
   // 8.4 MTProto Active Sessions / Devices (account.getAuthorizations RPC)
   app.get('/api/telegram/sessions', async (req, res) => {
     const sessionString = (req.query?.sessionString as string) || (req.headers['x-telegram-session'] as string);
@@ -2104,11 +2134,26 @@ async function startServer() {
       const client = await getClientForSession(sessionString, phone);
       if (client && client.connected && hash) {
         await client.invoke(new Api.account.ResetAuthorization({ hash: (typeof hash === 'string' ? BigInt(hash) : hash) as any }));
-        return res.json({ success: true, terminated: true, hash });
       }
     } catch (err: any) {
       console.warn('[MTProto] resetAuthorization error:', err?.message || err);
     }
+
+    // Real-time broadcast to all connected clients via SSE stream
+    const updatePayload = {
+      type: 'updateNewAuthorization',
+      _: 'TL_updateNewAuthorization',
+      unregistered: true,
+      hash: hash || '0',
+      is_current_revoked: false,
+      date: Math.floor(Date.now() / 1000),
+    };
+    activeSseClients.forEach((clientRes) => {
+      try {
+        clientRes.write(`data: ${JSON.stringify(updatePayload)}\n\n`);
+      } catch (_) {}
+    });
+
     return res.json({ success: true, terminated: true, hash });
   });
 
@@ -2119,11 +2164,26 @@ async function startServer() {
       const client = await getClientForSession(sessionString, phone);
       if (client && client.connected) {
         await client.invoke(new Api.auth.ResetAuthorizations());
-        return res.json({ success: true, terminatedAll: true });
       }
     } catch (err: any) {
       console.warn('[MTProto] resetAuthorizations error:', err?.message || err);
     }
+
+    // Real-time broadcast to all other sessions via SSE stream
+    const updatePayload = {
+      type: 'updateNewAuthorization',
+      _: 'TL_updateNewAuthorization',
+      unregistered: true,
+      hash: 'all',
+      is_current_revoked: false,
+      date: Math.floor(Date.now() / 1000),
+    };
+    activeSseClients.forEach((clientRes) => {
+      try {
+        clientRes.write(`data: ${JSON.stringify(updatePayload)}\n\n`);
+      } catch (_) {}
+    });
+
     return res.json({ success: true, terminatedAll: true });
   });
 

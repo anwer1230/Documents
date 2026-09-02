@@ -217,6 +217,32 @@ export class ConnectionsManager {
   }
 
   /**
+   * DrKLO ConnectionsManager: RPC Error Interception for Session Revocation / 401
+   */
+  public handleRpcError(err: TLRPC.TL_error): void {
+    if (!err) return;
+    const isAuthUnregistered =
+      err.code === 401 ||
+      err.text === 'AUTH_KEY_UNREGISTERED' ||
+      err.text === 'AUTH_KEY_INVALID' ||
+      err.text === 'USER_DEACTIVATED' ||
+      err.text === 'SESSION_REVOKED' ||
+      err.text === 'SESSION_EXPIRED';
+
+    if (isAuthUnregistered) {
+      console.warn(
+        `[ConnectionsManager] Intercepted 401 / ${err.text} on account ${this.accountNum}. Triggering cleanup and session revocation.`
+      );
+      this.cleanup(false);
+      import('./MessagesController')
+        .then(({ MessagesController }) => {
+          MessagesController.getInstance(this.accountNum).performForcedLogout(err.text || 'AUTH_KEY_UNREGISTERED');
+        })
+        .catch(() => {});
+    }
+  }
+
+  /**
    * Generates a compliant 64-bit MTProto message ID: (unix_time << 32) | (nano_fraction << 2) | 1
    */
   public generateMessageId(): bigint {
@@ -250,6 +276,7 @@ export class ConnectionsManager {
       };
 
       const notifyError = (err: TLRPC.TL_error) => {
+        this.handleRpcError(err);
         if (!callback) return;
         if (typeof callback === 'function') {
           callback(null, err);
