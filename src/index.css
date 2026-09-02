@@ -166,23 +166,80 @@
   animation: tg-pulse 1.8s infinite ease-in-out;
 }
 
-@keyframes tg-gradient-shift {
+/* Multi-color shifting dynamic gradient for animated Telegram icons and accents */
+@keyframes tg-multicolor-shift {
   0% {
     background-position: 0% 50%;
-    filter: hue-rotate(0deg) drop-shadow(0 0 6px rgba(36, 129, 204, 0.5));
+    filter: hue-rotate(0deg);
   }
   50% {
     background-position: 100% 50%;
-    filter: hue-rotate(120deg) drop-shadow(0 0 10px rgba(168, 85, 247, 0.7));
+    filter: hue-rotate(180deg);
   }
   100% {
     background-position: 0% 50%;
-    filter: hue-rotate(0deg) drop-shadow(0 0 6px rgba(36, 129, 204, 0.5));
+    filter: hue-rotate(360deg);
   }
 }
 
-.animate-tg-gradient-icon {
-  background: linear-gradient(135deg, #2481cc, #9333ea, #ec4899, #06b6d4, #10b981);
-  background-size: 300% 300%;
-  animation: tg-gradient-shift 4s ease infinite;
+@keyframes tg-aurora-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
+
+.tg-multicolor-gradient {
+  background: linear-gradient(
+    135deg,
+    #2481cc,
+    #8b5cf6,
+    #ec4899,
+    #f43f5e,
+    #f59e0b,
+    #10b981,
+    #06b6d4,
+    #3b82f6
+  );
+  background-size: 400% 400%;
+  animation: tg-multicolor-shift 5s ease infinite;
+}
+
+.tg-multicolor-text {
+  background: linear-gradient(
+    90deg,
+    #38bdf8,
+    #a855f7,
+    #f43f5e,
+    #f59e0b,
+    #10b981,
+    #38bdf8
+  );
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: tg-multicolor-shift 4s ease infinite;
+}
+
+.tg-multicolor-glow {
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    45deg,
+    #2481cc,
+    #a855f7,
+    #ec4899,
+    #f59e0b,
+    #10b981,
+    #06b6d4
+  );
+  background-size: 350% 350%;
+  filter: blur(6px);
+  opacity: 0.7;
+  z-index: 0;
+  animation: tg-multicolor-shift 4s ease infinite;
+}
+

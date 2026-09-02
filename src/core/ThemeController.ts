@@ -2,7 +2,7 @@
  * ThemeController.ts - Theme Engine, Color Keys & UI Metrics
  * 
  * Replicated directly from DrKLO/Telegram Android:
- * org.telegram.ui.ActionBar.Theme.java
+ * org.telegram.ui.ActionBar.Theme.java & ThemeColors.java
  */
 
 import { AndroidUtilities } from './AndroidUtilities';
@@ -17,30 +17,80 @@ export interface ThemeMetrics {
   iconSmallSize: number;     // 18dp
   headerHeight: number;      // 56dp
   bottomBarHeight: number;   // 64dp
+  dialogCellHeight: number;  // 72dp
+  dialogAvatarSize: number;  // 54dp
+  chatAvatarSize: number;    // 35dp
 }
 
-export interface ThemeColors {
-  windowBackgroundWhite: string;
-  windowBackgroundGray: string;
-  actionBarDefault: string;
-  actionBarDefaultTitle: string;
-  chat_inBubble: string;
-  chat_outBubble: string;
-  chat_inBubbleSelected: string;
-  chat_outBubbleSelected: string;
-  chat_messageTextIn: string;
-  chat_messageTextOut: string;
-  chat_inTimeText: string;
-  chat_outTimeText: string;
-  chat_inForwardedNameText: string;
-  chat_outForwardedNameText: string;
-  chat_inReplyNameText: string;
-  chat_outReplyNameText: string;
-  chat_inReplyMessageText: string;
-  chat_outReplyMessageText: string;
-  chat_unreadMessagesStartText: string;
-  chat_unreadMessagesStartBackground: string;
-}
+export const ThemeColorKeys = {
+  // Dialogs & Windows
+  key_dialogBackground: 'dialogBackground',
+  key_dialogTextBlack: 'dialogTextBlack',
+  key_dialogTextGray: 'dialogTextGray',
+  key_dialogTextGray2: 'dialogTextGray2',
+  key_dialogTextGray3: 'dialogTextGray3',
+  key_dialogTextLink: 'dialogTextLink',
+  key_dialogTextBlue: 'dialogTextBlue',
+  key_dialogTextRed: 'dialogTextRed',
+  key_windowBackgroundWhite: 'windowBackgroundWhite',
+  key_windowBackgroundGray: 'windowBackgroundGray',
+  key_windowBackgroundGrayShadow: 'windowBackgroundGrayShadow',
+
+  // Action Bar
+  key_actionBarDefault: 'actionBarDefault',
+  key_actionBarDefaultIcon: 'actionBarDefaultIcon',
+  key_actionBarDefaultTitle: 'actionBarDefaultTitle',
+  key_actionBarDefaultSubtitle: 'actionBarDefaultSubtitle',
+
+  // Chat List (Dialogs)
+  key_chats_name: 'chats_name',
+  key_chats_message: 'chats_message',
+  key_chats_date: 'chats_date',
+  key_chats_unreadCounter: 'chats_unreadCounter',
+  key_chats_unreadCounterMuted: 'chats_unreadCounterMuted',
+  key_chats_unreadCounterText: 'chats_unreadCounterText',
+  key_chats_pinnedIcon: 'chats_pinnedIcon',
+  key_chats_sentCheck: 'chats_sentCheck',
+  key_chats_sentReadCheck: 'chats_sentReadCheck',
+  key_chats_sentClock: 'chats_sentClock',
+
+  // Message Bubbles
+  key_chat_inBubble: 'chat_inBubble',
+  key_chat_inBubbleSelected: 'chat_inBubbleSelected',
+  key_chat_outBubble: 'chat_outBubble',
+  key_chat_outBubbleSelected: 'chat_outBubbleSelected',
+  key_chat_messageTextIn: 'chat_messageTextIn',
+  key_chat_messageTextOut: 'chat_messageTextOut',
+  key_chat_messageLinkIn: 'chat_messageLinkIn',
+  key_chat_messageLinkOut: 'chat_messageLinkOut',
+  key_chat_inTimeText: 'chat_inTimeText',
+  key_chat_outTimeText: 'chat_outTimeText',
+  key_chat_outSentCheck: 'chat_outSentCheck',
+  key_chat_outSentCheckRead: 'chat_outSentCheckRead',
+  key_chat_outSentClock: 'chat_outSentClock',
+  key_chat_inReplyNameText: 'chat_inReplyNameText',
+  key_chat_outReplyNameText: 'chat_outReplyNameText',
+  key_chat_inReplyLine: 'chat_inReplyLine',
+  key_chat_outReplyLine: 'chat_outReplyLine',
+  key_chat_inReplyMessageText: 'chat_inReplyMessageText',
+  key_chat_outReplyMessageText: 'chat_outReplyMessageText',
+  key_chat_unreadMessagesStartText: 'chat_unreadMessagesStartText',
+  key_chat_unreadMessagesStartBackground: 'chat_unreadMessagesStartBackground',
+} as const;
+
+export const DefaultThemeColors = {
+  dialogBackground: '#FFFFFF',
+  dialogTextBlack: '#222222',
+  dialogTextGray: '#8E8E93',
+  windowBackgroundWhite: '#FFFFFF',
+  windowBackgroundGray: '#F0F2F5',
+  actionBarDefault: '#50A7EA',
+  chat_inBubble: '#FFFFFF',
+  chat_outBubble: '#EFFDDE',
+  chat_messageTextIn: '#000000',
+  chat_messageTextOut: '#000000',
+  chat_outSentCheckRead: '#4EA4F6',
+};
 
 export class ThemeController {
   private static instance: ThemeController;
@@ -55,6 +105,9 @@ export class ThemeController {
     iconSmallSize: 18,
     headerHeight: 56,
     bottomBarHeight: 64,
+    dialogCellHeight: 72,
+    dialogAvatarSize: 54,
+    chatAvatarSize: 35,
   };
 
   private isNightMode: boolean = false;
@@ -119,45 +172,9 @@ export class ThemeController {
     this.applyBubbleCornerRadius(this.metrics.bubbleRadius);
     document.documentElement.style.setProperty('--tg-bubble-padding-h', `${this.metrics.bubblePaddingH}px`);
     document.documentElement.style.setProperty('--tg-bubble-padding-v', `${this.metrics.bubblePaddingV}px`);
-  }
-
-  /**
-   * Sets authentic Telegram predefined themes (Classic, Day, Dark, Night, Arctic, Tinted)
-   */
-  public applyChatTheme(themeName: 'classic' | 'day' | 'dark' | 'night' | 'arctic' | 'tinted' | string) {
-    const root = document.documentElement;
-    switch (themeName.toLowerCase()) {
-      case 'day':
-      case 'arctic':
-        root.style.setProperty('--tg-theme-bg', '#ffffff');
-        root.style.setProperty('--tg-theme-surface', '#f4f4f5');
-        root.style.setProperty('--tg-theme-in-bubble', '#f1f5f9');
-        root.style.setProperty('--tg-theme-out-bubble', '#e0f2fe');
-        root.style.setProperty('--tg-theme-accent', '#0284c7');
-        break;
-      case 'night':
-        root.style.setProperty('--tg-theme-bg', '#0f141c');
-        root.style.setProperty('--tg-theme-surface', '#18222d');
-        root.style.setProperty('--tg-theme-in-bubble', '#1e2c3a');
-        root.style.setProperty('--tg-theme-out-bubble', '#2b5278');
-        root.style.setProperty('--tg-theme-accent', '#64b5f6');
-        break;
-      case 'tinted':
-        root.style.setProperty('--tg-theme-bg', '#1d2733');
-        root.style.setProperty('--tg-theme-surface', '#242f3d');
-        root.style.setProperty('--tg-theme-in-bubble', '#2b3644');
-        root.style.setProperty('--tg-theme-out-bubble', '#396d9e');
-        root.style.setProperty('--tg-theme-accent', '#5288c1');
-        break;
-      case 'dark':
-      default:
-        root.style.setProperty('--tg-theme-bg', '#17212b');
-        root.style.setProperty('--tg-theme-surface', '#242f3d');
-        root.style.setProperty('--tg-theme-in-bubble', '#182533');
-        root.style.setProperty('--tg-theme-out-bubble', '#2b5278');
-        root.style.setProperty('--tg-theme-accent', '#2481cc');
-        break;
-    }
+    document.documentElement.style.setProperty('--tg-dialog-cell-height', `${this.metrics.dialogCellHeight}px`);
+    document.documentElement.style.setProperty('--tg-dialog-avatar-size', `${this.metrics.dialogAvatarSize}px`);
+    document.documentElement.style.setProperty('--tg-chat-avatar-size', `${this.metrics.chatAvatarSize}px`);
   }
 
   /**

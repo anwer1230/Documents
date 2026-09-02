@@ -8,21 +8,23 @@ import { connectionsManager, ConnectionsManager } from '../ConnectionsManager';
 import { messagesController, MessagesController } from '../MessagesController';
 import { notificationsController, NotificationsController } from '../NotificationsController';
 import { NotificationCenter } from '../NotificationCenter';
+import { MessagesStorage } from '../MessagesStorage';
 import { TdClient, tdClient } from '../tdlib/TdClient';
 import { UserConfig } from './UserConfig';
 import { ContactsController } from './ContactsController';
 import { MediaDataController } from './MediaDataController';
 import { SendMessagesHelper } from './SendMessagesHelper';
 import { SecretChatHelper } from './SecretChatHelper';
-import { PrivacySettingsController, PrivacySettingsState, PrivacyTarget } from './PrivacySettingsController';
-import { TwoStepVerificationController, TwoStepState } from './TwoStepVerificationController';
-import { TLRPC } from '../TLRPC';
+import { StoriesController } from './StoriesController';
+import { DownloadController } from './DownloadController';
+import { PrivacySettingsController } from './PrivacySettingsController';
+import { TwoStepVerificationController } from './TwoStepVerificationController';
 
 export class AccountInstance {
   private static instances = new Map<number, AccountInstance>();
   private currentAccount: number;
 
-  public static getInstance(accountNum: number = UserConfig.selectedAccount || 0): AccountInstance {
+  public static getInstance(accountNum: number = 0): AccountInstance {
     if (!AccountInstance.instances.has(accountNum)) {
       AccountInstance.instances.set(accountNum, new AccountInstance(accountNum));
     }
@@ -53,12 +55,8 @@ export class AccountInstance {
     return NotificationCenter.getInstance(this.currentAccount);
   }
 
-  public getPrivacySettingsController(): PrivacySettingsController {
-    return PrivacySettingsController.getInstance(this.currentAccount);
-  }
-
-  public getTwoStepVerificationController(): TwoStepVerificationController {
-    return TwoStepVerificationController.getInstance(this.currentAccount);
+  public getMessagesStorage(): MessagesStorage {
+    return MessagesStorage.getInstance(this.currentAccount);
   }
 
   public getContactsController(): ContactsController {
@@ -67,6 +65,22 @@ export class AccountInstance {
 
   public getMediaDataController(): MediaDataController {
     return MediaDataController.getInstance(this.currentAccount);
+  }
+
+  public getStoriesController(): StoriesController {
+    return StoriesController.getInstance(this.currentAccount);
+  }
+
+  public getDownloadController(): DownloadController {
+    return DownloadController.getInstance(this.currentAccount);
+  }
+
+  public getPrivacySettingsController(): PrivacySettingsController {
+    return PrivacySettingsController.getInstance(this.currentAccount);
+  }
+
+  public getTwoStepVerificationController(): TwoStepVerificationController {
+    return TwoStepVerificationController.getInstance(this.currentAccount);
   }
 
   public getSendMessagesHelper(): SendMessagesHelper {
@@ -78,55 +92,10 @@ export class AccountInstance {
   }
 
   public getNotificationsController(): NotificationsController {
-    return notificationsController;
+    return NotificationsController.getInstance(this.currentAccount);
   }
 
   public getTdClient(): TdClient {
     return tdClient;
-  }
-
-  /**
-   * Sync layer: Fetches and stores TLRPC.TL_account_getPrivacy settings
-   * isolated per authenticated account session
-   */
-  public async syncPrivacySettings(target?: PrivacyTarget): Promise<PrivacySettingsState> {
-    const privacyController = this.getPrivacySettingsController();
-    if (target) {
-      await privacyController.loadPrivacy(target);
-    } else {
-      await privacyController.loadAllPrivacyRules();
-    }
-    return privacyController.getState();
-  }
-
-  /**
-   * Sync layer: Fetches and stores TLRPC.TL_account_getPassword settings
-   * isolated per authenticated account session
-   */
-  public async syncPasswordSettings(): Promise<TLRPC.TL_account_password> {
-    const twoStepController = this.getTwoStepVerificationController();
-    const passwordSettings = await twoStepController.getPassword();
-    return passwordSettings;
-  }
-
-  /**
-   * Complete sync layer: Fetches and stores both privacy rules and 2FA password configuration
-   * guaranteeing isolated storage per current authenticated user session
-   */
-  public async syncAccountSecurityAndPrivacy(): Promise<{
-    accountNum: number;
-    privacy: PrivacySettingsState;
-    password: TLRPC.TL_account_password;
-  }> {
-    const [privacy, password] = await Promise.all([
-      this.syncPrivacySettings(),
-      this.syncPasswordSettings(),
-    ]);
-
-    return {
-      accountNum: this.currentAccount,
-      privacy,
-      password,
-    };
   }
 }

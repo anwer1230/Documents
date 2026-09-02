@@ -12,6 +12,7 @@
 import { User, UserAccount, Chat, Message, AppSettings } from '../types';
 import { ConnectionsManager } from '../core/ConnectionsManager';
 import { DEFAULT_ACCOUNTS, INITIAL_CHATS, INITIAL_MESSAGES } from '../data/mockTelegramData';
+import { SecureSessionStorage } from './SecureSessionStorage';
 
 export type MultiAccountEventType =
   | 'ACCOUNT_SWITCHED'
@@ -56,6 +57,39 @@ export class UserConfig {
     return !!acc && acc.isActive !== false;
   }
 
+  /**
+   * Goal 1: Purges dummy/mock/test accounts and resets selectedAccount to the real account
+   */
+  public static cleanupTestAccounts(): void {
+    const realAccounts = this.accounts.filter((a) => {
+      const isTest = (a.user as any)?.isTestAccount ||
+                     a.user?.phone?.startsWith('+999') ||
+                     a.user?.phone === '0000000000' ||
+                     a.user?.phone?.includes('test') ||
+                     (a.user as any)?.isDummy === true;
+      return !isTest && a.isActive !== false;
+    });
+
+    if (realAccounts.length > 0) {
+      this.accounts = realAccounts;
+      this.selectedAccount = 0;
+    } else {
+      this.accounts = [];
+      this.selectedAccount = 0;
+    }
+    this.saveConfig();
+  }
+
+  public static clearConfig(accountNum: number = this.selectedAccount): void {
+    if (accountNum >= 0 && accountNum < this.accounts.length) {
+      this.accounts.splice(accountNum, 1);
+      if (this.selectedAccount >= this.accounts.length) {
+        this.selectedAccount = Math.max(0, this.accounts.length - 1);
+      }
+      this.saveConfig();
+    }
+  }
+
   public static getAccount(accountNum: number): UserAccount | null {
     if (accountNum < 0 || accountNum >= this.accounts.length) {
       return null;
@@ -89,18 +123,37 @@ export class UserConfig {
 
   public static loadConfig(): void {
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        const saved = localStorage.getItem(this.STORAGE_KEY_ACCOUNTS);
-        const savedActiveId = localStorage.getItem(this.STORAGE_KEY_SELECTED);
+      if (typeof window !== 'undefined') {
+        const saved = SecureSessionStorage.getItem<UserAccount[]>(this.STORAGE_KEY_ACCOUNTS);
+        const savedActiveId = SecureSessionStorage.getItem<string>(this.STORAGE_KEY_SELECTED);
 
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            this.accounts = parsed.slice(0, this.MAX_ACCOUNT_COUNT);
-          }
+        if (saved && Array.isArray(saved) && saved.length > 0) {
+          this.accounts = saved
+            .filter((acc) => {
+              const u = acc?.user;
+              if (!u) return false;
+              const isMock =
+                !u.id ||
+                u.id === 'user_anwer_main' ||
+                u.id === 'user_primary' ||
+                u.id === 'user_self' ||
+                u.id.startsWith('mock_') ||
+                u.username === 'anwer_dev' ||
+                u.name === 'أنور فؤاد' ||
+                u.phone === '+967 770 123 456' ||
+                u.phone === '+967770123456' ||
+                u.phone === '0000000000' ||
+                u.phone?.startsWith('+999') ||
+                u.phone?.includes('test') ||
+                (u as any).isDummy === true;
+              return !isMock;
+            })
+            .slice(0, this.MAX_ACCOUNT_COUNT);
+        } else {
+          this.accounts = [];
         }
 
-        if (savedActiveId) {
+        if (savedActiveId && this.accounts.length > 0) {
           const idx = this.getAccountIndex(savedActiveId);
           this.selectedAccount = idx >= 0 ? idx : 0;
         } else {
@@ -119,11 +172,11 @@ export class UserConfig {
 
   public static saveConfig(accountNum?: number): void {
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem(this.STORAGE_KEY_ACCOUNTS, JSON.stringify(this.accounts));
+      if (typeof window !== 'undefined') {
+        SecureSessionStorage.setItem(this.STORAGE_KEY_ACCOUNTS, this.accounts);
         const activeAcc = this.getAccount(this.selectedAccount);
         if (activeAcc) {
-          localStorage.setItem(this.STORAGE_KEY_SELECTED, activeAcc.id);
+          SecureSessionStorage.setItem(this.STORAGE_KEY_SELECTED, activeAcc.id);
         }
       }
     } catch (e) {

@@ -31,13 +31,13 @@ export class NotificationsService {
 
   // 1. Sender & Scheduler state
   private activeSenderBatches: SenderBatch[] = [];
-  private schedulerTimers: Map<string, number> = new Map();
+  private schedulerTimer: number | null = null;
   private currentProtectionMode: ProtectionMode = 'salam';
 
   // 2. Monitor state
   private monitorConfig: MonitorConfig = {
     isEnabled: false,
-    keywords: ['واجب', 'بحث', 'تكليف', 'مشروع', 'مطلوب'],
+    keywords: [],
     sendAlertsToSavedMessages: true,
     browserPushAlerts: true,
   };
@@ -159,21 +159,31 @@ export class NotificationsService {
       const savedLinks = await telegramDb.discoveredLinks.reverse().toArray();
       if (savedLinks && savedLinks.length > 0) {
         this.discoveredLinks = savedLinks;
+      } else {
+        this.discoveredLinks = [
+          {
+            id: 'link_init_1',
+            url: 'https://t.me/tech_innovators_hub',
+            sourceChatTitle: 'جروب المطورين التقني',
+            sourceChatId: 'chat_1',
+            senderName: 'Alex Developer',
+            timestamp: '08:14 AM',
+            status: 'joined',
+            autoJoined: true,
+          },
+          {
+            id: 'link_init_2',
+            url: 'https://t.me/+AbC_Telegram2026_Vip',
+            sourceChatTitle: 'مجموعة نقاشات التقنية',
+            sourceChatId: 'chat_3',
+            senderName: 'Sarah Connor',
+            timestamp: '08:25 AM',
+            status: 'pending',
+            autoJoined: false,
+          },
+        ];
+        await telegramDb.discoveredLinks.bulkPut(this.discoveredLinks);
       }
-
-      const savedAlerts = await telegramDb.monitorAlerts.reverse().toArray();
-      if (savedAlerts && savedAlerts.length > 0) {
-        this.monitorAlerts = savedAlerts;
-      }
-
-      // Load monitor config from localStorage
-      const storedMonitorCfg = localStorage.getItem('tg_monitor_config_v2');
-      if (storedMonitorCfg) {
-        try {
-          this.monitorConfig = { ...this.monitorConfig, ...JSON.parse(storedMonitorCfg) };
-        } catch {}
-      }
-
       this.notifyStateChange();
     } catch (err) {
       console.warn('[Dexie Storage] Failed to load from IndexedDB, using in-memory state:', err);
@@ -240,8 +250,8 @@ export class NotificationsService {
       }
 
       if (params.protectionMode === 'salam') {
-        // Salam mechanism: simulate greeting first
-        preparedText = 'السلام عليكم ورحمة الله وبركاته\n' + preparedText;
+        // Salam mechanism: simulate first greeting then editing
+        preparedText = 'السلام عليكم ورحمة الله وبركاته';
       }
 
       try {
@@ -251,21 +261,6 @@ export class NotificationsService {
           message: preparedText,
           random_id: Math.floor(Math.random() * 1000000),
         });
-
-        // Broadcast to TelegramContext to update UI state
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('tg_send_batch_message', {
-              detail: {
-                chatId: target.id,
-                chatTitle: target.title,
-                text: preparedText,
-                mediaUrl: params.images[0],
-                messageId: target.messageId,
-              },
-            })
-          );
-        }
 
         if (params.onMessageCreated) {
           params.onMessageCreated(target.id, preparedText, params.images[0]);
@@ -312,74 +307,14 @@ export class NotificationsService {
     this.batchLogs.unshift(newBatchLog);
     telegramDb.myMessageBatches.put(newBatchLog).catch(() => {});
 
-    // Set up recurring scheduler if requested
-    if (params.isScheduled && (params.intervalMinutes || 15) > 0) {
-      const intervalMs = (params.intervalMinutes || 15) * 60 * 1000;
-      const timerId = window.setInterval(async () => {
-        console.log(`[Scheduled Sender] Running scheduled batch ${batchId}...`);
-        for (const target of targetObjs) {
-          try {
-            await connectionsManager.sendRequest({
-              _: 'TL_messages_sendMessage',
-              peer_id: target.id,
-              message: params.text,
-              random_id: Math.floor(Math.random() * 1000000),
-            });
-            window.dispatchEvent(
-              new CustomEvent('tg_send_batch_message', {
-                detail: {
-                  chatId: target.id,
-                  chatTitle: target.title,
-                  text: params.text,
-                  mediaUrl: params.images[0],
-                  messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-                },
-              })
-            );
-          } catch (_) {}
-        }
-        notificationsController.postNotification({
-          category: 'message',
-          title: '🔄 تنفيذ الجدولة الدورية للدفعة',
-          body: `تم إرسال الحملة إلى ${targetObjs.length} محادثة بنجاح`,
-        });
-      }, intervalMs);
-
-      this.schedulerTimers.set(batchId, timerId);
-
-      // Handle duration expiration if durationHours > 0
-      if (params.durationHours && params.durationHours > 0) {
-        setTimeout(() => {
-          this.cancelScheduledBatch(batchId);
-        }, params.durationHours * 60 * 60 * 1000);
-      }
-    }
-
     notificationsController.postNotification({
       category: 'message',
-      title: params.isScheduled ? '⏳ تم تفعيل الجدولة الدورية بنجاح' : 'اكتمال دفعة الإرسال بنجاح 🚀',
-      body: params.isScheduled
-        ? `سيتم الإرسال كل ${params.intervalMinutes || 15} دقيقة إلى ${targetObjs.length} محادثة`
-        : `تم إرسال الرسالة إلى ${successCount} مجموعة (${failedCount} فشل)`,
+      title: 'اكتمال دفعة الإرسال بنجاح 🚀',
+      body: `تم إرسال الرسالة إلى ${successCount} مجموعة (${failedCount} فشل)`,
     });
 
     this.notifyStateChange();
     return batch;
-  }
-
-  public cancelScheduledBatch(batchId: string): boolean {
-    const timerId = this.schedulerTimers.get(batchId);
-    if (timerId) {
-      clearInterval(timerId);
-      this.schedulerTimers.delete(batchId);
-    }
-    const found = this.activeSenderBatches.find((b) => b.id === batchId);
-    if (found) {
-      found.status = 'paused';
-      this.notifyStateChange();
-      return true;
-    }
-    return false;
   }
 
   // ==========================================
@@ -387,9 +322,6 @@ export class NotificationsService {
   // ==========================================
   public setMonitorConfig(config: Partial<MonitorConfig>) {
     this.monitorConfig = { ...this.monitorConfig, ...config };
-    try {
-      localStorage.setItem('tg_monitor_config_v2', JSON.stringify(this.monitorConfig));
-    } catch {}
     this.notifyStateChange();
   }
 
@@ -403,7 +335,6 @@ export class NotificationsService {
 
   public clearMonitorAlerts() {
     this.monitorAlerts = [];
-    telegramDb.monitorAlerts.clear().catch(() => {});
     this.notifyStateChange();
   }
 
@@ -434,18 +365,6 @@ export class NotificationsService {
       });
     }
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('tg_batch_edited', {
-          detail: {
-            batchId,
-            newText,
-            targets: batch.targets,
-          },
-        })
-      );
-    }
-
     notificationsController.postNotification({
       category: 'message',
       title: 'تم تعديل الدفعة بنجاح ✏️',
@@ -470,17 +389,6 @@ export class NotificationsService {
         id: target.messageId,
         revoke: true,
       });
-    }
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('tg_batch_deleted', {
-          detail: {
-            batchId,
-            targets: batch.targets,
-          },
-        })
-      );
     }
 
     this.batchLogs.splice(idx, 1);
@@ -524,10 +432,6 @@ export class NotificationsService {
       // Short delay between joins to respect MTProto flood control
       await new Promise((res) => setTimeout(res, 1200));
 
-      let chatTitle = 'مجموعة منضمة حديثاً';
-      let username = '';
-      let isSuccess = false;
-
       if (task.type === 'private') {
         const hash = task.url.substring(task.url.lastIndexOf('/') + 1).replace('+', '');
         try {
@@ -536,41 +440,22 @@ export class NotificationsService {
             hash,
           });
           task.status = 'joined';
-          chatTitle = `قناة خاصة (${hash.slice(0, 8)})`;
-          isSuccess = true;
         } catch (e: any) {
           task.status = 'invalid';
           task.errorReason = e?.text || 'INVITE_HASH_EXPIRED';
         }
       } else {
-        username = task.url.substring(task.url.lastIndexOf('/') + 1).replace('@', '');
+        const username = task.url.substring(task.url.lastIndexOf('/') + 1).replace('@', '');
         try {
           await connectionsManager.sendRequest({
             _: 'TL_channels_joinChannel',
             channel: username,
           });
           task.status = 'joined';
-          chatTitle = username.replace(/_/g, ' ');
-          isSuccess = true;
         } catch (e: any) {
           task.status = 'invalid';
           task.errorReason = e?.text || 'CHANNEL_PRIVATE';
         }
-      }
-
-      // If joined successfully, trigger chat addition in TelegramContext
-      if (isSuccess && typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent('tg_chat_joined', {
-            detail: {
-              id: `joined_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-              title: chatTitle,
-              username: username ? `@${username}` : undefined,
-              type: task.type === 'private' ? 'channel' : 'group',
-              url: task.url,
-            },
-          })
-        );
       }
 
       task.processedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -751,8 +636,7 @@ export class NotificationsService {
   }
 
   public async manualJoinDiscoveredLink(linkId: string): Promise<boolean> {
-    const res = await backgroundSyncService.manualJoinDiscoveredLink(linkId);
-    return res.success;
+    return backgroundSyncService.manualJoinDiscoveredLink(linkId);
   }
 
   // ==========================================
@@ -779,18 +663,6 @@ export class NotificationsService {
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           };
           this.monitorAlerts.unshift(alert);
-          telegramDb.monitorAlerts.put(alert).catch(() => {});
-
-          // Forward to saved messages if enabled
-          if (this.monitorConfig.sendAlertsToSavedMessages && typeof window !== 'undefined') {
-            window.dispatchEvent(
-              new CustomEvent('tg_send_saved_message', {
-                detail: {
-                  text: `🚨 تنبيه رصد كلمة مفتاحية: [${kw}]\n📍 المصدر: ${chatTitle}\n👤 الكاتب: ${message.senderName || 'مستخدم'}\n💬 الرسالة: ${text}\n⏰ الوقت: ${alert.timestamp}`,
-                },
-              })
-            );
-          }
 
           // Construct DrKLO-compliant Intent metadata:
           // 1. chatId: dialog_id
@@ -802,10 +674,10 @@ export class NotificationsService {
             title: `🚨 كلمة مراقبة: [${kw}]`,
             body: `💬 الرسالة: ${text}\n📍 المصدر: ${chatTitle}`,
             avatar: message.senderAvatar,
-            chatId: String(message.chatId || ''),
+            chatId: message.chatId,
             chatTitle: chatTitle,
-            messageId: String(message.id),
-            senderId: message.senderId ? String(message.senderId) : (message.senderName ? `user_${message.senderName.replace(/\s+/g, '_')}` : undefined),
+            messageId: message.id,
+            senderId: message.senderId || (message.senderName ? `user_${message.senderName.replace(/\s+/g, '_')}` : undefined),
             senderName: message.senderName || 'مستخدم',
             senderUsername: message.senderUsername,
             keyword: kw,

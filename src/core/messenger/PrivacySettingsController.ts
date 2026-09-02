@@ -9,6 +9,7 @@
 import { TLRPC } from '../TLRPC';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { NotificationCenter } from '../NotificationCenter';
+import { MessagesController } from '../MessagesController';
 
 export type PrivacyTarget =
   | 'phone_number'
@@ -160,8 +161,26 @@ export class PrivacySettingsController {
     }
   }
 
-  public getTargetKeyMap(): Record<PrivacyTarget, TLRPC.PrivacyKey> {
-    return {
+  public getState(): PrivacySettingsState {
+    return { ...this.state };
+  }
+
+  /**
+   * Fetches privacy rules for a key (account.getPrivacy)
+   */
+  public async getPrivacy(target: PrivacyTarget): Promise<PrivacyOption> {
+    return this.state[target] || 'everybody';
+  }
+
+  /**
+   * Updates privacy rule for a key (account.setPrivacy)
+   */
+  public async setPrivacy(target: PrivacyTarget, option: PrivacyOption): Promise<boolean> {
+    this.state[target] = option;
+    this.saveState();
+
+    const conn = ConnectionsManager.getInstance(this.currentAccount);
+    const keyMap: Record<PrivacyTarget, TLRPC.PrivacyKey> = {
       phone_number: { _: 'privacyKeyPhoneNumber' },
       last_seen: { _: 'privacyKeyStatusTimestamp' },
       profile_photos: { _: 'privacyKeyProfilePhoto' },
@@ -170,88 +189,6 @@ export class PrivacySettingsController {
       voice_messages: { _: 'privacyKeyVoiceMessages' },
       bio: { _: 'privacyKeyStatusTimestamp' },
     };
-  }
-
-  public getState(): PrivacySettingsState {
-    return { ...this.state };
-  }
-
-  /**
-   * Fetches privacy rules for a key via TLRPC.TL_account_getPrivacy
-   */
-  public async loadPrivacy(target: PrivacyTarget): Promise<PrivacyOption> {
-    const conn = ConnectionsManager.getInstance(this.currentAccount);
-    const keyMap = this.getTargetKeyMap();
-    const privacyKey = keyMap[target] || { _: 'privacyKeyStatusTimestamp' };
-
-    const req: TLRPC.TL_account_getPrivacy = {
-      _: 'account.getPrivacy',
-      key: privacyKey,
-    };
-
-    try {
-      const res = await conn.sendRequest<TLRPC.TL_account_privacyRules>(req);
-      if (res && res.rules) {
-        let option: PrivacyOption = 'everybody';
-        for (const rule of res.rules) {
-          if (rule._ === 'privacyValueDisallowAll') {
-            option = 'nobody';
-            break;
-          } else if (rule._ === 'privacyValueAllowContacts') {
-            option = 'contacts';
-          } else if (rule._ === 'privacyValueAllowAll') {
-            option = 'everybody';
-          }
-        }
-        this.state[target] = option;
-        this.saveState();
-
-        const notifCenter = NotificationCenter.getInstance(this.currentAccount);
-        notifCenter.postNotificationName(NotificationCenter.privacyRulesUpdated, target, option);
-        notifCenter.postNotificationName(NotificationCenter.updateInterfaces, 0x0008);
-        return option;
-      }
-    } catch (e) {
-      console.warn(`[PrivacySettingsController ${this.currentAccount}] Failed to load privacy for ${target}:`, e);
-    }
-
-    return this.state[target] || 'everybody';
-  }
-
-  /**
-   * Synchronizes all privacy settings for this account instance
-   */
-  public async loadAllPrivacyRules(): Promise<PrivacySettingsState> {
-    const targets: PrivacyTarget[] = [
-      'phone_number',
-      'last_seen',
-      'profile_photos',
-      'forwards',
-      'calls',
-      'voice_messages',
-      'bio',
-    ];
-
-    await Promise.all(targets.map((target) => this.loadPrivacy(target)));
-    return this.getState();
-  }
-
-  /**
-   * Gets cached or fresh privacy rule
-   */
-  public async getPrivacy(target: PrivacyTarget): Promise<PrivacyOption> {
-    return this.state[target] || 'everybody';
-  }
-
-  /**
-   * Updates privacy rule for a key via TLRPC.TL_account_setPrivacy
-   */
-  public async setPrivacy(target: PrivacyTarget, option: PrivacyOption): Promise<boolean> {
-    this.state[target] = option;
-    this.saveState();
-
-    const conn = ConnectionsManager.getInstance(this.currentAccount);
-    const keyMap = this.getTargetKeyMap();
 
     const rule: TLRPC.PrivacyRule =
       option === 'everybody'
@@ -260,17 +197,21 @@ export class PrivacySettingsController {
         ? { _: 'privacyValueAllowContacts' }
         : { _: 'privacyValueDisallowAll' };
 
-    const req: TLRPC.TL_account_setPrivacy = {
+    const req: any = {
       _: 'account.setPrivacy',
       key: keyMap[target],
       rules: [rule],
     };
 
-    await conn.sendRequest(req);
+    const res = await conn.sendRequest<any>(req);
+    if (res) {
+      MessagesController.getInstance(this.currentAccount).processUpdates(res, false);
+    }
 
-    const notifCenter = NotificationCenter.getInstance(this.currentAccount);
-    notifCenter.postNotificationName(NotificationCenter.privacyRulesUpdated, target, option);
-    notifCenter.postNotificationName(NotificationCenter.updateInterfaces, 0x0008);
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.updateInterfaces,
+      0x0008
+    );
 
     return true;
   }
@@ -280,7 +221,7 @@ export class PrivacySettingsController {
    */
   public async loadAuthorizations(): Promise<TLRPC.TL_authorization[]> {
     const conn = ConnectionsManager.getInstance(this.currentAccount);
-    const req: TLRPC.TL_account_getAuthorizations = {
+    const req: any = {
       _: 'account.getAuthorizations',
     };
 
@@ -298,7 +239,7 @@ export class PrivacySettingsController {
    */
   public async terminateSession(hash: number | string): Promise<boolean> {
     const conn = ConnectionsManager.getInstance(this.currentAccount);
-    const req: TLRPC.TL_account_resetAuthorization = {
+    const req: any = {
       _: 'account.resetAuthorization',
       hash,
     };

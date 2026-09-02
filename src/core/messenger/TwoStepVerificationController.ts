@@ -9,7 +9,7 @@ import { TLRPC } from '../TLRPC';
 import { SRPHelper } from './SRPHelper';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { NotificationCenter } from '../NotificationCenter';
-import { UserConfig } from './UserConfig';
+import { MessagesController } from '../MessagesController';
 
 export interface TwoStepState {
   hasPassword: boolean;
@@ -63,10 +63,6 @@ export class TwoStepVerificationController {
   private saveState() {
     try {
       localStorage.setItem(`${STORAGE_KEY_2FA}${this.currentAccount}`, JSON.stringify(this.state));
-      const userConfig = UserConfig.getInstance(this.currentAccount);
-      userConfig.has2FA = this.state.hasPassword;
-      userConfig.hint2FA = this.state.hint;
-      userConfig.saveConfig();
     } catch {
       // ignore
     }
@@ -78,11 +74,11 @@ export class TwoStepVerificationController {
 
   /**
    * Fetches current 2FA password settings from server:
-   * account.getPassword (TLRPC.TL_account_getPassword)
+   * account.getPassword
    */
   public async getPassword(): Promise<TLRPC.TL_account_password> {
     const conn = ConnectionsManager.getInstance(this.currentAccount);
-    const req: TLRPC.TL_account_getPassword = {
+    const req: any = {
       _: 'account.getPassword',
     };
 
@@ -97,17 +93,9 @@ export class TwoStepVerificationController {
       this.state.unconfirmedEmail = res.email_unconfirmed_pattern;
       this.state.pendingResetDate = res.pending_reset_date;
       this.saveState();
-
-      const notifCenter = NotificationCenter.getInstance(this.currentAccount);
-      notifCenter.postNotificationName(NotificationCenter.twoStepStateChanged, this.state);
-      notifCenter.postNotificationName(NotificationCenter.updateInterfaces, 0x0008);
     }
 
     return res;
-  }
-
-  public async syncPasswordSettings(): Promise<TLRPC.TL_account_password> {
-    return this.getPassword();
   }
 
   /**
@@ -143,7 +131,7 @@ export class TwoStepVerificationController {
     if (params.hint !== undefined) flags |= 2; // has hint
     if (params.email !== undefined) flags |= 4; // has email
 
-    const req: TLRPC.TL_account_updatePasswordSettings = {
+    const req: any = {
       _: 'account.updatePasswordSettings',
       password: params.currentPassword ? { hash: params.currentPassword } : undefined,
       new_settings: {
@@ -156,7 +144,10 @@ export class TwoStepVerificationController {
       },
     };
 
-    await conn.sendRequest(req);
+    const res = await conn.sendRequest<any>(req);
+    if (res) {
+      MessagesController.getInstance(this.currentAccount).processUpdates(res, false);
+    }
 
     // If new password is empty -> removed
     if (params.newPassword === '' || params.newPassword === null) {

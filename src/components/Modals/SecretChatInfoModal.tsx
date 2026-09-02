@@ -22,7 +22,7 @@ export const SecretChatInfoModal: React.FC = () => {
 
   const handleUpdateTTL = (seconds: number) => {
     setSelectedTTL(seconds);
-    telegramE2EE.setTTL(String(activeChat.id), seconds);
+    telegramE2EE.setTTL(activeChat.id, seconds);
     showToast(
       seconds > 0
         ? `تم ضبط مؤقت التدمير الذاتي على ${seconds} ثانية ⏳`

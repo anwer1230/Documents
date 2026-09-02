@@ -27,6 +27,8 @@ export { messagesController, MessagesController } from '../MessagesController';
 export { notificationCenter, NotificationCenter } from '../NotificationCenter';
 export { messagesStorage, MessagesStorage } from '../MessagesStorage';
 export { MessageObject, type MessageEntity } from '../MessageObject';
+export { UserObject } from '../UserObject';
+export { ChatObject } from '../ChatObject';
 export { OpenTelegramLink } from '../OpenTelegramLink';
 export { AndroidUtilities } from '../AndroidUtilities';
 export { themeController, ThemeController } from '../ThemeController';

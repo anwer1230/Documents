@@ -22,9 +22,7 @@ export type NotificationEventName =
   | 'notificationsCountUpdated'
   | 'didUpdateConnectionState'
   | 'messageReceivedByAck'
-  | 'dialogsNeedReload'
-  | 'appDidLogout'
-  | 'sessionRevoked';
+  | 'dialogsNeedReload';
 
 export interface NotificationObserver {
   (eventName: NotificationEventName, ...args: any[]): void;
@@ -141,10 +139,10 @@ export class NotificationEngine {
             category: 'message',
             title: msg.senderName || 'رسالة جديدة',
             body: msg.text || (msg.media ? `[${msg.media.type}]` : 'رسالة جديدة'),
-            chatId: String(msg.chatId),
+            chatId: msg.chatId,
             senderName: msg.senderName,
             avatar: msg.senderAvatar,
-            messageId: String(msg.id),
+            messageId: msg.id,
             replyAction: true,
           });
         }
@@ -236,11 +234,11 @@ export class NotificationEngine {
       title: notif.title,
       body: notif.body,
       avatar: notif.avatar,
-      chatId: String(notif.chatId),
+      chatId: notif.chatId,
       chatTitle: notif.chatTitle,
       chatUsername: notif.chatUsername,
-      messageId: notif.messageId ? String(notif.messageId) : undefined,
-      senderId: notif.senderId ? String(notif.senderId) : undefined,
+      messageId: notif.messageId,
+      senderId: notif.senderId,
       senderName: notif.senderName,
       senderUsername: notif.senderUsername,
       keyword: notif.keyword,
@@ -256,14 +254,14 @@ export class NotificationEngine {
           body: notif.body,
           icon: notif.avatar || '/favicon.ico',
           badge: '/favicon.ico',
-          tag: String(notif.chatId || 'tg_notification'),
+          tag: notif.chatId || 'tg_notification',
           silent: shouldSilence,
         });
 
         osNotif.onclick = () => {
           window.focus();
           if (notif.chatId) {
-            this.handleNotificationClick(String(notif.id));
+            this.handleNotificationClick(notif.id);
           }
           osNotif.close();
         };
@@ -277,7 +275,7 @@ export class NotificationEngine {
 
     // Auto-dismiss after 5 seconds
     setTimeout(() => {
-      this.dismissNotification(String(notif.id));
+      this.dismissNotification(notif.id);
     }, 5000);
 
     return notif;
@@ -290,13 +288,13 @@ export class NotificationEngine {
    * - Invokes navigationHandler to activate the ChatView thread immediately
    */
   public handleNotificationClick(notificationId: string): void {
-    const target = this.activeNotifications.find((n) => String(n.id) === notificationId);
+    const target = this.activeNotifications.find((n) => n.id === notificationId);
     if (!target) return;
 
     this.dismissNotification(notificationId);
 
     if (target.chatId && this.navigationHandler) {
-      this.navigationHandler(String(target.chatId));
+      this.navigationHandler(target.chatId);
     }
   }
 
@@ -304,14 +302,14 @@ export class NotificationEngine {
    * Handles quick reply action from in-app notification banner
    */
   public handleNotificationReply(notificationId: string): void {
-    const target = this.activeNotifications.find((n) => String(n.id) === notificationId);
+    const target = this.activeNotifications.find((n) => n.id === notificationId);
     if (!target) return;
 
     this.dismissNotification(notificationId);
 
     if (target.chatId && this.navigationHandler) {
-      this.navigationHandler(String(target.chatId), {
-        messageId: String(target.id),
+      this.navigationHandler(target.chatId, {
+        messageId: target.id,
         senderName: target.senderName || target.title,
         textSnippet: target.body,
       });
@@ -322,7 +320,7 @@ export class NotificationEngine {
    * Dismisses an in-app notification banner by ID
    */
   public dismissNotification(notificationId: string): void {
-    const next = this.activeNotifications.filter((n) => String(n.id) !== notificationId);
+    const next = this.activeNotifications.filter((n) => n.id !== notificationId);
     if (next.length !== this.activeNotifications.length) {
       this.activeNotifications = next;
       this.notifyListeners();

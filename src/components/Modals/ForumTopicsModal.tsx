@@ -6,7 +6,7 @@ export const ForumTopicsModal: React.FC = () => {
   const { activeModal, setActiveModal, activeChat, settings } = useTelegram();
   const isArabic = settings.language === 'ar';
 
-  if ((activeModal as any) !== 'forum-topics') return null;
+  if (activeModal !== 'forum-topics') return null;
 
   const topics = [
     { id: 1, title: isArabic ? 'العام والنقاشات' : 'General & Discussions', count: 142, icon: '💬', pinned: true },

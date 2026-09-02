@@ -18,6 +18,7 @@ import {
   Laptop,
   BatteryCharging,
   Globe,
+  Radio,
   Star,
   Store,
   Gift,
@@ -38,7 +39,6 @@ import {
   Menu,
   Lock,
   LayoutGrid,
-  Send,
   Download,
   Sliders,
   Clock,
@@ -55,6 +55,15 @@ import {
   Eye,
   SlidersHorizontal,
   CheckCheck,
+  Hash,
+  Image,
+  Cloud,
+  Layers,
+  Zap,
+  Wifi,
+  ChevronLeft,
+  ChevronRight,
+  Upload,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
@@ -73,20 +82,33 @@ import {
   PrivacyTarget,
 } from '../../core/messenger/PrivacySettingsController';
 import {
-  PlusSettingsMainView,
-  PlusGeneralView,
-  PlusChatsView,
-  PlusStoriesView,
-  PlusMessagesView,
-  PlusTopicsView,
-  PlusDrawerView,
-  PlusProfileView,
-  PlusNotificationsView,
-  PlusPrivacyView,
-  PlusMediaView,
-  PlusDownloadsView,
-  PlusAdsView,
-} from './PlusSettingsViews';
+  StoriesSettingsView,
+  MessagesSettingsView,
+  TopicsSettingsView,
+  SharedMediaView,
+  AdsSettingsView,
+  BackupRestoreView,
+} from './ExtendedSettingsViews';
+import {
+  GeneralPlusSettingsView,
+  ChatsPlusSettingsView,
+  StoriesPlusSettingsView,
+  MessagesPlusSettingsView,
+  TopicsPlusSettingsView,
+  NavigationDrawerPlusSettingsView,
+  ProfilePlusSettingsView,
+  NotificationsPlusSettingsView,
+  PrivacySecurityPlusSettingsView,
+  SharedMediaPlusSettingsView,
+  DownloadsPlusSettingsView,
+  AdsPlusSettingsView,
+} from './PlusSettingsSubViews';
+import { FcmDiagnosticsView } from './FcmDiagnosticsView';
+import { GiftAuctionsView } from './GiftAuctionsView';
+import { ChannelBoostsView } from './ChannelBoostsView';
+import { MemberRequestsView } from './MemberRequestsView';
+import { CacheByChatsView } from './CacheByChatsView';
+import { AppUpdateSettingsView } from './AppUpdateSettingsView';
 
 export const SettingsModal: React.FC = () => {
   const {
@@ -174,23 +196,47 @@ export const SettingsModal: React.FC = () => {
 
                 {settingsSubPage === 'account' && <AccountEditView onBack={goBack} />}
                 {settingsSubPage === 'plus_settings' && (
-                  <PlusSettingsMainView
-                    onNavigate={(page) => setSettingsSubPage(page)}
+                  <PlusSettingsView
                     onBack={goBack}
+                    onNavigate={(page) => setSettingsSubPage(page)}
                   />
                 )}
-                {settingsSubPage === 'plus_general' && <PlusGeneralView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_chats' && <PlusChatsView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_stories' && <PlusStoriesView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_messages' && <PlusMessagesView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_topics' && <PlusTopicsView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_drawer' && <PlusDrawerView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_profile' && <PlusProfileView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_notifications' && <PlusNotificationsView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_privacy' && <PlusPrivacyView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_media' && <PlusMediaView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_downloads' && <PlusDownloadsView onBack={() => setSettingsSubPage('plus_settings')} />}
-                {settingsSubPage === 'plus_ads' && <PlusAdsView onBack={() => setSettingsSubPage('plus_settings')} />}
+                {settingsSubPage === 'plus_general' && (
+                  <GeneralPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_chats' && (
+                  <ChatsPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_stories' && (
+                  <StoriesPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_messages' && (
+                  <MessagesPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_topics' && (
+                  <TopicsPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_drawer' && (
+                  <NavigationDrawerPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_profile' && (
+                  <ProfilePlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_notifications' && (
+                  <NotificationsPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_privacy' && (
+                  <PrivacySecurityPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_shared_media' && (
+                  <SharedMediaPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_downloads' && (
+                  <DownloadsPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
+                {settingsSubPage === 'plus_ads' && (
+                  <AdsPlusSettingsView onBack={() => setSettingsSubPage('plus_settings')} />
+                )}
                 {settingsSubPage === 'theme_coloring' && <ThemeColoringView onBack={goBack} />}
                 {settingsSubPage === 'chat_settings' && <ChatSettingsView onBack={goBack} />}
                 {settingsSubPage === 'privacy_security' && (
@@ -233,6 +279,18 @@ export const SettingsModal: React.FC = () => {
                 {settingsSubPage === 'support_group' && <SupportGroupView onBack={goBack} />}
                 {settingsSubPage === 'faq' && <FaqView onBack={goBack} />}
                 {settingsSubPage === 'features' && <FeaturesView onBack={goBack} />}
+                {settingsSubPage === 'stories' && <StoriesSettingsView onBack={goBack} />}
+                {settingsSubPage === 'messages' && <MessagesSettingsView onBack={goBack} />}
+                {settingsSubPage === 'topics' && <TopicsSettingsView onBack={goBack} />}
+                {settingsSubPage === 'shared_media' && <SharedMediaView onBack={goBack} />}
+                {settingsSubPage === 'ads_settings' && <AdsSettingsView onBack={goBack} />}
+                {settingsSubPage === 'backup_restore' && <BackupRestoreView onBack={goBack} />}
+                {settingsSubPage === 'fcm_diagnostics' && <FcmDiagnosticsView onBack={goBack} />}
+                {settingsSubPage === 'gift_auctions' && <GiftAuctionsView onBack={goBack} />}
+                {settingsSubPage === 'channel_boosts' && <ChannelBoostsView onBack={goBack} />}
+                {settingsSubPage === 'member_requests' && <MemberRequestsView onBack={goBack} />}
+                {settingsSubPage === 'cache_by_chats' && <CacheByChatsView onBack={goBack} />}
+                {settingsSubPage === 'app_update' && <AppUpdateSettingsView onBack={goBack} />}
               </motion.div>
             </AnimatePresence>
           </motion.div>
@@ -424,9 +482,16 @@ const MainSettingsView: React.FC<{
           <SettingsListItem
             icon={<User className="w-5 h-5 text-blue-400" />}
             iconBg="bg-blue-500/20"
-            title={isArabic ? 'الحساب' : 'Account'}
+            title={isArabic ? 'الملف الشخصي والحساب' : 'Profile & Account'}
             subtitle={isArabic ? 'الرقم، اسم المستخدم، النبذة' : 'Phone, Username, Bio'}
             onClick={() => onNavigate('account')}
+          />
+          <SettingsListItem
+            icon={<Camera className="w-5 h-5 text-rose-400" />}
+            iconBg="bg-rose-500/20"
+            title={isArabic ? 'القصص' : 'Stories'}
+            subtitle={isArabic ? 'الدقة، وضع التخفي، الخصوصية' : 'Resolution, Stealth mode, Privacy'}
+            onClick={() => onNavigate('stories')}
           />
           <SettingsListItem
             icon={<MessageSquare className="w-5 h-5 text-amber-400" />}
@@ -436,25 +501,113 @@ const MainSettingsView: React.FC<{
             onClick={() => onNavigate('chat_settings')}
           />
           <SettingsListItem
+            icon={<Sliders className="w-5 h-5 text-indigo-400" />}
+            iconBg="bg-indigo-500/20"
+            title={isArabic ? 'الرسائل' : 'Messages'}
+            subtitle={isArabic ? 'فقاعات الرسائل، حجم الخط، زوايا العرض' : 'Message bubbles, Font size, Corner radius'}
+            onClick={() => onNavigate('messages')}
+          />
+          <SettingsListItem
+            icon={<Hash className="w-5 h-5 text-cyan-400" />}
+            iconBg="bg-cyan-500/20"
+            title={isArabic ? 'المواضيع والمنتديات' : 'Forum Topics'}
+            subtitle={isArabic ? 'تنظيم المنتديات، الأقسام، والمواضيع' : 'Topics layout, Tabs and threads'}
+            onClick={() => onNavigate('topics')}
+          />
+          <SettingsListItem
             icon={<ShieldCheck className="w-5 h-5 text-emerald-400" />}
             iconBg="bg-emerald-500/20"
             title={isArabic ? 'الخصوصية والأمان' : 'Privacy and Security'}
-            subtitle={isArabic ? 'آخر ظهور، الأجهزة، مفاتيح المرور' : 'Last Seen, Devices, Passkeys'}
+            subtitle={isArabic ? 'التحقق بخطوتين، آخر ظهور، الجلسات، مفاتيح المرور' : '2FA, Last Seen, Devices, Passkeys'}
             onClick={() => onNavigate('privacy_security')}
           />
           <SettingsListItem
-            icon={<Bell className="w-5 h-5 text-rose-400" />}
-            iconBg="bg-rose-500/20"
-            title={isArabic ? 'الإشعارات' : 'Notifications and Sounds'}
+            icon={<Bell className="w-5 h-5 text-pink-400" />}
+            iconBg="bg-pink-500/20"
+            title={isArabic ? 'الإشعارات والأصوات' : 'Notifications and Sounds'}
             subtitle={isArabic ? 'الأصوات، المكالمات، الشارات' : 'Sounds, Calls, Badges'}
             onClick={() => onNavigate('notifications_sounds')}
           />
           <SettingsListItem
+            icon={<Radio className="w-5 h-5 text-emerald-400 animate-pulse" />}
+            iconBg="bg-emerald-500/20"
+            title={isArabic ? 'تشخيص الإشعارات و FCM' : 'FCM Push Diagnostics'}
+            subtitle={isArabic ? 'مراقبة حزم Push، ربط الجلسة، وتوجيه dialog_id' : 'Push packet logs, dialog_id routing & status'}
+            onClick={() => onNavigate('fcm_diagnostics')}
+          />
+        </div>
+
+        {/* Native Controllers & New Features (TMessagesProj) */}
+        <div className="py-2 bg-[#17212b]">
+          <div className="px-4 py-1.5 text-[11px] font-bold text-[#5288c1] uppercase tracking-wider">
+            {isArabic ? 'متحكمات تيليجرام الأصلية (TMessagesProj Subsystem)' : 'Native Telegram Subsystem'}
+          </div>
+
+          <SettingsListItem
+            icon={<Gift className="w-5 h-5 text-amber-400" />}
+            iconBg="bg-amber-500/20"
+            title={isArabic ? 'مزادات هدايا النجوم (Star Gift Auctions)' : 'Star Gift Auctions'}
+            subtitle={isArabic ? 'المزادات الحية، المقتنيات الفريدة، والمزايدات' : 'Live auctions, unique gifts, bidding'}
+            onClick={() => onNavigate('gift_auctions')}
+          />
+          <SettingsListItem
+            icon={<Zap className="w-5 h-5 text-yellow-400" />}
+            iconBg="bg-yellow-500/20"
+            title={isArabic ? 'تعزيز القنوات (Channel Boosts)' : 'Channel Boosts & Perks'}
+            subtitle={isArabic ? 'إدارة مستوى التعزيز ومميزات القصص الحصرية' : 'Level perks, story unlocks, boost links'}
+            onClick={() => onNavigate('channel_boosts')}
+          />
+          <SettingsListItem
+            icon={<UserPlus className="w-5 h-5 text-emerald-400" />}
+            iconBg="bg-emerald-500/20"
+            title={isArabic ? 'طلبات الانضمام المعلقة (Member Requests)' : 'Pending Member Requests'}
+            subtitle={isArabic ? 'مراجعة وقبول طلبات انضمام القنوات والمجموعات' : 'Review & approve join requests'}
+            onClick={() => onNavigate('member_requests')}
+          />
+          <SettingsListItem
+            icon={<HardDrive className="w-5 h-5 text-cyan-400" />}
+            iconBg="bg-cyan-500/20"
+            title={isArabic ? 'إدارة التخزين المؤقت للمحادثات (Cache by Chats)' : 'Cache by Chats'}
+            subtitle={isArabic ? 'حذف وسائط كل محادثة بشكل منفصل لتوفير الذاكرة' : 'Clear media & cache per individual chat'}
+            onClick={() => onNavigate('cache_by_chats')}
+          />
+          <SettingsListItem
+            icon={<Download className="w-5 h-5 text-blue-400 animate-pulse" />}
+            iconBg="bg-blue-500/20"
+            title={isArabic ? 'تحديث التطبيق (App Updates & OTA)' : 'App Updates & OTA (BuildVars)'}
+            subtitle={isArabic ? 'فحص الإصدارات الجديدة، سجل التغييرات، والتحديث التلقائي' : 'Check for updates, release notes & changelog'}
+            onClick={() => onNavigate('app_update')}
+          />
+        </div>
+
+        <div className="py-2 bg-[#17212b]">
+          <SettingsListItem
+            icon={<Image className="w-5 h-5 text-teal-400" />}
+            iconBg="bg-teal-500/20"
+            title={isArabic ? 'الوسائط المشتركة' : 'Shared Media'}
+            subtitle={isArabic ? 'الصور، الفيديو، الملفات، والصوتيات' : 'Photos, Videos, Files and Audio'}
+            onClick={() => onNavigate('shared_media')}
+          />
+          <SettingsListItem
             icon={<PieChart className="w-5 h-5 text-sky-400" />}
             iconBg="bg-sky-500/20"
-            title={isArabic ? 'البيانات والتخزين' : 'Data and Storage'}
-            subtitle={isArabic ? 'إعدادات تنزيل الوسائط' : 'Network usage, Auto-download media'}
+            title={isArabic ? 'التنزيل والتخزين' : 'Data and Storage'}
+            subtitle={isArabic ? 'إعدادات التنزيل التلقائي والشبكة' : 'Network usage, Auto-download media'}
             onClick={() => onNavigate('data_storage')}
+          />
+          <SettingsListItem
+            icon={<Megaphone className="w-5 h-5 text-purple-400" />}
+            iconBg="bg-purple-500/20"
+            title={isArabic ? 'الإعلانات المدعومة' : 'Sponsored Messages'}
+            subtitle={isArabic ? 'الرسائل الترويجية وإعلانات القنوات' : 'Promoted posts in public channels'}
+            onClick={() => onNavigate('ads_settings')}
+          />
+          <SettingsListItem
+            icon={<Cloud className="w-5 h-5 text-emerald-400" />}
+            iconBg="bg-emerald-500/20"
+            title={isArabic ? 'حفظ واستعادة الإعدادات' : 'Backup & Restore'}
+            subtitle={isArabic ? 'المزامنة السحابية الشاملة للإعدادات' : 'Cloud sync and settings backup'}
+            onClick={() => onNavigate('backup_restore')}
           />
           <SettingsListItem
             icon={<Folder className="w-5 h-5 text-cyan-400" />}
@@ -466,8 +619,8 @@ const MainSettingsView: React.FC<{
           <SettingsListItem
             icon={<Laptop className="w-5 h-5 text-teal-400" />}
             iconBg="bg-teal-500/20"
-            title={isArabic ? 'الأجهزة' : 'Devices'}
-            subtitle={isArabic ? 'إدارة الأجهزة المتصلة' : 'Manage linked sessions & desktop'}
+            title={isArabic ? 'الأجهزة والجلسات' : 'Devices & Sessions'}
+            subtitle={isArabic ? 'إدارة الأجهزة المتصلة والجلسات النشطة' : 'Manage linked sessions & desktop'}
             onClick={() => onNavigate('devices')}
           />
           <SettingsListItem
@@ -565,35 +718,29 @@ const MainSettingsView: React.FC<{
 
         {/* Version & Developer Footer */}
         <div className="p-4 bg-[#17212b] text-center text-xs text-gray-400 space-y-2 border-t border-white/5">
-          <div className="flex items-center justify-center gap-3">
-            {/* Icon with Animated Moving Colors */}
-            <div className="relative w-8 h-8 rounded-full p-[2px] animate-tg-gradient-icon flex items-center justify-center shrink-0 shadow-md">
-              <div className="w-full h-full bg-[#17212b] rounded-full flex items-center justify-center">
-                <Send className="w-4 h-4 text-sky-400 -rotate-45 -translate-y-0.5 translate-x-0.5 transition-transform" />
-              </div>
+          <div>
+            <div className="font-semibold text-gray-300">
+              {isArabic ? 'تيليجرام للأندرويد' : 'Telegram for Android'}
             </div>
-
-            <div className="text-start">
-              <div className="font-semibold text-gray-200 text-sm">
-                Telegram_anwer saif (DrKLO Official Build)
-              </div>
-              <div className="font-mono text-[12px] text-emerald-400 font-bold" dir="ltr">
-                <a href="tel:+966510349663" className="hover:underline flex items-center gap-1">
-                  <span>📞</span> +966510349663
-                </a>
-              </div>
+            <div className="font-mono text-[11px] text-gray-500">
+              v12.9.2.0 (2246) universal arm64-v8a
             </div>
           </div>
 
           <div className="pt-2 border-t border-white/5 space-y-1 text-center">
             <div className="text-xs font-semibold text-[#5288c1]">
-              {isArabic ? 'المطور:' : 'Developer:'} <span className="text-gray-200">انور سيف (Anwer Saif)</span>
+              {isArabic ? 'المطور:' : 'Developer:'} <span className="text-gray-200">انور فواد محمد علي سيف</span>
             </div>
-            <div className="flex items-center justify-center gap-3 text-[11px] font-mono text-gray-400" dir="ltr">
-              <span className="text-gray-500">v12.9.2.0 (2246) universal</span>
+            <div className="text-[10px] text-gray-400 font-mono">
+              Anwer Foud Mohammed Ali Saif
+            </div>
+            <div className="flex items-center justify-center gap-3 text-[11px] font-mono text-emerald-400" dir="ltr">
+              <a href="tel:+967772997043" className="hover:underline flex items-center gap-1">
+                <span>📞</span> +967 772 997 043
+              </a>
               <span>•</span>
-              <a href="tel:+967772997043" className="hover:underline text-gray-400 hover:text-emerald-400">
-                +967 772 997 043
+              <a href="tel:+966562570935" className="hover:underline flex items-center gap-1">
+                <span>📞</span> +966 562 570 935
               </a>
             </div>
           </div>
@@ -816,6 +963,208 @@ const AccountEditView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 };
 
 // ==========================================
+// 3. PLUS SETTINGS VIEW (Screenshot 3 - Full Functional Binding)
+// ==========================================
+const PlusSettingsView: React.FC<{
+  onBack: () => void;
+  onNavigate: (page: SettingsSubPage) => void;
+}> = ({ onBack, onNavigate }) => {
+  const { settings, updateSettings, showToast, accounts } = useTelegram();
+  const isArabic = settings.language === 'ar';
+  const NextIcon = isArabic ? ChevronLeft : ChevronRight;
+
+  const items: { title: string; subtitle: string; page: SettingsSubPage; icon: React.ReactNode }[] = [
+    {
+      title: isArabic ? 'عام' : 'General',
+      subtitle: isArabic ? 'المظهر، شريط التبويبات، الخطوط وزر الإرسال' : 'Appearance, tabs position, fonts & send button',
+      page: 'plus_general',
+      icon: <Settings className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'المحادثات' : 'Chats',
+      subtitle: isArabic ? 'إدارة المجموعات، الخروج، وحذف الرسائل والتثبيت' : 'Group management, leave, clear history & pinning',
+      page: 'plus_chats',
+      icon: <Users className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'القصص' : 'Stories',
+      subtitle: isArabic ? 'الوضع المتخفي، جودة التنزيل وحفظ القصص' : 'Stealth viewer, original quality & auto-save',
+      page: 'plus_stories',
+      icon: <PlayCircle className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'الرسائل' : 'Messages',
+      subtitle: isArabic ? 'إعادة التوجيه المباشر بدون اقتباس وإخفاء جاري الكتابة' : 'Direct forward without author & ghost typing',
+      page: 'plus_messages',
+      icon: <MessageSquare className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'Topics' : 'Topics',
+      subtitle: isArabic ? 'تنسيق المنتديات، التبديل السريع والمواضيع المغلقة' : 'Forum topics switcher, layout & archived threads',
+      page: 'plus_topics',
+      icon: <ListOrdered className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'درج التصفح' : 'Navigation Drawer',
+      subtitle: isArabic ? 'عرض الحسابات المتعددة، المعرف والرقم في القائمة' : 'Multi-accounts switcher, username & phone header',
+      page: 'plus_drawer',
+      icon: <Menu className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'الملف الشخصي' : 'Profile',
+      subtitle: isArabic ? 'إظهار User ID، مركز البيانات DC وتاريخ التسجيل' : 'Numeric User ID, DC cluster & registration date',
+      page: 'plus_profile',
+      icon: <User className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'الإشعارات' : 'Notifications',
+      subtitle: isArabic ? 'تنبيه اتصال جهة الاتصال بالإنترنت وفلاش الكاميرا' : 'Contact online alerts, avatar changes & flash alerts',
+      page: 'plus_notifications',
+      icon: <Bell className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'الخصوصية والأمان' : 'Privacy and Security',
+      subtitle: isArabic ? 'وضع القراءة المخفية، قفل البصمة وحظر لقطات الشاشة' : 'Ghost read receipts, biometric lock & screenshot guard',
+      page: 'plus_privacy',
+      icon: <Lock className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'الوسائط المتبادلة' : 'Shared Media',
+      subtitle: isArabic ? 'أعمدة شبكة الوسائط وتنزيل الصور الأصلية' : 'Media grid column count & lossless downloads',
+      page: 'plus_shared_media',
+      icon: <LayoutGrid className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'التحميلات' : 'Downloads',
+      subtitle: isArabic ? 'تسريع التحميل المتوازي متعدد المسارات ومسار الحفظ' : 'Multi-threaded accelerated downloads & storage path',
+      page: 'plus_downloads',
+      icon: <Download className="w-5 h-5 text-cyan-400" />,
+    },
+    {
+      title: isArabic ? 'Ads' : 'Ads',
+      subtitle: isArabic ? 'حظر الإعلانات الممولة في القنوات ودعم المبدعين' : 'Block sponsored ads in channels & creator stars',
+      page: 'plus_ads',
+      icon: <Megaphone className="w-5 h-5 text-cyan-400" />,
+    },
+  ];
+
+  const handleSaveSettings = () => {
+    try {
+      const backupPayload = {
+        app: 'Telegram Plus Messenger',
+        version: '12.9.2.0-universal',
+        savedAt: new Date().toISOString(),
+        settings: settings,
+        accountsCount: accounts.length,
+      };
+
+      const blob = new Blob([JSON.stringify(backupPayload, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Telegram_Plus_Settings_${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showToast(isArabic ? "تم حفظ الإعدادات في مجلد 'Telegram'" : "Settings saved to '/Telegram' directory", '💾');
+    } catch {
+      showToast(isArabic ? 'فشل حفظ الإعدادات' : 'Failed to save settings', '❌');
+    }
+  };
+
+  const handleRestoreSettings = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.settings) {
+          updateSettings(data.settings);
+          showToast(isArabic ? 'تمت استعادة إعدادات بلاس بنجاح' : 'Plus settings restored successfully', '✅');
+        } else {
+          showToast(isArabic ? 'ملف الإعدادات غير متوافق' : 'Incompatible settings file', '⚠️');
+        }
+      } catch {
+        showToast(isArabic ? 'ملف الإعدادات غير صالح' : 'Invalid settings JSON file', '❌');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden bg-[#0e1621]">
+      <SubPageHeader title={isArabic ? 'إعدادات بلاس' : 'Plus Settings'} onBack={onBack} />
+
+      <div className="flex-1 overflow-y-auto divide-y divide-white/5 bg-[#17212b]">
+        {items.map((item, idx) => (
+          <div
+            key={idx}
+            onClick={() => onNavigate(item.page)}
+            className="flex items-center justify-between px-4 py-3 hover:bg-white/5 cursor-pointer transition-colors"
+          >
+            <div className="flex items-center gap-3.5 min-w-0 flex-1">
+              <div className="w-9 h-9 rounded-full bg-cyan-500/15 flex items-center justify-center shrink-0">
+                {item.icon}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13.5px] font-medium text-white truncate">{item.title}</div>
+                <div className="text-xs text-gray-400 truncate mt-0.5">{item.subtitle}</div>
+              </div>
+            </div>
+            <NextIcon size={16} className="text-gray-500 shrink-0 ml-2 rtl:mr-2 rtl:ml-0" />
+          </div>
+        ))}
+
+        {/* Save & Restore Section (Matching Plus Messenger Screenshot) */}
+        <div className="p-4 bg-[#0e1621] space-y-3">
+          <div
+            onClick={handleSaveSettings}
+            className="p-3.5 bg-[#17212b] rounded-xl border border-white/10 cursor-pointer hover:bg-white/5 transition-colors flex items-center justify-between"
+          >
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Download size={14} className="text-cyan-400" />
+                <span>{isArabic ? 'حفظ الإعدادات' : 'Save Settings'}</span>
+              </div>
+              <div className="text-[11px] text-gray-400 mt-1">
+                {isArabic
+                  ? "مجلد حفظ الاعدادات هي (المفضلات أيضاً) 'Telegram'"
+                  : "Backup settings saved to '/Telegram' storage directory"}
+              </div>
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-semibold shrink-0">
+              {isArabic ? 'تصدير JSON' : 'Export'}
+            </span>
+          </div>
+
+          <label className="p-3.5 bg-[#17212b] rounded-xl border border-white/10 cursor-pointer hover:bg-white/5 transition-colors flex items-center justify-between block">
+            <div>
+              <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                <Upload size={14} className="text-emerald-400" />
+                <span>{isArabic ? 'إستعادة الإعدادات' : 'Restore Settings'}</span>
+              </div>
+              <div className="text-[11px] text-gray-400 mt-1">
+                {isArabic
+                  ? 'إستعادة الإعدادات من الجهاز وفحص التوافق'
+                  : 'Import and apply settings from local JSON file'}
+              </div>
+            </div>
+            <input type="file" accept=".json" onChange={handleRestoreSettings} className="hidden" />
+            <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold shrink-0">
+              {isArabic ? 'استيراد' : 'Import'}
+            </span>
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
 // 4. THEME COLORING VIEW (Screenshot 4)
 // ==========================================
 const ThemeColoringView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
@@ -916,8 +1265,17 @@ const ChatSettingsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   const [fontSize, setFontSize] = useState(settings.fontSize || 16);
   const [cornerRadius, setCornerRadius] = useState(settings.bubbleCornerRadius || 17);
-  const [viewMode, setViewMode] = useState<'two_lines' | 'three_lines'>('two_lines');
-  const [appIcon, setAppIcon] = useState('Default');
+  const viewMode = settings.chatListViewMode || 'two_lines';
+
+  const handleViewModeChange = (mode: 'two_lines' | 'three_lines') => {
+    updateSettings({ chatListViewMode: mode });
+    showToast(
+      mode === 'two_lines'
+        ? (isArabic ? 'تم تفعيل نمط القائمة: سطرين' : 'Chat list view: 2 lines')
+        : (isArabic ? 'تم تفعيل نمط القائمة: 3 أسطر' : 'Chat list view: 3 lines'),
+      '📋'
+    );
+  };
 
   const themes = [
     { id: 'classic', label: isArabic ? 'كلاسيكي' : 'Classic', color: '#2481cc' },
@@ -941,7 +1299,7 @@ const ChatSettingsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             {/* Incoming Bubble */}
             <div className="flex justify-start">
               <div
-                className="max-w-[80%] bg-[#182533] p-3 text-white shadow-md"
+                className="max-w-[80%] bg-[#182533] p-3 text-white shadow-md transition-all"
                 style={{
                   borderRadius: `${cornerRadius}px`,
                   fontSize: `${fontSize}px`,
@@ -956,7 +1314,7 @@ const ChatSettingsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             {/* Outgoing Bubble */}
             <div className="flex justify-end">
               <div
-                className="max-w-[80%] bg-[#2b5278] p-3 text-white shadow-md"
+                className="max-w-[80%] bg-[#2b5278] p-3 text-white shadow-md transition-all"
                 style={{
                   borderRadius: `${cornerRadius}px`,
                   fontSize: `${fontSize}px`,
@@ -1036,25 +1394,31 @@ const ChatSettingsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
         <div className="p-4 bg-[#17212b] rounded-2xl border border-white/10 space-y-2">
           <div className="text-xs font-bold text-white">{isArabic ? 'عرض قائمة المحادثات' : 'Chat List View'}</div>
           <div className="flex items-center gap-4 text-xs">
-            <label className="flex items-center gap-2 cursor-pointer">
+            <label
+              onClick={() => handleViewModeChange('two_lines')}
+              className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white/5"
+            >
               <input
                 type="radio"
                 name="viewMode"
                 checked={viewMode === 'two_lines'}
-                onChange={() => setViewMode('two_lines')}
+                onChange={() => handleViewModeChange('two_lines')}
                 className="accent-[#2481cc]"
               />
-              <span>{isArabic ? 'خطين اثنين (2 lines)' : 'Two lines'}</span>
+              <span className="font-semibold text-white">{isArabic ? 'خطين اثنين (2 lines)' : 'Two lines'}</span>
             </label>
-            <label className="flex items-center gap-2 cursor-pointer">
+            <label
+              onClick={() => handleViewModeChange('three_lines')}
+              className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-white/5"
+            >
               <input
                 type="radio"
                 name="viewMode"
                 checked={viewMode === 'three_lines'}
-                onChange={() => setViewMode('three_lines')}
+                onChange={() => handleViewModeChange('three_lines')}
                 className="accent-[#2481cc]"
               />
-              <span>{isArabic ? 'ثلاثة خطوط (3 lines)' : 'Three lines'}</span>
+              <span className="font-semibold text-white">{isArabic ? 'ثلاثة خطوط (3 lines)' : 'Three lines'}</span>
             </label>
           </div>
         </div>
@@ -1191,7 +1555,7 @@ const SecurityRow: React.FC<{
 // 7. NOTIFICATIONS & SOUNDS VIEW (Screenshot 11)
 // ==========================================
 const NotificationsSoundsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { settings, showToast, triggerNotification } = useTelegram();
+  const { settings, showToast, triggerNotification, fcmDiagnostic, setSettingsSubPage, activeChatId } = useTelegram();
   const isArabic = settings.language === 'ar';
 
   const [privateChats, setPrivateChats] = useState(true);
@@ -1205,6 +1569,49 @@ const NotificationsSoundsView: React.FC<{ onBack: () => void }> = ({ onBack }) =
       <SubPageHeader title={isArabic ? 'الإشعارات والأصوات' : 'Notifications and Sounds'} onBack={onBack} />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* FCM Push Notification Diagnostic Hub Card */}
+        <div className="bg-[#17212b] rounded-2xl border border-[#5288c1]/30 p-4 space-y-3 shadow-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+              <span className="text-xs font-bold text-white uppercase tracking-wide">
+                {isArabic ? 'نظام تشخيص الإشعارات (FCM Diagnostics)' : 'FCM Push Notification Hub'}
+              </span>
+            </div>
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                fcmDiagnostic.status === 'connected' || fcmDiagnostic.status === 'listening'
+                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                  : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-current" />
+              {fcmDiagnostic.status}
+            </span>
+          </div>
+
+          <div className="text-xs text-gray-300 space-y-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-gray-400">{isArabic ? 'المحادثة النشطة المربوطة:' : 'Active dialog_id:'}</span>
+              <span className="font-mono text-[#5288c1] font-bold">{activeChatId || (isArabic ? 'لا توجد (الخلفية)' : 'None (Inbox)')}</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-gray-400">{isArabic ? 'آخر حزمة مستلمة:' : 'Last Push Packet:'}</span>
+              <span className="font-mono text-emerald-400">
+                {fcmDiagnostic.lastReceivedPacket ? `${fcmDiagnostic.lastReceivedPacket.title} (${fcmDiagnostic.lastReceivedPacket.status})` : isArabic ? 'بانتظار وصول حزمة' : 'Listening...'}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setSettingsSubPage('fcm_diagnostics')}
+            className="w-full py-2.5 bg-[#2481cc] hover:bg-[#1f6fa8] active:bg-[#195a88] rounded-xl text-xs font-bold text-white flex items-center justify-center gap-2 transition-colors shadow-md"
+          >
+            <Radio className="w-4 h-4" />
+            <span>{isArabic ? 'فتح لوحة التشخيص ومراقبة الحزم (FCM Logs)' : 'Open FCM Diagnostics & Log Viewer'}</span>
+          </button>
+        </div>
+
         {/* Chat Notifications */}
         <div className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
           <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase">{isArabic ? 'إشعارات المحادثات' : 'Chat Notifications'}</div>
@@ -1232,9 +1639,9 @@ const NotificationsSoundsView: React.FC<{ onBack: () => void }> = ({ onBack }) =
             });
             showToast(isArabic ? 'تم إرسال إشعار تجريبي' : 'Test notification fired', '🔔');
           }}
-          className="w-full py-3 bg-[#2481cc] hover:bg-[#1f6fa8] rounded-xl text-xs font-bold text-white transition-colors"
+          className="w-full py-3 bg-[#2481cc]/80 hover:bg-[#2481cc] rounded-xl text-xs font-bold text-white transition-colors"
         >
-          {isArabic ? 'تجربة إشعار فوري (Test Notification)' : 'Test In-App Notification'}
+          {isArabic ? 'تجربة إشعار داخلي (In-App Preview)' : 'Test In-App Notification'}
         </button>
       </div>
     </div>
@@ -1264,43 +1671,171 @@ const DataStorageView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { settings, showToast } = useTelegram();
   const isArabic = settings.language === 'ar';
 
+  const [searchFilter, setSearchFilter] = useState('');
+  const [storageTab, setStorageTab] = useState<'all' | 'cache' | 'network' | 'media'>('all');
+  const [cacheSizeMB, setCacheSizeMB] = useState(586.4);
+  const [dbSizeMB, setDbSizeMB] = useState(142.8);
+  const [mediaAutoMobile, setMediaAutoMobile] = useState(true);
+  const [mediaAutoWifi, setMediaAutoWifi] = useState(true);
+  const [mediaAutoRoaming, setMediaAutoRoaming] = useState(false);
+
+  const handleClearCache = () => {
+    setCacheSizeMB(0);
+    showToast(isArabic ? 'تم تنظيف ذاكرة التخزين المؤقت بنجاح (0.0 MB)' : 'Cache cleared successfully (0.0 MB)', '🧹');
+  };
+
+  const sections = [
+    {
+      id: 'storage_usage',
+      title: isArabic ? 'استخدام التخزين والقرص' : 'Storage & Disk Usage',
+      category: 'cache',
+      items: [
+        { label: isArabic ? 'ذاكرة التخزين المؤقت (Cache)' : 'Cache Files', val: `${cacheSizeMB.toFixed(1)} MB`, icon: PieChart, color: 'text-sky-400', action: handleClearCache, actionLabel: isArabic ? 'مسح الذاكرة' : 'Clear Cache' },
+        { label: isArabic ? 'قاعدة بيانات المحادثات (MTProto MMAP)' : 'Chat Database', val: `${dbSizeMB.toFixed(1)} MB`, icon: HardDrive, color: 'text-indigo-400' },
+      ]
+    },
+    {
+      id: 'network_usage',
+      title: isArabic ? 'استهلاك الشبكة والبيانات' : 'Network & Data Usage',
+      category: 'network',
+      items: [
+        { label: isArabic ? 'بيانات الهاتف المحمول (Cellular)' : 'Cellular Data', val: '430.2 MB', icon: BarChart2, color: 'text-emerald-400' },
+        { label: isArabic ? 'شبكات الواي فاي (Wi-Fi)' : 'Wi-Fi Data', val: '450.7 MB', icon: Wifi, color: 'text-cyan-400' },
+        { label: isArabic ? 'أثناء التجوال (Roaming)' : 'Roaming Data', val: '0.0 KB', icon: Globe, color: 'text-amber-400' },
+      ]
+    },
+    {
+      id: 'auto_download',
+      title: isArabic ? 'تنزيل الوسائط تلقائيًا' : 'Automatic Media Download',
+      category: 'media',
+      toggles: [
+        { title: isArabic ? 'عند استخدام بيانات الجوال (الصور، المقاطع حتى 10MB)' : 'When using mobile data (Photos, Videos up to 10MB)', checked: mediaAutoMobile, onChange: setMediaAutoMobile },
+        { title: isArabic ? 'عند الاتصال بالواي فاي (كافة الوسائط حتى 15MB)' : 'When connected to Wi-Fi (All media up to 15MB)', checked: mediaAutoWifi, onChange: setMediaAutoWifi },
+        { title: isArabic ? 'أثناء التجوال الدولي (معطل افتراضيًا)' : 'When roaming (Disabled by default)', checked: mediaAutoRoaming, onChange: setMediaAutoRoaming },
+      ]
+    }
+  ];
+
+  const filteredSections = sections.filter((sec) => {
+    if (storageTab !== 'all' && sec.category !== storageTab) return false;
+    if (!searchFilter.trim()) return true;
+    const q = searchFilter.toLowerCase();
+    return (
+      sec.title.toLowerCase().includes(q) ||
+      sec.items?.some(it => it.label.toLowerCase().includes(q)) ||
+      sec.toggles?.some(tg => tg.title.toLowerCase().includes(q))
+    );
+  });
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0e1621]">
       <SubPageHeader title={isArabic ? 'البيانات والتخزين' : 'Data and Storage'} onBack={onBack} />
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Usage Stats (Screenshot 12) */}
-        <div className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
-          <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase">{isArabic ? 'استخدام التخزين والشبكة' : 'Disk and Network Usage'}</div>
-
-          <div
-            onClick={() => showToast('Storage usage calculated: 586.4 MB', '💾')}
-            className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-white/5"
-          >
-            <div className="flex items-center gap-3">
-              <PieChart className="w-5 h-5 text-sky-400" />
-              <span className="text-xs font-bold text-white">{isArabic ? 'استخدام التخزين' : 'Storage Usage'}</span>
-            </div>
-            <span className="text-xs font-mono text-[#5288c1]">586.4 MB</span>
-          </div>
-
-          <div
-            onClick={() => showToast('Data usage: 880.9 MB', '📊')}
-            className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-white/5"
-          >
-            <div className="flex items-center gap-3">
-              <BarChart2 className="w-5 h-5 text-emerald-400" />
-              <span className="text-xs font-bold text-white">{isArabic ? 'استهلاك البيانات' : 'Data Usage'}</span>
-            </div>
-            <span className="text-xs font-mono text-emerald-400">880.9 MB</span>
-          </div>
+      {/* Search & Filter Bar */}
+      <div className="p-3 bg-[#17212b] border-b border-white/10 space-y-2 shrink-0">
+        <div className="flex items-center gap-2 bg-[#0e1621] px-3 py-2 rounded-xl border border-white/5">
+          <Search className="w-4 h-4 text-gray-400 shrink-0" />
+          <input
+            type="text"
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+            placeholder={isArabic ? 'بحث في إعدادات التخزين والبيانات...' : 'Search storage & network settings...'}
+            className="w-full bg-transparent text-xs text-white placeholder-gray-500 focus:outline-none"
+          />
+          {searchFilter && (
+            <button onClick={() => setSearchFilter('')} className="p-1 hover:bg-white/10 rounded-full text-gray-400">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        {/* Auto Media Download */}
-        <div className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
-          <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase">{isArabic ? 'تنزيل الوسائط تلقائيًا' : 'Automatic Media Download'}</div>
-          <div className="p-3.5 text-xs text-gray-200">{isArabic ? 'عند استخدام بيانات الجوال: الصور، المقاطع (10 MB)' : 'When using mobile data: Photos, Videos (10 MB)'}</div>
-          <div className="p-3.5 text-xs text-gray-200">{isArabic ? 'عند الاتصال بالواي فاي: الصور، المقاطع (15 MB)' : 'When connected to Wi-Fi: Photos, Videos (15 MB)'}</div>
+        {/* Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 text-xs">
+          {[
+            { id: 'all', label: isArabic ? 'الكل' : 'All' },
+            { id: 'cache', label: isArabic ? 'التخزين والمؤقت' : 'Cache' },
+            { id: 'network', label: isArabic ? 'الشبكة' : 'Network' },
+            { id: 'media', label: isArabic ? 'التنزيل التلقائي' : 'Auto-Download' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setStorageTab(tab.id as any)}
+              className={`px-3 py-1 rounded-full whitespace-nowrap font-medium transition-all ${
+                storageTab === tab.id
+                  ? 'bg-[#2481cc] text-white shadow-sm'
+                  : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {filteredSections.map((sec) => (
+          <div key={sec.id} className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
+            <div className="p-3 text-[11px] font-bold text-[#5288c1] uppercase">{sec.title}</div>
+
+            {sec.items?.map((it, idx) => {
+              const Icon = it.icon;
+              return (
+                <div
+                  key={idx}
+                  onClick={() => {
+                    if (it.action) {
+                      it.action();
+                    } else {
+                      showToast(`${it.label}: ${it.val}`, '📊');
+                    }
+                  }}
+                  className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-white/5 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icon className={`w-5 h-5 ${it.color} shrink-0`} />
+                    <span className="text-xs font-bold text-white truncate">{it.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-mono font-semibold text-gray-300">{it.val}</span>
+                    {it.actionLabel && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          it.action?.();
+                        }}
+                        className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 transition-all"
+                      >
+                        {it.actionLabel}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {sec.toggles?.map((tg, idx) => (
+              <ToggleRow
+                key={idx}
+                title={tg.title}
+                checked={tg.checked}
+                onChange={tg.onChange}
+              />
+            ))}
+          </div>
+        ))}
+
+        {/* Storage Reset Option */}
+        <div className="p-3 bg-[#17212b] rounded-2xl border border-white/10 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-bold text-rose-400">{isArabic ? 'إعادة ضبط إحصائيات الشبكة' : 'Reset Network Statistics'}</div>
+            <div className="text-[11px] text-gray-400">{isArabic ? 'مسح عدادات البيانات المرسلة والمستقبلة' : 'Clear all network bandwidth counters'}</div>
+          </div>
+          <button
+            onClick={() => showToast(isArabic ? 'تمت إعادة ضبط إحصائيات البيانات بنجاح' : 'Network statistics reset', '🔄')}
+            className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold rounded-lg transition-colors"
+          >
+            {isArabic ? 'إعادة ضبط' : 'Reset'}
+          </button>
         </div>
       </div>
     </div>
@@ -1358,54 +1893,135 @@ const PowerSavingView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 const LanguageView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { settings, updateSettings, showToast } = useTelegram();
   const isArabic = settings.language === 'ar';
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const languages = [
-    { code: 'ar', name: 'العربية', native: 'Arabic' },
-    { code: 'en', name: 'English', native: 'English' },
-    { code: 'ru', name: 'Русский', native: 'Russian' },
-    { code: 'es', name: 'Español', native: 'Spanish' },
-    { code: 'fr', name: 'Français', native: 'French' },
-    { code: 'de', name: 'Deutsch', native: 'German' },
-    { code: 'tr', name: 'Türkçe', native: 'Turkish' },
-    { code: 'fa', name: 'فارسی', native: 'Persian' },
+  const expandedLanguages = [
+    { code: 'ar', name: 'العربية', native: 'Arabic', flag: '🇸🇦', region: 'الشرق الأوسط' },
+    { code: 'en', name: 'English', native: 'English (US)', flag: '🇺🇸', region: 'International' },
+    { code: 'ru', name: 'Русский', native: 'Russian', flag: '🇷🇺', region: 'Восточная Европа' },
+    { code: 'es', name: 'Español', native: 'Spanish', flag: '🇪🇸', region: 'España / América' },
+    { code: 'fr', name: 'Français', native: 'French', flag: '🇫🇷', region: 'France / Europe' },
+    { code: 'de', name: 'Deutsch', native: 'German', flag: '🇩🇪', region: 'Deutschland' },
+    { code: 'tr', name: 'Türkçe', native: 'Turkish', flag: '🇹🇷', region: 'Türkiye' },
+    { code: 'fa', name: 'فارسی', native: 'Persian', flag: '🇮🇷', region: 'ایران' },
+    { code: 'pt', name: 'Português', native: 'Portuguese (Brasil)', flag: '🇧🇷', region: 'Brasil / Portugal' },
+    { code: 'it', name: 'Italiano', native: 'Italian', flag: '🇮🇹', region: 'Italia' },
+    { code: 'id', name: 'Bahasa Indonesia', native: 'Indonesian', flag: '🇮🇩', region: 'Indonesia' },
+    { code: 'ms', name: 'Bahasa Melayu', native: 'Malay', flag: '🇲🇾', region: 'Malaysia' },
+    { code: 'nl', name: 'Nederlands', native: 'Dutch', flag: '🇳🇱', region: 'Nederland' },
+    { code: 'pl', name: 'Polski', native: 'Polish', flag: '🇵🇱', region: 'Polska' },
+    { code: 'uk', name: 'Українська', native: 'Ukrainian', flag: '🇺🇦', region: 'Україна' },
+    { code: 'hi', name: 'हिन्दी', native: 'Hindi', flag: '🇮🇳', region: 'भारत' },
+    { code: 'ur', name: 'اردو', native: 'Urdu', flag: '🇵🇰', region: 'پاکستان' },
+    { code: 'ku', name: 'Kurdî / کوردی', native: 'Kurdish', flag: '☀️', region: 'کوردستان' },
+    { code: 'uz', name: 'O‘zbekcha', native: 'Uzbek', flag: '🇺🇿', region: 'Oʻzbekiston' },
+    { code: 'kk', name: 'Қазақша', native: 'Kazakh', flag: '🇰🇿', region: 'Қазақстан' },
+    { code: 'zh', name: '简体中文', native: 'Chinese (Simplified)', flag: '🇨🇳', region: '中国' },
+    { code: 'ja', name: '日本語', native: 'Japanese', flag: '🇯🇵', region: '日本' },
+    { code: 'ko', name: '한국어', native: 'Korean', flag: '🇰🇷', region: '대한민국' },
+    { code: 'vi', name: 'Tiếng Việt', native: 'Vietnamese', flag: '🇻🇳', region: 'Việt Nam' },
   ];
+
+  const filteredLanguages = expandedLanguages.filter((lang) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      lang.name.toLowerCase().includes(q) ||
+      lang.native.toLowerCase().includes(q) ||
+      lang.code.toLowerCase().includes(q) ||
+      lang.region.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0e1621]">
       <SubPageHeader title={isArabic ? 'اللغة' : 'Language'} onBack={onBack} />
+
+      {/* Language Search Bar */}
+      <div className="p-3 bg-[#17212b] border-b border-white/10 space-y-2 shrink-0">
+        <div className="flex items-center gap-2 bg-[#0e1621] px-3 py-2 rounded-xl border border-white/5">
+          <Search className="w-4 h-4 text-gray-400 shrink-0" />
+          <input
+            id="tg-language-search-input"
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={isArabic ? 'بحث عن لغة (مثال: عربي، English، Français)...' : 'Search languages...'}
+            className="w-full bg-transparent text-xs text-white placeholder-gray-500 focus:outline-none"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="p-1 hover:bg-white/10 rounded-full text-gray-400 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-gray-400 px-1 font-mono">
+          <span>{isArabic ? `${filteredLanguages.length} لغة متطابقة` : `${filteredLanguages.length} languages matching`}</span>
+          <span className="text-[#5288c1] font-semibold">{isArabic ? `الحالية: ${settings.language.toUpperCase()}` : `Current: ${settings.language.toUpperCase()}`}</span>
+        </div>
+      </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Translation Settings */}
         <div className="p-4 bg-[#17212b] rounded-2xl border border-white/10 flex items-center justify-between">
           <div>
             <div className="text-xs font-bold text-white">{isArabic ? 'ترجمة الرسائل' : 'Translate Messages'}</div>
-            <div className="text-[11px] text-gray-400">{isArabic ? 'إظهار زر الترجمة في المحادثات' : 'Show Translate button'}</div>
+            <div className="text-[11px] text-gray-400">{isArabic ? 'إظهار زر الترجمة الفورية في شريط الرسائل' : 'Show instantaneous Translate button in chats'}</div>
           </div>
-          <input type="checkbox" defaultChecked className="w-5 h-5 accent-[#2481cc]" />
+          <input type="checkbox" defaultChecked className="w-5 h-5 accent-[#2481cc] cursor-pointer" />
         </div>
 
         {/* Languages List */}
         <div className="bg-[#17212b] rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
-          {languages.map((lang) => (
-            <div
-              key={lang.code}
-              onClick={() => {
-                updateSettings({ language: lang.code as any });
-                showToast(`Language set to ${lang.name}`, '🌐');
-              }}
-              className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-white/5"
-            >
-              <div>
-                <div className="text-xs font-bold text-white">{lang.name}</div>
-                <div className="text-[11px] text-gray-400">{lang.native}</div>
-              </div>
-              {settings.language === lang.code && (
-                <div className="w-5 h-5 rounded-full bg-[#2481cc] flex items-center justify-center">
-                  <Check className="w-3 h-3 text-white" />
-                </div>
-              )}
+          {filteredLanguages.length === 0 ? (
+            <div className="p-8 text-center text-xs text-gray-400">
+              {isArabic ? 'لم يتم العثور على لغة مطابقة للبحث' : 'No matching languages found'}
             </div>
-          ))}
+          ) : (
+            filteredLanguages.map((lang) => {
+              const isSelected = settings.language === lang.code;
+              return (
+                <div
+                  key={lang.code}
+                  onClick={() => {
+                    updateSettings({ language: lang.code as any });
+                    showToast(
+                      isArabic ? `تم ضبط لغة التطبيق: ${lang.name}` : `App language set to: ${lang.name}`,
+                      '🌐'
+                    );
+                  }}
+                  className={`p-3.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isSelected ? 'bg-[#2481cc]/15' : 'hover:bg-white/5'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl shrink-0 select-none">{lang.flag}</span>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-2">
+                        <span>{lang.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-gray-300 font-mono font-normal">
+                          {lang.code.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-gray-400">
+                        {lang.native} • <span className="text-gray-500">{lang.region}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {isSelected && (
+                    <div className="w-6 h-6 rounded-full bg-[#2481cc] flex items-center justify-center shadow-md">
+                      <Check className="w-3.5 h-3.5 text-white" />
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>

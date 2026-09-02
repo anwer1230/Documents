@@ -1,21 +1,11 @@
 /**
- * AuthTokensHelper.ts - org.telegram.messenger.AuthTokensHelper
- * Replicated directly from AuthTokensHelper.java in DrKLO/Telegram Android.
- * Secure storage and persistence of auth tokens and future_auth_token.
+ * AuthTokensHelper.ts - Token Management for MTProto Sessions
  */
 
-import { User } from '../../types';
-
-interface StoredToken {
-  token: string;
-  expires: number;
-  sessionKey?: string;
-  userBackup?: User;
-}
+import { SecureSessionStorage } from '../../utils/SecureSessionStorage';
 
 export class AuthTokensHelper {
   private static instance: AuthTokensHelper;
-  private tokens: Map<number, StoredToken> = new Map();
 
   public static getInstance(): AuthTokensHelper {
     if (!AuthTokensHelper.instance) {
@@ -24,89 +14,52 @@ export class AuthTokensHelper {
     return AuthTokensHelper.instance;
   }
 
-  private constructor() {
-    this.loadTokens();
+  public getSessionToken(accountNum: number = 0): string | null {
+    return SecureSessionStorage.getItem<string>(`tg_session_${accountNum}`) || SecureSessionStorage.getItem<string>('tg_session_string');
   }
 
-  private loadTokens(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const data = localStorage.getItem('tg_auth_tokens_helper');
-      if (data) {
-        const parsed = JSON.parse(data);
-        for (const key of Object.keys(parsed)) {
-          this.tokens.set(Number(key), parsed[key]);
-        }
-      }
-    } catch (e) {
-      console.warn('[AuthTokensHelper] Failed to load auth tokens:', e);
+  public saveSessionToken(token: string, accountNum: number = 0): void {
+    SecureSessionStorage.setItem(`tg_session_${accountNum}`, token);
+    SecureSessionStorage.setItem('tg_session_string', token);
+  }
+
+  public clearSessionToken(accountNum: number = 0): void {
+    SecureSessionStorage.removeItem(`tg_session_${accountNum}`);
+    if (accountNum === 0) {
+      SecureSessionStorage.removeItem('tg_session_string');
     }
   }
 
-  public saveFutureAuthToken(account: number, token: string | Uint8Array, expires: number): void {
-    const tokenStr = typeof token === 'string' ? token : Array.from(token).map((b) => b.toString(16).padStart(2, '0')).join('');
-    const existing = this.tokens.get(account) || { token: '', expires: 0 };
-    this.tokens.set(account, { ...existing, token: tokenStr, expires });
-    this.persist();
-  }
-
-  public saveSessionKey(account: number, sessionKey: string): void {
-    const existing = this.tokens.get(account) || { token: '', expires: 0 };
-    this.tokens.set(account, { ...existing, sessionKey });
-    this.persist();
-  }
-
-  public getSessionKey(account: number): string | null {
-    return this.tokens.get(account)?.sessionKey || null;
-  }
-
-  public saveUserBackup(account: number, user: User): void {
-    const existing = this.tokens.get(account) || { token: '', expires: 0 };
-    this.tokens.set(account, { ...existing, userBackup: user });
-    this.persist();
-  }
-
-  public restoreUserBackup(account: number): User | null {
-    return this.tokens.get(account)?.userBackup || null;
-  }
-
-  public hasPersistentSession(account: number): boolean {
-    const item = this.tokens.get(account);
-    if (!item) return false;
-    return !!(item.userBackup || item.sessionKey || (item.token && item.expires * 1000 > Date.now()));
-  }
-
-  public getFutureAuthToken(account: number): string | null {
-    const item = this.tokens.get(account);
-    if (!item) return null;
-    if (item.expires && item.expires * 1000 < Date.now()) {
-      item.token = '';
-      this.persist();
-      return null;
+  public saveUserBackup(accountOrUser: number | any, userOrAccount?: any): void {
+    if (typeof accountOrUser === 'number') {
+      SecureSessionStorage.setItem(`tg_user_backup_${accountOrUser}`, userOrAccount);
+    } else {
+      SecureSessionStorage.setItem(`tg_user_backup_0`, accountOrUser);
     }
-    return item.token || null;
   }
 
-  public clearAccountTokens(account: number): void {
-    this.tokens.delete(account);
-    this.persist();
+  public restoreUserBackup(accountNum: number = 0): any {
+    return SecureSessionStorage.getItem(`tg_user_backup_${accountNum}`);
   }
 
-  public clearToken(account: number): void {
-    this.clearAccountTokens(account);
+  public hasPersistentSession(accountNum: number = 0): boolean {
+    return Boolean(this.getSessionToken(accountNum));
   }
 
-  private persist(): void {
-    if (typeof window === 'undefined') return;
-    try {
-      const obj: Record<string, StoredToken> = {};
-      this.tokens.forEach((val, key) => {
-        obj[key] = val;
-      });
-      localStorage.setItem('tg_auth_tokens_helper', JSON.stringify(obj));
-    } catch (e) {
-      console.warn('[AuthTokensHelper] Failed to save auth tokens:', e);
+  public protectRealUserSession(_accountNum?: number): void {}
+
+  public registerDeviceWithPushToken(_tokenOrAccount?: string | number): void {}
+
+  public saveFutureAuthToken(accountOrToken: any, tokenOrExpires?: any, _expires?: any): void {
+    if (typeof accountOrToken === 'number' && typeof tokenOrExpires === 'string') {
+      SecureSessionStorage.setItem(`tg_future_token_${accountOrToken}`, tokenOrExpires);
+    } else if (typeof accountOrToken === 'string') {
+      SecureSessionStorage.setItem(`tg_future_token_0`, accountOrToken);
     }
+  }
+
+  public clearAccountTokens(accountNum: number = 0): void {
+    this.clearSessionToken(accountNum);
   }
 }
 

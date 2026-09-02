@@ -115,7 +115,7 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
 
             <div className="pt-2 text-[10px] text-gray-500 flex items-center justify-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>نظام الاسترداد الذكي • Telegram Web DrKLO Build</span>
+              <span>نظام الاسترداد الذكي • Telegram_anwer saif (DrKLO Official Build)</span>
             </div>
           </div>
         </div>

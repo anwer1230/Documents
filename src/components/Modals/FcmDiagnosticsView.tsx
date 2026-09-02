@@ -26,54 +26,18 @@ import { useTelegram } from '../../context/TelegramContext';
 import { FcmPushPacket } from '../../types';
 
 export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const telegramCtx = useTelegram() as any;
   const {
     settings,
+    fcmDiagnostic,
+    requestPushPermission,
+    testSimulateFcmPush,
+    clearFcmDiagnosticHistory,
     showToast,
     activeChatId,
     currentUser,
     activeAccountId,
     chats,
-  } = telegramCtx;
-
-  const [fcmDiagnostic, setFcmDiagnostic] = useState<{
-    token?: string;
-    status: string;
-    permissionState?: string;
-    lastReceivedPacket?: FcmPushPacket | null;
-    history: FcmPushPacket[];
-  }>(() => telegramCtx.fcmDiagnostic || {
-    token: 'fcm_native_token_' + Math.random().toString(36).substring(2, 12),
-    status: 'connected',
-    permissionState: 'granted',
-    lastReceivedPacket: null,
-    history: [],
-  });
-
-  const requestPushPermission = telegramCtx.requestPushPermission || (async () => {
-    showToast('Push notifications permission granted', '🔔');
-  });
-
-  const testSimulateFcmPush = telegramCtx.testSimulateFcmPush || ((packet: any) => {
-    const newPkt: FcmPushPacket = {
-      id: 'fcm_' + Date.now(),
-      title: packet.title,
-      body: packet.body,
-      dialog_id: packet.dialog_id,
-      timestamp: Date.now(),
-      status: 'alerted',
-      routingDecision: 'In-App Notification Banner',
-    };
-    setFcmDiagnostic((prev) => ({
-      ...prev,
-      history: [newPkt, ...prev.history],
-    }));
-    showToast(`🔔 ${packet.title}: ${packet.body}`, '📨');
-  });
-
-  const clearFcmDiagnosticHistory = telegramCtx.clearFcmDiagnosticHistory || (() => {
-    setFcmDiagnostic((prev) => ({ ...prev, history: [] }));
-  });
+  } = useTelegram();
 
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
@@ -82,7 +46,7 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
   const [showRawJson, setShowRawJson] = useState(false);
   const [customTitle, setCustomTitle] = useState('Telegram MTProto');
   const [customBody, setCustomBody] = useState('New incoming message notification');
-  const [selectedTargetDialog, setSelectedTargetDialog] = useState<string>(String(activeChatId || (chats[0]?.id || 'chat_durov')));
+  const [selectedTargetDialog, setSelectedTargetDialog] = useState<string>(activeChatId || (chats[0]?.id || 'chat_durov'));
   const [isSimulating, setIsSimulating] = useState(false);
 
   const copyToken = () => {
@@ -96,7 +60,7 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
 
   const handleTestPush = (mode: 'active' | 'custom' | 'background') => {
     setIsSimulating(true);
-    let targetId = String(activeChatId || 'chat_durov');
+    let targetId = activeChatId || 'chat_durov';
     let title = 'Pavel Durov';
     let body = 'Simulated Telegram push notification via FCM';
 
@@ -106,8 +70,8 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
       body = customBody;
     } else if (mode === 'background') {
       // Pick a chat that is NOT currently open
-      const otherChat = chats.find((c: any) => c.id !== activeChatId) || chats[0];
-      targetId = otherChat ? String(otherChat.id) : 'chat_other';
+      const otherChat = chats.find((c) => c.id !== activeChatId) || chats[0];
+      targetId = otherChat ? otherChat.id : 'chat_other';
       title = otherChat ? otherChat.title : 'External Contact';
       body = 'Background alert received while looking at another chat';
     }

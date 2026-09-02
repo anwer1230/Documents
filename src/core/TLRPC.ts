@@ -76,44 +76,51 @@ export namespace TLRPC {
     config: 590174469,
   };
 
+  export interface TL_updates_getDifference {
+    _: 'TL_updates_getDifference';
+    pts: number;
+    pts_total_limit?: number;
+    date: number;
+    qts: number;
+  }
+
+  export interface TL_updates_difference {
+    _: 'TL_updates_difference';
+    new_messages: any[];
+    other_updates: any[];
+    users: any[];
+    chats: any[];
+    state: {
+      pts: number;
+      seq: number;
+      date: number;
+      qts: number;
+    };
+  }
+
   // Base TLObject
   export abstract class TLObject {
+    public _: string = '';
     public disableFree = false;
+    [key: string]: any;
     public abstract serializeToStream(stream: any): void;
     public abstract readParams(stream: any, exception: boolean): void;
   }
 
   // Error codes & structure
-  export class TL_error extends TLObject {
-    public static constructorId = 0xc4b9f9bb;
+  export interface TL_error {
+    code: number;
+    text: string;
+  }
+
+  export class TL_error_obj extends TLObject {
+    public static constructorId = -994444869;
     public code: number = 0;
     public text: string = '';
-
-    constructor(code: number = 0, text: string = '') {
-      super();
-      this.code = code;
-      this.text = text;
-    }
-
-    public isChatWriteForbidden(): boolean {
-      return (this.text || '').includes('CHAT_WRITE_FORBIDDEN');
-    }
-    public isUserBanned(): boolean {
-      return (this.text || '').includes('USER_BANNED');
-    }
-    public isFlood(): boolean {
-      return (this.text || '').startsWith('FLOOD_WAIT_');
-    }
-    public getFloodWaitSeconds(): number {
-      const match = (this.text || '').match(/FLOOD_WAIT_(\d+)/);
-      return match ? parseInt(match[1], 10) : 0;
-    }
 
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
-
-  export class TL_error_obj extends TL_error {}
 
   // Peer Types
   export type Peer =
@@ -232,12 +239,9 @@ export namespace TLRPC {
 
   export interface ChatFull {
     id: number;
-    participants?: ChatParticipants;
+    participants: ChatParticipants;
     chat_photo?: Photo;
     notify_settings?: PeerNotifySettings;
-    default_banned_rights?: TL_chatBannedRights;
-    slowmode_seconds?: number;
-    [key: string]: any;
   }
 
   export interface ChatParticipants {
@@ -620,179 +624,19 @@ export namespace TLRPC {
   }
 
   export interface TL_chatBannedRights {
-    view_messages?: boolean;
-    send_messages?: boolean;
-    send_media?: boolean;
-    send_stickers?: boolean;
-    send_gifs?: boolean;
-    send_games?: boolean;
-    send_inline?: boolean;
-    embed_links?: boolean;
-    send_polls?: boolean;
-    change_info?: boolean;
-    invite_users?: boolean;
-    pin_messages?: boolean;
-    send_plain?: boolean;
-    until_date?: number;
-  }
-
-  // ==========================================
-  // Message Entities (Rich Formatting)
-  // Replicated from TLRPC.java
-  // ==========================================
-  export abstract class MessageEntity extends TLObject {
-    public offset: number = 0;
-    public length: number = 0;
-  }
-
-  export class TL_messageEntityBold extends MessageEntity {
-    public static constructorId = -1117713463;
-    public _: 'messageEntityBold' = 'messageEntityBold';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityItalic extends MessageEntity {
-    public static constructorId = -2106619040;
-    public _: 'messageEntityItalic' = 'messageEntityItalic';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityCode extends MessageEntity {
-    public static constructorId = 697966149;
-    public _: 'messageEntityCode' = 'messageEntityCode';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityPre extends MessageEntity {
-    public static constructorId = 1938967520;
-    public _: 'messageEntityPre' = 'messageEntityPre';
-    public language: string = '';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityBlockquote extends MessageEntity {
-    public static constructorId = 52769342;
-    public _: 'messageEntityBlockquote' = 'messageEntityBlockquote';
-    public collapsed?: boolean = false;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntitySpoiler extends MessageEntity {
-    public static constructorId = 852769004;
-    public _: 'messageEntitySpoiler' = 'messageEntitySpoiler';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityStrike extends MessageEntity {
-    public static constructorId = -1148011883;
-    public _: 'messageEntityStrike' = 'messageEntityStrike';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityUnderline extends MessageEntity {
-    public static constructorId = -1672522953;
-    public _: 'messageEntityUnderline' = 'messageEntityUnderline';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityTextUrl extends MessageEntity {
-    public static constructorId = 1982976894;
-    public _: 'messageEntityTextUrl' = 'messageEntityTextUrl';
-    public url: string = '';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityUrl extends MessageEntity {
-    public static constructorId = 1868782349;
-    public _: 'messageEntityUrl' = 'messageEntityUrl';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityMention extends MessageEntity {
-    public static constructorId = -100378723;
-    public _: 'messageEntityMention' = 'messageEntityMention';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityHashtag extends MessageEntity {
-    public static constructorId = 1868782349;
-    public _: 'messageEntityHashtag' = 'messageEntityHashtag';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityBotCommand extends MessageEntity {
-    public static constructorId = 1824792198;
-    public _: 'messageEntityBotCommand' = 'messageEntityBotCommand';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messageEntityCustomEmoji extends MessageEntity {
-    public static constructorId = -925960236;
-    public _: 'messageEntityCustomEmoji' = 'messageEntityCustomEmoji';
-    public document_id: string = '';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  // ==========================================
-  // Media Inputs & Uploads (TL-Schema)
-  // ==========================================
-  export abstract class InputFile extends TLObject {
-    public id: string | number = 0;
-    public parts: number = 0;
-    public name: string = '';
-    public md5_checksum: string = '';
-  }
-
-  export class TL_inputFile extends InputFile {
-    public static constructorId = -181407105;
-    public _: 'inputFile' = 'inputFile';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export abstract class InputMedia extends TLObject {}
-
-  export class TL_inputMediaEmpty extends InputMedia {
-    public static constructorId = -1771768449;
-    public _: 'inputMediaEmpty' = 'inputMediaEmpty';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_inputMediaUploadedPhoto extends InputMedia {
-    public static constructorId = 767900285;
-    public _: 'inputMediaUploadedPhoto' = 'inputMediaUploadedPhoto';
-    public file: InputFile = new TL_inputFile();
-    public stickers?: any[];
-    public ttl_seconds?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_inputMediaUploadedDocument extends InputMedia {
-    public static constructorId = 1530447553;
-    public _: 'inputMediaUploadedDocument' = 'inputMediaUploadedDocument';
-    public file: InputFile = new TL_inputFile();
-    public mime_type: string = '';
-    public attributes: any[] = [];
-    public stickers?: any[];
-    public ttl_seconds?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
+    view_messages: boolean;
+    send_messages: boolean;
+    send_media: boolean;
+    send_stickers: boolean;
+    send_gifs: boolean;
+    send_games: boolean;
+    send_inline: boolean;
+    embed_links: boolean;
+    send_polls: boolean;
+    change_info: boolean;
+    invite_users: boolean;
+    pin_messages: boolean;
+    until_date: number;
   }
 
   // Methods & RPC requests
@@ -819,101 +663,12 @@ export namespace TLRPC {
   }
 
   export class TL_messages_sendMessage extends TLObject {
-    public static constructorId = 1358189851;
-    public flags: number = 0;
-    public no_webpage?: boolean = false;
-    public silent?: boolean = false;
-    public background?: boolean = false;
-    public clear_draft?: boolean = true;
     public peer: InputPeer = { _: 'inputPeerSelf' };
     public peer_id?: string;
-    public reply_to_msg_id?: number | string;
     public message: string = '';
     public random_id: number = 0;
-    public reply_markup?: any;
-    public entities?: MessageEntity[];
-    public schedule_date?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_sendMedia extends TLObject {
-    public static constructorId = 2073995874;
-    public flags: number = 0;
-    public silent?: boolean = false;
-    public background?: boolean = false;
-    public clear_draft?: boolean = true;
-    public peer: InputPeer = { _: 'inputPeerSelf' };
-    public peer_id?: string;
-    public reply_to_msg_id?: number | string;
-    public media: InputMedia = new TL_inputMediaEmpty();
-    public message: string = '';
-    public random_id: number = 0;
-    public reply_markup?: any;
-    public entities?: MessageEntity[];
-    public schedule_date?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_forwardMessages extends TLObject {
-    public static constructorId = -637042077;
-    public flags: number = 0;
-    public silent?: boolean = false;
-    public background?: boolean = false;
-    public with_my_score?: boolean = false;
-    public drop_author?: boolean = false;
-    public drop_media_captions?: boolean = false;
-    public noforwards?: boolean = false;
-    public from_peer: InputPeer = { _: 'inputPeerSelf' };
-    public id: (number | string)[] = [];
-    public random_id: (number | string)[] = [];
-    public to_peer: InputPeer = { _: 'inputPeerSelf' };
-    public schedule_date?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_editMessage extends TLObject {
-    public static constructorId = 1224152952;
-    public flags: number = 0;
-    public no_webpage?: boolean = false;
-    public peer: InputPeer = { _: 'inputPeerSelf' };
-    public id: number | string = 0;
-    public message?: string = '';
-    public media?: InputMedia;
-    public reply_markup?: any;
-    public entities?: MessageEntity[];
-    public schedule_date?: number;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_deleteMessages extends TLObject {
-    public static constructorId = -443640366;
-    public flags: number = 0;
-    public revoke: boolean = true;
-    public id: (number | string)[] = [];
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_updatePinnedMessage extends TLObject {
-    public static constructorId = -760086036;
-    public flags: number = 0;
-    public silent?: boolean = false;
-    public unpin?: boolean = false;
-    public pm_oneside?: boolean = false;
-    public peer: InputPeer = { _: 'inputPeerSelf' };
-    public id: number | string = 0;
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_messages_sendScheduledMessages extends TLObject {
-    public static constructorId = -1125212398;
-    public peer: InputPeer = { _: 'inputPeerSelf' };
-    public id: (number | string)[] = [];
+    public reply_to_msg_id?: string;
+    public entities?: any[];
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
@@ -979,6 +734,63 @@ export namespace TLRPC {
     public readParams(stream: any, exception: boolean): void {}
   }
 
+  export class TL_channels_leaveChannel extends TLObject {
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_deleteChatUser extends TLObject {
+    public chat_id: number | string = 0;
+    public user_id: InputUser | string = { _: 'inputUserSelf' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_channels_getFullChannel extends TLObject {
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_getFullChat extends TLObject {
+    public chat_id: number | string = 0;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_chatFull extends TLObject {
+    public full_chat: any;
+    public chats: Chat[] = [];
+    public users: User[] = [];
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_updatePinnedMessage extends TLObject {
+    public peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public id: number | string = 0;
+    public silent: boolean = false;
+    public unpin: boolean = false;
+    public pm_oneside?: boolean;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_forwardMessages extends TLObject {
+    public from_peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public to_peer: InputPeer | string = { _: 'inputPeerSelf' };
+    public id: (number | string)[] = [];
+    public random_id: number[] = [];
+    public silent?: boolean;
+    public background?: boolean;
+    public with_my_score?: boolean;
+    public drop_author?: boolean;
+    public drop_media_captions?: boolean;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
   export class TL_channels_editAdmin extends TLObject {
     public channel: string = '';
     public user_id: string = '';
@@ -1023,65 +835,169 @@ export namespace TLRPC {
   }
 
   // ==========================================
-  // WebPage & Link Preview (TL-Schema)
-  // Replicated from TLRPC.java & TL_account.getWebPagePreview
+  // Two-Step Verification & Password Settings
   // ==========================================
-  export type WebPage =
-    | { _: 'webPageEmpty'; id: string }
-    | { _: 'webPagePending'; id: string; date: number }
-    | {
-        _: 'webPage';
-        id: string;
-        url: string;
-        display_url: string;
-        hash: number;
-        type?: string;
-        site_name?: string;
-        title?: string;
-        description?: string;
-        photo?: Photo;
-        document?: any;
-        duration?: number;
-        author?: string;
-      };
-
-  export class TL_messages_getWebPagePreview extends TLObject {
-    public static constructorId = -1955376306;
-    public message: string = '';
-    public entities?: MessageEntity[];
+  export class TL_account_getPassword extends TLObject {
+    public static constructorId = 1418342645;
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
 
-  export class TL_account_getWebPagePreview extends TLObject {
-    public static constructorId = 1794244243;
-    public message: string = '';
-    public entities?: MessageEntity[];
+  export class TL_account_updatePasswordSettings extends TLObject {
+    public static constructorId = -1516963548;
+    public password?: any;
+    public new_settings: TL_account_passwordInputSettings = {
+      _: 'account.passwordInputSettings',
+      flags: 0,
+    };
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
 
   // ==========================================
-  // Folders & Archiving (TL_messages_editPeerFolders)
+  // Privacy & Security Settings
   // ==========================================
-  export interface InputFolderPeer {
-    _: 'inputFolderPeer';
-    peer: InputPeer;
-    folder_id: number; // 0 = main, 1 = archive
-  }
-
-  export class TL_messages_editPeerFolders extends TLObject {
-    public static constructorId = 1747783110;
-    public folder_peers: InputFolderPeer[] = [];
+  export class TL_account_getPrivacy extends TLObject {
+    public static constructorId = -623130284;
+    public key: PrivacyKey = { _: 'privacyKeyStatusTimestamp' };
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
 
-  export class TL_messages_toggleDialogPin extends TLObject {
-    public static constructorId = -1477401246;
+  export class TL_account_setPrivacy extends TLObject {
+    public static constructorId = -90640169;
+    public key: PrivacyKey = { _: 'privacyKeyStatusTimestamp' };
+    public rules: PrivacyRule[] = [];
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Active Sessions & Authorizations
+  // ==========================================
+  export class TL_account_getAuthorizations extends TLObject {
+    public static constructorId = -484392616;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_account_resetAuthorization extends TLObject {
+    public static constructorId = -545239168;
+    public hash: number | string = 0;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_auth_resetAuthorizations extends TLObject {
+    public static constructorId = -1616179942;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_updateNewAuthorization extends TLObject {
+    public static constructorId = 0x89539c37;
+    public hash: number | string = 0;
+    public date: number = 0;
+    public device: string = '';
+    public location: string = '';
+    public unregistered: boolean = false;
+    public is_current_revoked?: boolean = false;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Stories Synchronization
+  // ==========================================
+  export class TL_stories_getAllStories extends TLObject {
+    public static constructorId = -436034177;
     public flags: number = 0;
-    public pin: boolean = true;
+    public next: boolean = false;
+    public hidden: boolean = false;
+    public state: string = '';
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_stories_sendStory extends TLObject {
+    public static constructorId = -484964648;
+    public flags: number = 0;
     public peer: InputPeer = { _: 'inputPeerSelf' };
+    public media: any;
+    public privacy_rules: PrivacyRule[] = [];
+    public caption: string = '';
+    public period: number = 86400;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Media Search & Document Retrieval
+  // ==========================================
+  export class TL_messages_search extends TLObject {
+    public static constructorId = -1972579624;
+    public flags: number = 0;
+    public peer: InputPeer = { _: 'inputPeerSelf' };
+    public q: string = '';
+    public filter: any = { _: 'inputMessagesFilterEmpty' };
+    public min_date: number = 0;
+    public max_date: number = 0;
+    public offset_id: number = 0;
+    public add_offset: number = 0;
+    public limit: number = 50;
+    public max_id: number = 0;
+    public min_id: number = 0;
+    public hash: number = 0;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_getDocument extends TLObject {
+    public static constructorId = 865483769;
+    public id: any;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Forum Topics & Sponsored Messages
+  // ==========================================
+  export class TL_channels_getForumTopics extends TLObject {
+    public static constructorId = -543956422;
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public q: string = '';
+    public offset_date: number = 0;
+    public offset_id: number = 0;
+    public offset_topic: number = 0;
+    public limit: number = 100;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_channels_getSponsoredMessages extends TLObject {
+    public static constructorId = -340246582;
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Profile & Notifications
+  // ==========================================
+  export class TL_account_updateProfile extends TLObject {
+    public static constructorId = 2018596722;
+    public flags: number = 0;
+    public first_name?: string;
+    public last_name?: string;
+    public about?: string;
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_account_updateNotifySettings extends TLObject {
+    public static constructorId = -2067661490;
+    public peer: any;
+    public settings: any;
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
   }
@@ -1109,7 +1025,6 @@ export namespace TLRPC {
   }
 
   export interface TL_chatInvite {
-    _: 'chatInvite';
     flags: number;
     channel: boolean;
     broadcast: boolean;
@@ -1121,29 +1036,6 @@ export namespace TLRPC {
     photo?: string;
     participants_count: number;
     participants?: UserFull[];
-  }
-
-  export interface TL_chatInviteAlready {
-    _: 'chatInviteAlready';
-    chat: Chat;
-  }
-
-  export interface TL_chatInvitePeek {
-    _: 'chatInvitePeek';
-    chat: Chat;
-    expires: number;
-  }
-
-  export class TL_inputChannelEmpty extends TLObject {
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
-  }
-
-  export class TL_inputChannel extends TLObject {
-    public channel_id: number | string = 0;
-    public access_hash: string = '0';
-    public serializeToStream(stream: any): void {}
-    public readParams(stream: any, exception: boolean): void {}
   }
 
   export interface TL_userFull {
@@ -1160,6 +1052,34 @@ export namespace TLRPC {
     is_blocked: boolean;
     common_chats_count: number;
     pinned_msg_id?: string;
+  }
+
+  export interface TL_help_appUpdate {
+    _: 'help.appUpdate';
+    flags?: number;
+    can_not_skip?: boolean;
+    id?: number;
+    version: string;
+    text: string;
+    entities?: any[];
+    document?: any;
+    url?: string;
+    sticker?: any;
+  }
+
+  export interface TL_help_noAppUpdate {
+    _: 'help.noAppUpdate';
+  }
+
+  export interface TL_help_getAppUpdate {
+    _: 'help.getAppUpdate';
+    source?: string;
+  }
+
+  export interface TL_account_sendVerifyEmailCode {
+    _: 'account.sendVerifyEmailCode';
+    purpose?: any;
+    email?: string;
   }
 
   export const DEFAULT_ADMIN_RIGHTS: TL_chatAdminRights = {
@@ -1260,9 +1180,5 @@ export namespace TLRPC {
       return { _: 'unknown_tl_object', constructorId, data: stream };
     }
   }
-
-  export type TL_chatFull = ChatFull;
-  export type TL_channelParticipant = ChatParticipant | any;
-  export type TL_message = Message;
 }
 

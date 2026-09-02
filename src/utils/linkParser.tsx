@@ -258,7 +258,7 @@ export const TelegramSpoiler: React.FC<{ text: string }> = ({ text }) => {
 };
 
 /**
- * Parses message text and turns URLs, @mentions, #hashtags, /botcommands, spoilers, markdown (bold, italic, code, pre, quotes, strike, underline, text links), and custom emoji tokens into interactive elements
+ * Parses message text and turns URLs, @mentions, #hashtags, /botcommands, spoilers, markdown, and custom emoji tokens into interactive elements
  */
 export function renderInteractiveMessageText(
   text: string,
@@ -266,152 +266,54 @@ export function renderInteractiveMessageText(
 ): React.ReactNode[] {
   if (!text) return [];
 
-  // Match:
-  // 1. Code blocks: ```lang\ncode```
-  // 2. Blockquotes: > quote
-  // 3. Spoilers: ||text||
-  // 4. Bold: **text**
-  // 5. Underline: __text__
-  // 6. Strike: ~text~
-  // 7. Italic: _text_
-  // 8. Inline code: `text`
-  // 9. Markdown text link: [text](url)
-  // 10. Bot commands: /start
-  // 11. Custom emojis: :name:
-  // 12. URLs, Mentions, Hashtags
-  const pattern = /(```[a-zA-Z0-9_+-]*\n?[\s\S]+?```|(?:^|\n)>[ \t]?[^\n]+|\|\|.+?\|\||\*\*.+?\*\*|__.+?__|~.+?~|(?<!\w)_[^_]+?_(?!\w)|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\/[a-zA-Z0-9_]+|https?:\/\/[^\s]+|t\.me\/[^\s]+|tg:\/\/[^\s]+|@[a-zA-Z0-9_]+|#[a-zA-Z0-9_\u0600-\u06FF]+|:[a-zA-Z0-9_-]+:)/g;
+  // Match: Spoilers ||text||, Bold **text**, Italic __text__, Code `text`, Links/Mentions/Tags/Commands/Emojis
+  const pattern = /(\|\|.+?\|\||\*\*.+?\*\*|__.+?__|`[^`]+`|\/[a-zA-Z0-9_]+|https?:\/\/[^\s]+|t\.me\/[^\s]+|tg:\/\/[^\s]+|@[a-zA-Z0-9_]+|#[a-zA-Z0-9_\u0600-\u06FF]+|:[a-zA-Z0-9_-]+:)/g;
 
   const parts = text.split(pattern);
 
   return parts.map((part, index) => {
     if (!part) return null;
 
-    // 1. Code Block: ```language\ncode```
-    if (part.startsWith('```') && part.endsWith('```') && part.length >= 6) {
-      const inner = part.slice(3, -3);
-      const firstNewline = inner.indexOf('\n');
-      let lang = '';
-      let codeContent = inner;
-      if (firstNewline !== -1) {
-        lang = inner.slice(0, firstNewline).trim();
-        codeContent = inner.slice(firstNewline + 1);
-      }
-      return (
-        <div
-          key={index}
-          className="my-1.5 rounded-xl bg-black/40 border border-white/15 overflow-hidden text-left font-mono text-xs shadow-inner"
-          dir="ltr"
-        >
-          {lang && (
-            <div className="px-3 py-1 bg-white/5 border-b border-white/10 text-[10px] text-sky-400 font-bold uppercase tracking-wider flex justify-between items-center">
-              <span>{lang}</span>
-              <span className="text-gray-400 text-[9px]">TLRPC.TL_messageEntityPre</span>
-            </div>
-          )}
-          <pre className="p-3 overflow-x-auto text-amber-200/90 whitespace-pre leading-relaxed select-all">
-            <code>{codeContent}</code>
-          </pre>
-        </div>
-      );
-    }
-
-    // 2. Blockquote: > text
-    if (part.trim().startsWith('>')) {
-      const quoteText = part.replace(/^\n?>[ \t]?/, '');
-      return (
-        <blockquote
-          key={index}
-          className="my-1 pl-3 pr-2 py-1 border-r-3 rtl:border-r-3 rtl:border-l-0 ltr:border-l-3 ltr:border-r-0 border-sky-400 bg-sky-500/10 rounded-r-lg rtl:rounded-r-none rtl:rounded-l-lg text-slate-200 dark:text-slate-200 text-xs italic"
-        >
-          {quoteText}
-        </blockquote>
-      );
-    }
-
-    // 3. Spoilers: ||spoiler||
+    // 1. Spoilers: ||spoiler||
     if (part.startsWith('||') && part.endsWith('||') && part.length > 4) {
       const inner = part.slice(2, -2);
       return <TelegramSpoiler key={index} text={inner} />;
     }
 
-    // 4. Bold: **bold**
+    // 2. Bold: **bold**
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       const inner = part.slice(2, -2);
       return (
-        <strong key={index} className="font-bold text-inherit">
+        <strong key={index} className="font-bold">
           {inner}
         </strong>
       );
     }
 
-    // 5. Underline: __underline__
+    // 3. Italic: __italic__
     if (part.startsWith('__') && part.endsWith('__') && part.length > 4) {
       const inner = part.slice(2, -2);
       return (
-        <u key={index} className="underline decoration-sky-400/60 underline-offset-2">
-          {inner}
-        </u>
-      );
-    }
-
-    // 6. Strikethrough: ~strike~
-    if (part.startsWith('~') && part.endsWith('~') && part.length > 2) {
-      const inner = part.slice(1, -1);
-      return (
-        <s key={index} className="line-through opacity-75">
-          {inner}
-        </s>
-      );
-    }
-
-    // 7. Italic: _italic_
-    if (part.startsWith('_') && part.endsWith('_') && part.length > 2) {
-      const inner = part.slice(1, -1);
-      return (
-        <em key={index} className="italic text-inherit">
+        <em key={index} className="italic">
           {inner}
         </em>
       );
     }
 
-    // 8. Inline code: `code`
+    // 4. Inline code: `code`
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
       const inner = part.slice(1, -1);
       return (
         <code
           key={index}
-          className="px-1.5 py-0.5 rounded bg-black/30 font-mono text-[11px] text-amber-300 border border-white/10 select-all"
+          className="px-1.5 py-0.5 rounded bg-black/25 font-mono text-[11px] text-amber-300 border border-white/10 select-all"
         >
           {inner}
         </code>
       );
     }
 
-    // 9. Markdown text link: [text](url)
-    const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
-    if (linkMatch) {
-      const label = linkMatch[1];
-      const targetUrl = linkMatch[2];
-      return (
-        <span
-          key={index}
-          onClick={(e) => {
-            e.stopPropagation();
-            onLinkClick({
-              type: 'external_url',
-              value: targetUrl,
-              display: label,
-            });
-          }}
-          className="text-sky-400 hover:underline cursor-pointer font-medium hover:text-sky-300 transition-colors inline-block"
-          title={targetUrl}
-        >
-          {label}
-        </span>
-      );
-    }
-
-    // 10. Bot Commands: /start, /help
+    // 5. Bot Commands: /start, /help
     if (part.startsWith('/') && part.length > 1 && !part.includes(' ')) {
       return (
         <span
@@ -431,12 +333,12 @@ export function renderInteractiveMessageText(
       );
     }
 
-    // 11. Custom Emoji token match
+    // 6. Custom Emoji token match
     if (part.startsWith(':') && part.endsWith(':') && CUSTOM_EMOJIS_MAP[part]) {
       return <CustomAnimatedEmoji key={index} code={part} size={22} inline={true} />;
     }
 
-    // 12. Link / Mention / Tag match
+    // 7. Link / Mention / Tag match
     const linkInfo = parseTelegramUrl(part);
     if (linkInfo) {
       return (

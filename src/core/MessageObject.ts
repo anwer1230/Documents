@@ -6,8 +6,10 @@
  * org.telegram.ui.Cells.ChatMessageCell.java
  */
 
-import { Message, MessageMedia } from '../types';
+import { Message, MessageMedia, Chat } from '../types';
 import { TLRPC } from './TLRPC';
+import { UserObject } from './UserObject';
+import { ChatObject } from './ChatObject';
 
 export interface MessageEntity {
   type:
@@ -37,6 +39,12 @@ export class MessageObject {
   public entities: MessageEntity[] = [];
   public currentAccount: number = 0;
 
+  public customName?: string;
+  public fromId: string | number = '';
+  public isChannelPostVal: boolean = false;
+  public isPostAuthorVisible: boolean = false;
+  public postAuthor?: string;
+
   // Types corresponding to MessageObject.type in Telegram Android
   public type: number = 0;
   public static readonly TYPE_TEXT = 0;
@@ -52,12 +60,136 @@ export class MessageObject {
   public static readonly TYPE_CALL = 10;
   public static readonly TYPE_ROUND_VIDEO = 11;
 
-  constructor(message: Message, account: number = 0) {
+  constructor(message: Message, account: number = 0, chat?: Chat) {
     this.messageOwner = message;
     this.messageText = message.text || '';
     this.currentAccount = account;
     this.classifyType();
     this.parseEntities();
+    this.generateLayout(undefined, chat);
+  }
+
+  /**
+   * Replicated from DrKLO MessageObject.getPeerId(TLRPC.Peer)
+   */
+  public static getPeerId(peer: any): string | number {
+    if (!peer) return '';
+    if (typeof peer === 'string' || typeof peer === 'number') return peer;
+    if (peer.user_id) return peer.user_id;
+    if (peer.channel_id) return `-100${peer.channel_id}`;
+    if (peer.chat_id) return `-${peer.chat_id}`;
+    return '';
+  }
+
+  /**
+   * Replicated from DrKLO MessageObject.generateLayout(User fromUser, Chat chat)
+   */
+  public generateLayout(fromUser?: any, chat?: Chat): void {
+    const msg = this.messageOwner;
+    if (!msg) return;
+
+    this.fromId = MessageObject.getPeerId((msg as any).from_id) || msg.senderId || '';
+    this.postAuthor = (msg as any).post_author || (msg as any).postAuthor || msg.senderRank;
+    this.isChannelPostVal = this.isChannelPost(chat);
+
+    const isGroup = Boolean(chat && (ChatObject.isGroup(chat) || ChatObject.isMegagroup(chat) || chat.type === 'group' || (chat as any).type === 'supergroup'));
+
+    // Channel post with signed admin author (Sign Messages enabled)
+    if (this.isChannelPostVal && !this.isMegagroup(chat)) {
+      if (this.postAuthor) {
+        this.customName = this.postAuthor;
+        this.isPostAuthorVisible = true;
+      } else {
+        this.customName = '';
+        this.isPostAuthorVisible = false;
+      }
+    } else if (isGroup) {
+      // Group or Megagroup: ALWAYS display real user sender name, NEVER the group title
+      if (fromUser) {
+        this.customName = UserObject.getUserName(fromUser);
+      } else if (msg.senderName && msg.senderName !== chat?.title && msg.senderName !== (chat as any)?.name) {
+        this.customName = msg.senderName;
+      } else if ((msg as any).from_name || (msg as any).sender_name) {
+        this.customName = (msg as any).from_name || (msg as any).sender_name;
+      } else if (msg.senderUsername) {
+        this.customName = `@${msg.senderUsername.replace(/^@/, '')}`;
+      } else if (msg.senderId) {
+        // Human-friendly fallback from user ID
+        const idStr = String(msg.senderId).toLowerCase();
+        if (idStr.includes('khalid')) this.customName = 'خالد المنصوري';
+        else if (idStr.includes('tariq')) this.customName = 'طارق الأحمدي';
+        else if (idStr.includes('sarah')) this.customName = 'سارة المهدي';
+        else if (idStr.includes('alex')) this.customName = 'Alex Rivera';
+        else if (idStr.includes('durov')) this.customName = 'Pavel Durov';
+        else if (idStr.startsWith('user_')) {
+          const raw = idStr.replace(/^user_/, '').replace(/_/g, ' ');
+          this.customName = raw.charAt(0).toUpperCase() + raw.slice(1);
+        } else {
+          this.customName = `عضو #${idStr.slice(-4)}`;
+        }
+      } else {
+        this.customName = 'عضو في المجموعة';
+      }
+    } else {
+      // 1-on-1 Private chat or Saved or Bot
+      if (fromUser) {
+        this.customName = UserObject.getUserName(fromUser);
+      } else if (msg.senderName) {
+        this.customName = msg.senderName;
+      } else if (chat && !this.isOut()) {
+        this.customName = chat.title;
+      } else {
+        this.customName = 'User';
+      }
+    }
+  }
+
+  public shouldDrawSenderName(
+    chat?: Chat,
+    grouping?: { isGroupStart?: boolean; isGroupMiddle?: boolean; isGroupEnd?: boolean; isSingle?: boolean }
+  ): boolean {
+    // 1. Outgoing messages never draw sender name header
+    if (this.isOut() || this.messageOwner.isOutgoing) {
+      return false;
+    }
+
+    // 2. Channel posts only draw if sign messages is enabled and postAuthor exists
+    if (this.isChannelPostVal && !this.isMegagroup(chat)) {
+      return Boolean(this.isPostAuthorVisible && this.postAuthor);
+    }
+
+    // 3. Groups & Megagroups: Always draw sender name on the first message of a group/cluster
+    const isGroup = Boolean(chat && (ChatObject.isGroup(chat) || ChatObject.isMegagroup(chat) || chat.type === 'group' || (chat as any).type === 'supergroup'));
+    if (isGroup) {
+      if (grouping) {
+        return Boolean(grouping.isGroupStart || grouping.isSingle);
+      }
+      return true;
+    }
+
+    // 4. Private 1-on-1 chats / saved / bots do not draw redundant author header in bubbles
+    return false;
+  }
+
+  public isChannelPost(chat?: Chat): boolean {
+    const msg = this.messageOwner;
+    if ((msg as any).post || (msg as any).isChannelPost) return true;
+    if (chat && ChatObject.isChannel(chat) && !ChatObject.isMegagroup(chat)) return true;
+    return false;
+  }
+
+  public isMegagroup(chat?: Chat): boolean {
+    if (chat) return ChatObject.isMegagroup(chat);
+    return false;
+  }
+
+  public isFromUser(): boolean {
+    const pId = String(this.fromId);
+    return !!pId && !pId.startsWith('-') && pId !== '0';
+  }
+
+  public getSenderTitle(): string {
+    return this.customName || this.messageOwner.senderName || 'User';
   }
 
   private classifyType(): void {
@@ -254,41 +386,11 @@ export class MessageObject {
     return this.messageOwner.media;
   }
 
-  /**
-   * DrKLO MessageObject.webPage
-   * Returns attached TLRPC.WebPage preview or parses first URL entity
-   */
-  public getWebPage(): TLRPC.WebPage | null {
-    if (this.messageOwner.media && (this.messageOwner.media as any).webpage) {
-      return (this.messageOwner.media as any).webpage;
-    }
-    const urlEntity = this.entities.find((e) => e.type === 'url');
-    if (urlEntity && urlEntity.url) {
-      const u = urlEntity.url;
-      try {
-        const parsed = new URL(u);
-        return {
-          _: 'webPage',
-          id: String(Math.abs(u.split('').reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0))),
-          url: u,
-          display_url: parsed.hostname,
-          hash: 0,
-          site_name: parsed.hostname.replace('www.', ''),
-          title: parsed.hostname.includes('t.me') ? 'Telegram Link' : `${parsed.hostname} Page Preview`,
-          description: `Preview content generated via TL_account.getWebPagePreview for ${u}`,
-        };
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
   public getId(): string {
-    return String(this.messageOwner.id || '');
+    return this.messageOwner.id;
   }
 
   public getDialogId(): string {
-    return String(this.messageOwner.chatId || this.messageOwner.chat_id || '');
+    return this.messageOwner.chatId;
   }
 }

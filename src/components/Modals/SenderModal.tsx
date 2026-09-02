@@ -244,10 +244,10 @@ export const SenderModal: React.FC = () => {
       title: `🚨 كلمة مراقبة: [${testKeyword}]`,
       body: `💬 الرسالة: السلام عليكم، مطلوب حل ${testKeyword} لمشروع التخرج بشكل عاجل اليوم.\n📍 المصدر: ${chatTitle}`,
       avatar: sampleChat?.avatar,
-      chatId: String(chatId),
+      chatId: chatId,
       chatTitle: chatTitle,
       chatUsername: chatUsername,
-      messageId: String(messageId),
+      messageId: messageId,
       senderId: 'user_dev_ali',
       senderName: 'علي التقني',
       senderUsername: 'ali_tech',
@@ -674,7 +674,7 @@ export const SenderModal: React.FC = () => {
                               <button
                                 type="button"
                                 onClick={() => {
-                                  jumpToMessage(String(alert.sourceChatId), String(alert.id));
+                                  jumpToMessage(alert.sourceChatId, alert.id);
                                   setActiveModal('none');
                                 }}
                                 className="text-cyan-400 hover:underline"

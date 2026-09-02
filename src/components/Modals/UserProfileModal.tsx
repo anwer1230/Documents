@@ -45,7 +45,7 @@ export const UserProfileModal: React.FC = () => {
 
   const isArabic = settings.language === 'ar';
   const user = selectedProfileUser;
-  const commonGroups: Chat[] = getCommonGroupsForUser(String(user.id), user.name);
+  const commonGroups: Chat[] = getCommonGroupsForUser(user.id, user.name);
 
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -55,7 +55,7 @@ export const UserProfileModal: React.FC = () => {
   };
 
   const handleOpenDirectChat = () => {
-    openPrivateChat(String(user.id), user.name, user.avatar, user.username);
+    openPrivateChat(user.id, user.name, user.avatar, user.username);
     setActiveModal('none');
     showToast(
       isArabic ? `تم فتح محادثة مباشرة مع ${user.name}` : `Opened chat with ${user.name}`,
@@ -319,7 +319,7 @@ export const UserProfileModal: React.FC = () => {
                 {commonGroups.map((group) => (
                   <button
                     key={group.id}
-                    onClick={() => handleSelectGroup(String(group.id))}
+                    onClick={() => handleSelectGroup(group.id)}
                     className="w-full flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-sky-500/15 border border-white/5 hover:border-sky-500/30 transition-all text-left rtl:text-right group"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">

@@ -127,7 +127,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     e.stopPropagation();
     setMessageContextMenu({
       message,
-      messageId: String(message.id),
       x: e.clientX,
       y: e.clientY,
     });
@@ -223,7 +222,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       const touch = 'touches' in e ? e.touches[0] || (e as any).changedTouches?.[0] : e;
       setMessageContextMenu({
         message,
-        messageId: String(message.id),
         x: touch ? touch.clientX : window.innerWidth / 2,
         y: touch ? touch.clientY : window.innerHeight / 2,
       });
@@ -302,13 +300,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         </button>
       )}
 
-      {/* Sender Avatar for incoming messages - Official Telegram Standard with click to view profile */}
+      {/* Sender Avatar for incoming messages - Official Telegram Standard (35dp x 35dp) with click to view profile */}
       {!isOutgoing && (
         <button
           type="button"
           onClick={handleSenderClick}
           title={message.senderName || (isArabic ? 'الملف الشخصي' : 'Profile')}
-          className="w-8 h-8 rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
+          className="w-[35px] h-[35px] rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
         >
           {message.senderAvatar ? (
             <img
@@ -417,23 +415,39 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                 : 'var(--tg-theme-bubble-in)',
             }}
           >
-            {/* Sender Name for incoming messages - Telegram Peer Colors + Click to open Profile */}
+            {/* Sender Name for incoming messages - Telegram Peer Colors + Click to open Profile + Rank Badge */}
             {!isOutgoing && (message.senderName || activeChat?.title) && (
-              <button
-                type="button"
-                onClick={handleSenderClick}
-                className="font-bold text-xs mb-1 flex items-center gap-1 hover:underline cursor-pointer transition-opacity active:opacity-75 text-left rtl:text-right focus:outline-none"
-                style={{
-                  color: getPeerColor(String(message.senderId || message.senderName || activeChat?.title)),
-                }}
-              >
-                <span>{message.senderName || activeChat?.title}</span>
-                {message.senderUsername && (
-                  <span className="text-[10px] font-normal text-gray-400 font-mono">
-                    @{message.senderUsername}
+              <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                <button
+                  type="button"
+                  onClick={handleSenderClick}
+                  className="font-bold text-xs flex items-center gap-1 hover:underline cursor-pointer transition-opacity active:opacity-75 text-left rtl:text-right focus:outline-none"
+                  style={{
+                    color: getPeerColor(String(message.senderId || message.senderName || activeChat?.title)),
+                  }}
+                >
+                  <span>{message.senderName || activeChat?.title}</span>
+                  {message.senderUsername && (
+                    <span className="text-[10px] font-normal text-gray-400 font-mono">
+                      @{message.senderUsername}
+                    </span>
+                  )}
+                </button>
+
+                {/* DrKLO ChatMessageCell Admin/Creator/Restricted Rank Badge */}
+                {((message as any).senderRole === 'creator' || (message as any).senderRank?.includes('مالك') || (message as any).senderRank?.includes('owner') || (message as any).senderRank?.includes('creator')) && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#33FFB300] text-[#FFD54F] border border-[#FFD54F]/30 flex items-center gap-0.5">
+                    <span>👑</span>
+                    <span>{(message as any).senderRank || (isArabic ? 'مالك' : 'Owner')}</span>
                   </span>
                 )}
-              </button>
+                {((message as any).senderRole === 'admin' || (message as any).senderRank?.includes('مشرف') || (message as any).senderRank?.includes('admin')) && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#3329B6F6] text-[#4FC3F7] border border-[#4FC3F7]/30 flex items-center gap-0.5">
+                    <span>🛡️</span>
+                    <span>{(message as any).senderRank || (isArabic ? 'مشرف' : 'Admin')}</span>
+                  </span>
+                )}
+              </div>
             )}
 
             {/* Forwarded Header */}

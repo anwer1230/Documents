@@ -9,7 +9,6 @@ import {
   Eraser,
   Bookmark,
   Share2,
-  LogOut,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
@@ -23,7 +22,6 @@ export const ChatContextMenuView: React.FC = () => {
     markChatReadUnread,
     clearChatHistory,
     deleteChat,
-    leaveChat,
     showToast,
     settings,
   } = useTelegram();
@@ -55,7 +53,7 @@ export const ChatContextMenuView: React.FC = () => {
       {/* Pin / Unpin */}
       <button
         onClick={() => {
-          togglePinChat(String(chat.id));
+          togglePinChat(chat.id);
           setChatContextMenu(null);
         }}
         className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-left rtl:text-right transition-colors"
@@ -71,7 +69,7 @@ export const ChatContextMenuView: React.FC = () => {
       {/* Mute / Unmute */}
       <button
         onClick={() => {
-          toggleMuteChat(String(chat.id));
+          toggleMuteChat(chat.id);
           setChatContextMenu(null);
         }}
         className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-left rtl:text-right transition-colors"
@@ -92,12 +90,12 @@ export const ChatContextMenuView: React.FC = () => {
       {/* Mark as read / unread */}
       <button
         onClick={() => {
-          markChatReadUnread(String(chat.id));
+          markChatReadUnread(chat.id);
           setChatContextMenu(null);
         }}
         className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-left rtl:text-right transition-colors"
       >
-        {((chat as any).unreadCount || (chat as any).unread_count || 0) > 0 ? (
+        {chat.unreadCount > 0 ? (
           <>
             <CheckCheck className="w-4 h-4 text-sky-400" />
             <span>{isArabic ? 'تحديد كمقروء' : 'Mark as Read'}</span>
@@ -130,7 +128,7 @@ export const ChatContextMenuView: React.FC = () => {
       {/* Clear History */}
       <button
         onClick={() => {
-          clearChatHistory(String(chat.id));
+          clearChatHistory(chat.id);
           setChatContextMenu(null);
         }}
         className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-amber-400 text-left rtl:text-right transition-colors"
@@ -139,28 +137,10 @@ export const ChatContextMenuView: React.FC = () => {
         <span>{isArabic ? 'مسح سجل الرسائل' : 'Clear History'}</span>
       </button>
 
-      {/* Leave Group / Channel */}
-      {(chat.type === 'group' || chat.type === 'channel' || chat.type === 'supergroup') && (
-        <button
-          onClick={() => {
-            leaveChat(String(chat.id));
-            setChatContextMenu(null);
-          }}
-          className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-orange-400 text-left rtl:text-right transition-colors"
-        >
-          <LogOut className="w-4 h-4" />
-          <span>
-            {chat.type === 'channel'
-              ? isArabic ? 'مغادرة القناة' : 'Leave Channel'
-              : isArabic ? 'مغادرة المجموعة' : 'Leave Group'}
-          </span>
-        </button>
-      )}
-
       {/* Delete Chat */}
       <button
         onClick={() => {
-          deleteChat(String(chat.id));
+          deleteChat(chat.id);
           setChatContextMenu(null);
         }}
         className="w-full flex items-center gap-3 px-3.5 py-2 hover:bg-white/10 text-rose-400 text-left rtl:text-right transition-colors"

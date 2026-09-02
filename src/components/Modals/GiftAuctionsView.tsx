@@ -32,7 +32,7 @@ export const GiftAuctionsView: React.FC<{ onBack: () => void }> = ({ onBack }) =
     if (!selectedAuction) return;
     const res = giftAuctionController.placeBid(
       selectedAuction.id,
-      String(currentUser.id),
+      currentUser.id,
       currentUser.name,
       currentUser.avatar,
       bidAmount

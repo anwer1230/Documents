@@ -32,13 +32,12 @@ import {
   Eye,
   Layers,
   MessageSquare,
+  BrainCircuit,
   Search,
-  Scale,
-  RefreshCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
-import { usePlusConfig } from '../Modals/PlusSettingsViews';
+import { PWAInstallButton } from '../Common/PWAInstallButton';
 
 export const NavigationDrawer: React.FC = () => {
   const {
@@ -61,7 +60,6 @@ export const NavigationDrawer: React.FC = () => {
     autoJoinLinksEnabled,
   } = useTelegram();
 
-  const { config: plusConfig } = usePlusConfig();
   const [isAccountsExpanded, setIsAccountsExpanded] = useState(false);
 
   const isArabic = settings.language === 'ar';
@@ -424,6 +422,9 @@ export const NavigationDrawer: React.FC = () => {
                   );
                 })()}
 
+
+
+
                 {/* Telegram Mini Apps (TMA) */}
                 {(() => {
                   const isActive = activeModal === 'mini-apps';
@@ -448,6 +449,138 @@ export const NavigationDrawer: React.FC = () => {
                     </motion.button>
                   );
                 })()}
+              </div>
+
+              {/* Automation & Smart Tools Suite (4 Main Functions Requested) */}
+              <div className="py-1.5 space-y-0.5 bg-sky-950/20 border-y border-sky-500/15">
+                <div className="px-4 pt-1 pb-0.5 text-[11px] font-bold text-sky-400/80 uppercase tracking-wider flex items-center justify-between">
+                  <span>{isArabic ? '⚡ الأدوات والوظائف الذكية' : '⚡ Automation & Smart Suite'}</span>
+                  <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.2 rounded font-mono">PRO</span>
+                </div>
+
+                {/* 1. الإرسال والمراقبة */}
+                {(() => {
+                  const isActive = activeModal === 'sender';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-send-monitor"
+                      onClick={() => handleItemClick(() => setActiveModal('sender'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-sky-500/20 text-sky-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-sky-400'
+                          : 'hover:bg-sky-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Send className={`w-5 h-5 shrink-0 ${isActive ? 'text-sky-300' : 'text-sky-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الإرسال والمراقبة' : 'Send & Monitor'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'نشر دوري ورصد فوري للكلمات' : 'Broadcast & keyword monitor'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-sky-500/25 text-sky-200 border border-sky-400/30 rounded font-mono">
+                        TLRPC
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 2. رسائلي */}
+                {(() => {
+                  const isActive = activeModal === 'my-messages';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-my-messages"
+                      onClick={() => handleItemClick(() => setActiveModal('my-messages'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-amber-500/20 text-amber-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-amber-400'
+                          : 'hover:bg-amber-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Layers className={`w-5 h-5 shrink-0 ${isActive ? 'text-amber-300' : 'text-amber-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'رسائلي (سجل الدفعات)' : 'My Messages (Batches)'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'إدارة الرسائل المرسلة والمجدولة' : 'Manage sent & queued batches'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/25 text-amber-200 border border-amber-400/30 rounded font-mono">
+                        BATCH
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 3. الردود التلقائية */}
+                {(() => {
+                  const isActive = activeModal === 'auto-responder';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-auto-responder"
+                      onClick={() => handleItemClick(() => setActiveModal('auto-responder'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-purple-500/20 text-purple-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-purple-400'
+                          : 'hover:bg-purple-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <MessageSquare className={`w-5 h-5 shrink-0 ${isActive ? 'text-purple-300' : 'text-purple-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الردود التلقائية' : 'Auto Responder'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'قواعد رد ذكية مع فلترة فورية' : 'Smart reply rules & filters'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-500/25 text-purple-200 border border-purple-400/30 rounded font-mono">
+                        AUTO
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 4. الانضمام المتقدم */}
+                {(() => {
+                  const isActive = activeModal === 'auto-joiner';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-auto-joiner"
+                      onClick={() => handleItemClick(() => setActiveModal('auto-joiner'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-400'
+                          : 'hover:bg-emerald-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <UserPlus className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-300' : 'text-emerald-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'الانضمام المتقدم' : 'Advanced Auto-Joiner'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'استخراج روابط القنوات والجروبات' : 'Extract & join links queue'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 rounded font-mono">
+                        REGEX
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+              </div>
+
+              {/* Core Folders & Calls Group */}
+              <div className="py-1 space-y-0.5">
 
                 {/* Chat Folders */}
                 {(() => {
@@ -534,6 +667,11 @@ export const NavigationDrawer: React.FC = () => {
                   );
                 })()}
 
+                {/* In-App PWA Quick Install Banner */}
+                <div className="px-4 py-1.5">
+                  <PWAInstallButton isArabic={isArabic} className="w-full justify-center" />
+                </div>
+
                 {/* Settings */}
                 {(() => {
                   const isActive = activeModal === 'settings' && settingsSubPage === 'main';
@@ -555,145 +693,10 @@ export const NavigationDrawer: React.FC = () => {
                 })()}
               </div>
 
-              {/* Automation Suite Group: 4 Core Features (الإرسال والمراقبة، رسائلي الدفعات، الانضمام المتقدم، الردود التلقائية) */}
-              <div className="py-2 space-y-0.5 border-t border-b border-white/5 bg-black/15">
-                <div className="px-4 py-1.5 text-[11px] font-bold text-[#5288c1] flex items-center justify-between">
-                  <span>{isArabic ? 'أدوات الأتمتة والمراقبة' : 'Automation & Pro Tools'}</span>
-                  <span className="text-[9px] bg-[#2481cc]/20 text-[#5288c1] px-1.5 py-0.5 rounded font-mono font-bold">
-                    PRO
-                  </span>
-                </div>
-
-                {/* 1. الإرسال والمراقبة */}
-                {(() => {
-                  const isActive = activeModal === 'sender' || activeModal === 'send-only';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-sender-monitor"
-                      onClick={() => handleItemClick(() => setActiveModal('sender'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-[#2481cc]/20 text-[#5288c1] font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-[#2481cc]'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Send className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#5288c1]' : 'text-sky-400'}`} />
-                        <span>{isArabic ? 'الإرسال والمراقبة' : 'Send & Monitor'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-sky-500/20 text-sky-300 rounded">
-                        MTProto
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 2. رسائلي (الدفعات) */}
-                {(() => {
-                  const isActive = activeModal === 'my-messages';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-my-messages"
-                      onClick={() => handleItemClick(() => setActiveModal('my-messages'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-blue-500/20 text-blue-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-blue-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Layers className={`w-5 h-5 shrink-0 ${isActive ? 'text-blue-400' : 'text-blue-400'}`} />
-                        <span>{isArabic ? 'رسائلي (الدفعات)' : 'My Messages (Batches)'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-blue-500/20 text-blue-300 rounded">
-                        {isArabic ? 'تعديل/حذف' : 'Batches'}
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 3. البحث والانضمام الفوري (الرادار اللحظي) */}
-                {(() => {
-                  const isActive = activeModal === ('live-link-discover' as any) || activeModal === ('link-monitor' as any);
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-live-link-discover"
-                      onClick={() => handleItemClick(() => setActiveModal('live-link-discover' as any))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-teal-500/20 text-teal-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-teal-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Radio className={`w-5 h-5 shrink-0 ${isActive ? 'text-teal-400' : 'text-teal-400'}`} />
-                        <span>{isArabic ? 'البحث والانضمام الفوري' : 'Live Link Discover'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-teal-500/20 text-teal-300 rounded">
-                        {isArabic ? 'رادار' : 'Radar'}
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 4. الانضمام المتقدم */}
-                {(() => {
-                  const isActive = activeModal === 'auto-joiner';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-auto-joiner"
-                      onClick={() => handleItemClick(() => setActiveModal('auto-joiner'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <UserPlus className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-400' : 'text-emerald-400'}`} />
-                        <span>{isArabic ? 'الانضمام المتقدم' : 'Advanced Auto Joiner'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300 rounded">
-                        Regex
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* 5. الردود التلقائية */}
-                {(() => {
-                  const isActive = activeModal === 'auto-responder';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-auto-responder"
-                      onClick={() => handleItemClick(() => setActiveModal('auto-responder'))}
-                      className={`w-full flex items-center justify-between px-4 py-2.5 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-cyan-500/20 text-cyan-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-cyan-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <MessageSquare className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-400' : 'text-cyan-400'}`} />
-                        <span>{isArabic ? 'الردود التلقائية' : 'Auto Responder'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/20 text-cyan-300 rounded">
-                        AI Bot
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-              </div>
-
               {/* Plus Section Group 2: Plus Settings & Themes */}
               <div className="py-1 space-y-0.5">
                 {/* Plus Settings */}
-                {plusConfig.drawerShowPlusSettings !== false && (() => {
+                {(() => {
                   const isActive = activeModal === 'settings' && settingsSubPage === 'plus_settings';
                   return (
                     <motion.button
@@ -708,56 +711,6 @@ export const NavigationDrawer: React.FC = () => {
                     >
                       <PlusCircle className="w-5 h-5 text-[#5288c1] shrink-0" />
                       <span>{isArabic ? 'إعدادات بلاس' : 'Plus Settings'}</span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* Telegram Limits & SpamBot */}
-                {(() => {
-                  const isActive = (activeModal as any) === 'telegram-limits';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-telegram-limits"
-                      onClick={() => handleItemClick(() => setActiveModal('telegram-limits' as any))}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-amber-500/20 text-amber-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-amber-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Scale className={`w-5 h-5 shrink-0 ${isActive ? 'text-amber-400' : 'text-gray-400'}`} />
-                        <span>{isArabic ? 'حدود تيليجرام وفحص القيود' : 'Telegram Limits & Quotas'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/20 text-amber-300 rounded-full font-mono">
-                        SpamBot
-                      </span>
-                    </motion.button>
-                  );
-                })()}
-
-                {/* Check for App Updates */}
-                {(() => {
-                  const isActive = (activeModal as any) === 'update-app';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-app-update"
-                      onClick={() => handleItemClick(() => setActiveModal('update-app' as any))}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all ${
-                        isActive
-                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-500'
-                          : 'hover:bg-white/5 text-gray-200 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <RefreshCw className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-400' : 'text-gray-400'}`} />
-                        <span>{isArabic ? 'التحقق من التحديثات' : 'Check for Updates'}</span>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/20 text-emerald-300 rounded-full">
-                        OTA
-                      </span>
                     </motion.button>
                   );
                 })()}
@@ -864,36 +817,51 @@ export const NavigationDrawer: React.FC = () => {
               </div>
 
               {/* Footer - Telegram_anwer saif (DrKLO Official Build) & Developer Info */}
-              <div className="py-3 px-4 text-xs text-gray-400 space-y-2 border-t border-white/5 mt-2 bg-black/20 rounded-xl mx-2">
-                <div className="flex items-center gap-3">
-                  {/* Icon with Animated Moving Colors */}
-                  <div className="relative w-8 h-8 rounded-full p-[2px] animate-tg-gradient-icon flex items-center justify-center shrink-0 shadow-md">
-                    <div className="w-full h-full bg-[#17212b] rounded-full flex items-center justify-center">
-                      <Send className="w-4 h-4 text-sky-400 -rotate-45 -translate-y-0.5 translate-x-0.5 transition-transform" />
-                    </div>
+              <div className="py-3.5 px-4 text-xs text-gray-400 space-y-2 border-t border-white/10 mt-2 bg-black/20">
+                <div className="flex items-center gap-2.5">
+                  {/* Animated Multi-Color Telegram Icon */}
+                  <div className="relative shrink-0 w-8 h-8 rounded-full tg-multicolor-gradient flex items-center justify-center shadow-lg shadow-sky-500/20">
+                    <div className="tg-multicolor-glow" />
+                    <svg className="w-4.5 h-4.5 text-white -translate-x-0.5 relative z-10 drop-shadow" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.52 2.77-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .37z" />
+                    </svg>
                   </div>
 
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-gray-200 text-[12px] truncate tracking-tight">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-[12.5px] text-white tracking-tight leading-tight">
                       Telegram_anwer saif (DrKLO Official Build)
                     </div>
-                    <div className="text-[11.5px] font-mono text-emerald-400 font-bold" dir="ltr">
-                      <a href="tel:+966510349663" className="hover:underline flex items-center gap-1">
-                        <span>📞</span> +966510349663
-                      </a>
+                    <div className="text-[11px] text-sky-400 font-mono font-semibold mt-0.5">
+                      v12.9.2.0 (2246) universal arm64-v8a
                     </div>
                   </div>
                 </div>
 
-                {/* Developer Credits */}
-                <div className="pt-1.5 border-t border-white/5 space-y-0.5">
-                  <div className="text-[11px] font-semibold text-[#5288c1]">
-                    {isArabic ? 'المطور:' : 'Developer:'} <span className="text-gray-200 font-medium">انور سيف (Anwer Saif)</span>
+                {/* Developer & Phone Number Section */}
+                <div className="pt-2 border-t border-white/10 space-y-1.5">
+                  <div className="flex items-center justify-between gap-1 text-[11px]">
+                    <span className="text-gray-300 font-semibold">{isArabic ? 'المطور:' : 'Developer:'}</span>
+                    <span className="text-white font-medium">انور فواد محمد علي سيف</span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10.5px] font-mono text-gray-400 pt-0.5" dir="ltr">
-                    <span className="text-gray-500">v12.9.2.0 (2246) universal</span>
-                    <a href="tel:+967772997043" className="hover:underline text-gray-400 hover:text-emerald-400">
-                      +967 772 997 043
+
+                  {/* Primary Requested Phone Number */}
+                  <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/25 text-emerald-400">
+                    <span className="text-[10px] text-emerald-300 font-semibold">{isArabic ? 'رقم التواصل المباشر:' : 'Direct Contact:'}</span>
+                    <a
+                      href="tel:+966510349663"
+                      className="text-[11.5px] font-mono font-bold hover:underline flex items-center gap-1.5 text-emerald-300"
+                      dir="ltr"
+                    >
+                      <span>📞</span> +966 51 034 9663
+                    </a>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[10.5px] font-mono text-gray-400 pt-0.5" dir="ltr">
+                    <a href="tel:+966562570935" className="hover:text-sky-300 flex items-center gap-1">
+                      <span>📞</span> +966 562 570 935
+                    </a>
+                    <a href="tel:+967772997043" className="hover:text-sky-300 flex items-center gap-1">
+                      <span>📞</span> +967 772 997 043
                     </a>
                   </div>
                 </div>

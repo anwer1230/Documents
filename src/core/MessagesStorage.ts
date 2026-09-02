@@ -9,7 +9,6 @@
 import { Chat, Message } from '../types';
 import { TLRPC } from './TLRPC';
 import { NotificationCenter } from './NotificationCenter';
-import { telegramDB } from '../utils/sqliteStorage';
 
 export interface SQLiteCursor {
   next(): boolean;
@@ -57,8 +56,8 @@ export class SQLiteDatabase {
 
     // Filter by dialogId/chatId if provided
     if (args.length > 0 && args[0] !== undefined) {
-      const matchKey = String(args[0]);
-      rows = rows.filter((r) => String(r.dialog_id || r.did || r.id || r.chatId || r.uid) === matchKey);
+      const matchKey = args[0];
+      rows = rows.filter((r) => r.dialog_id === matchKey || r.id === matchKey || r.chatId === matchKey);
     }
 
     let currentIndex = -1;
@@ -109,11 +108,11 @@ export class SQLiteDatabase {
 
     if (trimmed.startsWith('DELETE')) {
       if (args.length > 0) {
-        const id = String(args[0]);
+        const id = args[0];
         const existing = this.inMemoryDb.get(table) || [];
         this.inMemoryDb.set(
           table,
-          existing.filter((r) => String(r.dialog_id || r.did || r.id || r.chatId || r.uid) !== id)
+          existing.filter((r) => r.dialog_id !== id && r.id !== id && r.chatId !== id)
         );
       } else {
         this.inMemoryDb.set(table, []);
@@ -123,8 +122,7 @@ export class SQLiteDatabase {
 
   public insertOrReplace(table: string, record: any): void {
     const rows = this.inMemoryDb.get(table) || [];
-    const id = record.id || record.did || record.mid || record.uid;
-    const index = rows.findIndex((r) => (r.id || r.did || r.mid || r.uid) === id);
+    const index = rows.findIndex((r) => r.id === record.id || (r.dialog_id && r.dialog_id === record.dialog_id));
     if (index >= 0) {
       rows[index] = { ...rows[index], ...record };
     } else {
@@ -145,22 +143,24 @@ export class SQLiteDatabase {
 }
 
 export class MessagesStorage {
+  public static readonly MAX_ACCOUNT_COUNT: number = 4;
   private static instances = new Map<number, MessagesStorage>();
-  private currentAccount: number;
+  public readonly currentAccount: number;
   public database: SQLiteDatabase;
 
   public static getInstance(account: number = 0): MessagesStorage {
-    if (!MessagesStorage.instances.has(account)) {
-      MessagesStorage.instances.set(account, new MessagesStorage(account));
+    const validAccount = Math.max(0, Math.min(account, MessagesStorage.MAX_ACCOUNT_COUNT - 1));
+    if (!MessagesStorage.instances.has(validAccount)) {
+      MessagesStorage.instances.set(validAccount, new MessagesStorage(validAccount));
     }
-    return MessagesStorage.instances.get(account)!;
+    return MessagesStorage.instances.get(validAccount)!;
   }
 
   private constructor(account: number = 0) {
     this.currentAccount = account;
-    this.database = new SQLiteDatabase(`telegram_${account}.db`);
+    const dbName = account === 0 ? 'cache4.db' : `cache4_${account}.db`;
+    this.database = new SQLiteDatabase(dbName);
     this.loadFromLocalStorage();
-    telegramDB.init().catch(console.warn);
   }
 
   /**
@@ -172,21 +172,23 @@ export class MessagesStorage {
     this.database.execute('DELETE FROM users');
     this.database.execute('DELETE FROM chats');
     this.database.execute('DELETE FROM drafts');
-    telegramDB.cleanUp();
     if (typeof window !== 'undefined' && isLogout) {
       localStorage.removeItem(`tg_persisted_chats_${this.currentAccount}`);
+      localStorage.removeItem(`tg_diff_params_${this.currentAccount}`);
+      if (this.currentAccount === 0) {
+        localStorage.removeItem('tg_persisted_chats');
+      }
     }
+  }
+
+  public cleanup(isLogout: boolean = true): void {
+    this.cleanUp(isLogout);
   }
 
   /**
    * DrKLO MessagesStorage.getDialogs
    */
   public getDialogs(offset: number = 0, count: number = 100): Chat[] {
-    const fromSqlite = telegramDB.getChats();
-    if (fromSqlite.length > 0) {
-      return fromSqlite.slice(offset, offset + count);
-    }
-
     const cursor = this.database.queryFinalized('SELECT * FROM dialogs LIMIT ? OFFSET ?', count, offset);
     const dialogs: Chat[] = [];
     while (cursor.next()) {
@@ -203,29 +205,104 @@ export class MessagesStorage {
     return dialogs;
   }
 
-  public putDialogs(dialogs: Chat[]): void {
-    telegramDB.saveChats(dialogs);
-    for (const d of dialogs) {
-      this.database.insertOrReplace('dialogs', {
-        id: d.id,
-        dialog_id: d.id,
-        unread_count: d.unreadCount || 0,
-        pinned: d.isPinned ? 1 : 0,
-        data: d,
+  public putDialogs(dialogsRes: any): void {
+    if (!dialogsRes) return;
+    const dialogList: Chat[] = Array.isArray(dialogsRes.dialogs) ? dialogsRes.dialogs : (Array.isArray(dialogsRes) ? dialogsRes : []);
+    dialogList.forEach((c) => {
+      if (c && c.id) {
+        this.database.insertOrReplace('dialogs', {
+          dialog_id: c.id,
+          id: c.id,
+          unread_count: c.unreadCount || 0,
+          pinned: c.isPinned ? 1 : 0,
+          flags: (c.isPinned ? 1 : 0) | (c.isMuted ? 2 : 0) | (c.isArchived ? 4 : 0),
+          data: c,
+        });
+      }
+    });
+    this.saveToLocalStorage();
+  }
+
+  public putUsersAndChats(users: any[], chats: any[], withTransaction: boolean = false, fromQueue: boolean = false): void {
+    if (users && Array.isArray(users)) {
+      users.forEach((u) => {
+        if (u && u.id) {
+          this.database.insertOrReplace('users', {
+            id: u.id,
+            user_id: u.id,
+            data: u,
+          });
+        }
       });
+    }
+    if (chats && Array.isArray(chats)) {
+      chats.forEach((c) => {
+        if (c && c.id) {
+          this.database.insertOrReplace('chats', {
+            id: c.id,
+            chat_id: c.id,
+            data: c,
+          });
+        }
+      });
+    }
+  }
+
+  public putPrivacyRules(rules: any[], type: number): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(`tg_privacy_rules_${this.currentAccount}_${type}`, JSON.stringify(rules));
+    } catch {}
+  }
+
+  public getPrivacyRules(type: number): any[] | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const saved = localStorage.getItem(`tg_privacy_rules_${this.currentAccount}_${type}`);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
     }
   }
 
   private loadFromLocalStorage(): void {
     if (typeof window === 'undefined') return;
     try {
-      const savedChats = localStorage.getItem('tg_persisted_chats');
+      const storageKey = `tg_persisted_chats_${this.currentAccount}`;
+      let savedChats = localStorage.getItem(storageKey);
+      if (!savedChats && this.currentAccount === 0) {
+        savedChats = localStorage.getItem('tg_persisted_chats');
+      }
+
       if (savedChats) {
         const chats: Chat[] = JSON.parse(savedChats);
-        this.putDialogs(chats);
+        chats.forEach((c) => {
+          this.database.insertOrReplace('dialogs', {
+            dialog_id: c.id,
+            id: c.id,
+            unread_count: c.unreadCount || 0,
+            pinned: c.isPinned ? 1 : 0,
+            flags: (c.isPinned ? 1 : 0) | (c.isMuted ? 2 : 0) | (c.isArchived ? 4 : 0),
+            data: c,
+          });
+        });
       }
     } catch (e) {
-      console.warn('[MessagesStorage] Failed to restore from localStorage:', e);
+      console.warn(`[MessagesStorage ${this.currentAccount}] Failed to restore from localStorage:`, e);
+    }
+  }
+
+  public saveToLocalStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const dialogs = this.getDialogs(0, 500);
+      const storageKey = `tg_persisted_chats_${this.currentAccount}`;
+      localStorage.setItem(storageKey, JSON.stringify(dialogs));
+      if (this.currentAccount === 0) {
+        localStorage.setItem('tg_persisted_chats', JSON.stringify(dialogs));
+      }
+    } catch (e) {
+      console.warn(`[MessagesStorage ${this.currentAccount}] Failed to save to localStorage:`, e);
     }
   }
 
@@ -235,14 +312,12 @@ export class MessagesStorage {
    */
   public setDialogFlags(dialogId: string | number, flags: number): void {
     const id = String(dialogId);
-    const isPinned = (flags & 1) !== 0;
-    telegramDB.setDialogPinned(id, isPinned);
     this.database.execute('UPDATE dialogs SET flags = ? WHERE dialog_id = ?', flags, id);
     this.database.insertOrReplace('dialogs', {
       dialog_id: id,
       id,
       flags,
-      pinned: isPinned ? 1 : 0,
+      pinned: (flags & 1) !== 0 ? 1 : 0,
       muted: (flags & 2) !== 0 ? 1 : 0,
       archived: (flags & 4) !== 0 ? 1 : 0,
     });
@@ -259,7 +334,6 @@ export class MessagesStorage {
   public deleteDialog(dialogId: string | number, messagesOnly: number = 0): void {
     const id = String(dialogId);
     if (messagesOnly === 0) {
-      telegramDB.deleteChat(id);
       this.database.execute('DELETE FROM dialogs WHERE dialog_id = ?', id);
     }
     this.database.execute('DELETE FROM messages WHERE dialog_id = ?', id);
@@ -274,7 +348,6 @@ export class MessagesStorage {
    * Persists message objects batch
    */
   public putMessages(messages: Message[], dialogId: string): void {
-    telegramDB.saveMessages(messages);
     messages.forEach((msg) => {
       this.database.insertOrReplace('messages', {
         id: msg.id,
@@ -295,40 +368,24 @@ export class MessagesStorage {
   }
 
   /**
-   * Persists a single message
+   * Saves a single message to local database and notifies listeners
    */
-  public putMessage(msg: Message): void {
-    this.putMessages([msg], String(msg.chatId));
+  public saveMessage(msg: Message): void {
+    if (!msg || !msg.id) return;
+    const dialogId = msg.chatId || 'dialog_0';
+    this.putMessages([msg], dialogId);
   }
 
   /**
-   * Retrieves messages for dialog
+   * Persists sync difference state parameters
    */
-  public getMessages(dialogId: string | number): Message[] {
-    const id = String(dialogId);
-    const cursor = this.database.queryFinalized('SELECT * FROM messages WHERE dialog_id = ? ORDER BY date ASC', id);
-    const result: Message[] = [];
-    while (cursor.next()) {
-      const dataStr = cursor.stringValue(6);
-      if (dataStr) {
-        try {
-          result.push(JSON.parse(dataStr));
-        } catch {
-          // fallback
-        }
-      }
-    }
-    cursor.dispose();
-    return result;
-  }
-
-  /**
-   * Deletes a single message
-   */
-  public deleteMessage(messageId: string | number): void {
-    const id = String(messageId);
-    telegramDB.deleteMessage(id);
-    this.database.execute('DELETE FROM messages WHERE id = ?', id);
+  public saveDiffParams(pts: number, seq: number, date: number, qts: number): void {
+    try {
+      localStorage.setItem(
+        `tg_diff_params_${this.currentAccount}`,
+        JSON.stringify({ pts, seq, date, qts })
+      );
+    } catch (e) {}
   }
 
   /**
@@ -368,7 +425,52 @@ export class MessagesStorage {
       text
     );
   }
+  /**
+   * DrKLO MessagesStorage.saveChatScrollPosition
+   * Persists scroll position metrics (position, topOffset, messageId, isBottom)
+   */
+  public saveChatScrollPosition(
+    dialogId: string | number,
+    position: number,
+    topOffset: number,
+    messageId: string | number = 0,
+    isAtBottom: boolean = false
+  ): void {
+    const id = String(dialogId);
+    try {
+      if (typeof window !== 'undefined') {
+        const payload = {
+          dialogId: id,
+          position,
+          topOffset,
+          messageId: String(messageId),
+          isAtBottom,
+          timestamp: Date.now(),
+        };
+        localStorage.setItem(`tg_scroll_pos_${this.currentAccount}_${id}`, JSON.stringify(payload));
+      }
+    } catch (e) {}
+  }
+
+  /**
+   * DrKLO MessagesStorage.getChatScrollPosition
+   */
+  public getChatScrollPosition(dialogId: string | number): {
+    dialogId: string;
+    position: number;
+    topOffset: number;
+    messageId: string;
+    isAtBottom: boolean;
+  } | null {
+    const id = String(dialogId);
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem(`tg_scroll_pos_${this.currentAccount}_${id}`);
+        return saved ? JSON.parse(saved) : null;
+      }
+    } catch (e) {}
+    return null;
+  }
 }
 
 export const messagesStorage = MessagesStorage.getInstance(0);
-

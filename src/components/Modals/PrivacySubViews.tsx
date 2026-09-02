@@ -33,8 +33,6 @@ import {
   PrivacyOption,
   PrivacySettingsState,
 } from '../../core/messenger/PrivacySettingsController';
-import { AccountInstance } from '../../core/messenger/AccountInstance';
-import { UserConfig } from '../../core/messenger/UserConfig';
 import { sessionSecurityManager } from '../../core/SessionSecurityManager';
 import { TLRPC } from '../../core/TLRPC';
 
@@ -53,22 +51,10 @@ export const PrivacyControlView: React.FC<SubViewProps & { target: PrivacyTarget
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
 
-  const currentAcc = UserConfig.selectedAccount || 0;
-  const accInstance = AccountInstance.getInstance(currentAcc);
-  const privacyCtrl = accInstance.getPrivacySettingsController();
-
   const [currentOption, setCurrentOption] = useState<PrivacyOption>(
-    privacyCtrl.getState()[target] || 'everybody'
+    privacyController.getState()[target] || 'everybody'
   );
   const [p2pOption, setP2pOption] = useState<'everybody' | 'contacts' | 'nobody'>('contacts');
-
-  useEffect(() => {
-    accInstance.syncPrivacySettings(target).then((st) => {
-      if (st && st[target]) {
-        setCurrentOption(st[target]);
-      }
-    });
-  }, [target, currentAcc]);
 
   const titles: Record<PrivacyTarget, { ar: string; en: string; descAr: string; descEn: string }> = {
     phone_number: {
@@ -119,7 +105,7 @@ export const PrivacyControlView: React.FC<SubViewProps & { target: PrivacyTarget
 
   const handleSelectOption = (opt: PrivacyOption) => {
     setCurrentOption(opt);
-    privacyCtrl.setPrivacy(target, opt);
+    privacyController.setPrivacy(target, opt);
     showToast(isArabic ? 'تم تحديث إعدادات الخصوصية' : 'Privacy settings updated', '🔒');
   };
 

@@ -79,31 +79,31 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
   // 1. General Banner Click Intent -> Jumps directly to the message if available, else opens chat
   const handleClickBanner = () => {
     if (current.chatId && current.messageId) {
-      jumpToMessage(String(current.chatId), String(current.messageId));
+      jumpToMessage(current.chatId, current.messageId);
     } else if (current.chatId) {
-      setActiveChatId(String(current.chatId));
+      setActiveChatId(current.chatId);
     }
-    onDismiss(String(current.id));
+    onDismiss(current.id);
   };
 
   // 2. Action Button 1: Jump to Message (Scrolls directly over messageId)
   const handleJumpToMessage = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (current.chatId && current.messageId) {
-      jumpToMessage(String(current.chatId), String(current.messageId));
+      jumpToMessage(current.chatId, current.messageId);
     } else if (current.chatId) {
-      setActiveChatId(String(current.chatId));
+      setActiveChatId(current.chatId);
     }
-    onDismiss(String(current.id));
+    onDismiss(current.id);
   };
 
   // 3. Action Button 2: Message / Follow Sender (Opens 1-on-1 private chat with senderId)
   const handleMessageSender = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const senderId = String(current.senderId || (current.senderName ? `user_${current.senderName.replace(/\s+/g, '_')}` : 'user_unknown'));
+    const senderId = current.senderId || (current.senderName ? `user_${current.senderName.replace(/\s+/g, '_')}` : 'user_unknown');
     const senderName = current.senderName || 'مستخدم تيليجرام';
     openPrivateChat(senderId, senderName, current.avatar, current.senderUsername);
-    onDismiss(String(current.id));
+    onDismiss(current.id);
   };
 
   // 4. Live Link click for public group or username
@@ -115,22 +115,22 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
   const handleReply = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (current.chatId) {
-      setActiveChatId(String(current.chatId));
+      setActiveChatId(current.chatId);
       setReplyingTo({
         messageId: current.messageId || current.id,
         senderName: current.senderName || current.title,
         textSnippet: current.messageText || current.body,
       });
     }
-    onDismiss(String(current.id));
+    onDismiss(current.id);
   };
 
   const handleMute = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (current.chatId) {
-      toggleMuteChat(String(current.chatId));
+      toggleMuteChat(current.chatId);
     }
-    onDismiss(String(current.id));
+    onDismiss(current.id);
   };
 
   return (
@@ -312,7 +312,7 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
             id="tg-notif-banner-dismiss"
             onClick={(e) => {
               e.stopPropagation();
-              onDismiss(String(current.id));
+              onDismiss(current.id);
             }}
             className="shrink-0 p-1.5 rounded-xl text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
             title={isArabic ? 'إغلاق' : 'Dismiss'}

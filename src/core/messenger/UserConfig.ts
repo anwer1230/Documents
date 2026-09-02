@@ -6,6 +6,7 @@
 
 import { User } from '../../types';
 import { AuthTokensHelper } from './AuthTokensHelper';
+import { SecureSessionStorage } from '../../utils/SecureSessionStorage';
 
 export class UserConfig {
   public static selectedAccount: number = 0;
@@ -36,6 +37,135 @@ export class UserConfig {
     return UserConfig.instances.get(account)!;
   }
 
+  public static hasValidAccounts(): boolean {
+    return UserConfig.getActivatedAccountsCount() > 0;
+  }
+
+  /**
+   * DrKLO/Telegram Android: UserConfig.findAccountByPhone
+   * Searches all active accounts to find if the phone number already belongs to an existing account.
+   * Returns account index (0..MAX_ACCOUNT_COUNT-1) or -1 if not found.
+   */
+  public static findAccountByPhone(phone: string): number {
+    if (!phone) return -1;
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    if (!cleanPhone) return -1;
+
+    for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+      const config = UserConfig.getInstance(a);
+      if (config && config.isClientAuthorized() && config.currentUser) {
+        const accPhone = String(config.currentUser.phone || '').replace(/[^0-9]/g, '');
+        if (accPhone && accPhone === cleanPhone) {
+          return a;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * DrKLO/Telegram Android: UserConfig.findAccountByUserId
+   * Searches all active accounts to find if the user ID already belongs to an existing account.
+   */
+  public static findAccountByUserId(userId: string | number): number {
+    if (!userId || userId === '0') return -1;
+    const cleanId = String(userId);
+
+    for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+      const config = UserConfig.getInstance(a);
+      if (config && config.isClientAuthorized()) {
+        const accId = config.getClientUserId();
+        if (accId && accId === cleanId) {
+          return a;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Helper to verify if a user object is a mock/dummy/test user.
+   */
+  public static isMockUser(user: User | null | undefined): boolean {
+    if (!user) return true;
+    const id = String(user.id || '');
+    const phone = String(user.phone || '').replace(/\s+/g, '');
+    const username = String(user.username || '').toLowerCase();
+    const name = String(user.name || '');
+
+    return (
+      !id ||
+      id === 'user_anwer_main' ||
+      id === 'user_primary' ||
+      id === 'user_self' ||
+      id.startsWith('mock_') ||
+      username === 'anwer_dev' ||
+      name === 'أنور فؤاد' ||
+      phone === '+967770123456' ||
+      phone === '0000000000' ||
+      phone.startsWith('+999') ||
+      phone.includes('test') ||
+      (user as any).isDummy === true
+    );
+  }
+
+  /**
+   * Purges mock/dummy/test accounts from memory and persistent storage.
+   * Ensures only genuine authenticated sessions remain active.
+   */
+  public static cleanupTestAccounts(): void {
+    let firstRealAccount = -1;
+    let realAccountsCount = 0;
+
+    for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+      const config = UserConfig.getInstance(a);
+      if (UserConfig.isMockUser(config.currentUser)) {
+        config.clearConfig(true);
+      } else if (config.isClientAuthorized()) {
+        if (firstRealAccount === -1) {
+          firstRealAccount = a;
+        }
+        realAccountsCount++;
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      const multi = SecureSessionStorage.getItem<any[]>('tg_multi_accounts_v3') || SecureSessionStorage.getItem<any[]>('tg_accounts');
+      if (multi && Array.isArray(multi)) {
+        const cleanMulti = multi.filter(acc => acc && acc.user && !UserConfig.isMockUser(acc.user));
+        if (cleanMulti.length !== multi.length) {
+          if (cleanMulti.length === 0) {
+            SecureSessionStorage.removeItem('tg_multi_accounts_v3');
+            SecureSessionStorage.removeItem('tg_accounts');
+            SecureSessionStorage.removeItem('tg_auth_session_active');
+            SecureSessionStorage.removeItem('tg_active_account_id_v3');
+          } else {
+            SecureSessionStorage.setItem('tg_multi_accounts_v3', cleanMulti);
+            SecureSessionStorage.setItem('tg_active_account_id_v3', cleanMulti[0].id);
+          }
+        }
+      }
+    }
+
+    if (realAccountsCount > 0) {
+      UserConfig.selectedAccount = firstRealAccount;
+    } else {
+      UserConfig.selectedAccount = 0;
+    }
+  }
+
+  public static clearAllConfigs(): void {
+    for (let i = 0; i < UserConfig.MAX_ACCOUNT_COUNT; i++) {
+      UserConfig.getInstance(i).clearConfig(true);
+    }
+  }
+
+  public set2FA(enabled: boolean, hint: string = '', email: string = ''): void {
+    this.has2FA = enabled;
+    this.hint2FA = hint;
+    this.saveConfig();
+  }
+
   /**
    * Static helper corresponding to UserConfig.getInstance(currentAccount).getClientUserId()
    */
@@ -54,42 +184,6 @@ export class UserConfig {
   }
 
   /**
-   * Cleans up and removes mock/invalid accounts while keeping the real authenticated user
-   */
-  public static sanitizeAndPurgeMockAccounts(): void {
-    let firstActiveAccount = -1;
-
-    for (let i = 0; i < UserConfig.MAX_ACCOUNT_COUNT; i++) {
-      const config = UserConfig.getInstance(i);
-      const isReal = config.isClientAuthorized() && config.currentUser && !String(config.currentUser.id).startsWith('mock_');
-      if (isReal) {
-        if (firstActiveAccount === -1) {
-          firstActiveAccount = i;
-        }
-      } else if (config.isClientActivated) {
-        config.clearConfig(true);
-      }
-    }
-
-    if (firstActiveAccount !== -1) {
-      UserConfig.selectedAccount = firstActiveAccount;
-    } else {
-      UserConfig.selectedAccount = 0;
-    }
-  }
-
-  /**
-   * Persists real user session and registers for Push
-   */
-  public static persistRealUserSession(account: number = UserConfig.selectedAccount): void {
-    const config = UserConfig.getInstance(account);
-    if (!config.isClientAuthorized() || !config.currentUser) return;
-
-    config.saveConfig();
-    AuthTokensHelper.getInstance().saveUserBackup(account, config.currentUser);
-  }
-
-  /**
    * Returns current authenticated user ID
    */
   public getClientUserId(): string {
@@ -105,9 +199,8 @@ export class UserConfig {
   public loadConfig(): void {
     if (typeof window === 'undefined') return;
     try {
-      const savedConfig = localStorage.getItem(`tg_user_config_${this.currentAccount}`);
-      if (savedConfig) {
-        const parsed = JSON.parse(savedConfig);
+      const parsed = SecureSessionStorage.getItem<any>(`tg_user_config_${this.currentAccount}`);
+      if (parsed) {
         this.currentUser = parsed.currentUser || null;
         this.clientUserId = parsed.clientUserId || (this.currentUser ? String(this.currentUser.id) : 'user_self');
         this.isClientActivated = parsed.isClientActivated ?? (!!this.currentUser);
@@ -119,14 +212,27 @@ export class UserConfig {
         this.hint2FA = parsed.hint2FA || '';
       }
 
-      // If currentUser is null, check persistent AuthTokensHelper backup
+      // If currentUser is null, check persistent AuthTokensHelper backup or multi_accounts
       if (!this.currentUser) {
         const backup = AuthTokensHelper.getInstance().restoreUserBackup(this.currentAccount);
-        if (backup) {
+        if (backup && !UserConfig.isMockUser(backup)) {
           this.currentUser = backup;
           this.clientUserId = String(backup.id);
           this.isClientActivated = true;
           this.saveConfig();
+        } else {
+          try {
+            const parsedMulti = SecureSessionStorage.getItem<any[]>('tg_multi_accounts_v3') || SecureSessionStorage.getItem<any[]>('tg_accounts');
+            if (parsedMulti && Array.isArray(parsedMulti) && parsedMulti[this.currentAccount]?.user) {
+              const u = parsedMulti[this.currentAccount].user;
+              if (u && !UserConfig.isMockUser(u)) {
+                this.currentUser = u;
+                this.clientUserId = String(this.currentUser?.id || 'user_self');
+                this.isClientActivated = true;
+                this.saveConfig();
+              }
+            }
+          } catch {}
         }
       }
     } catch (e) {
@@ -148,9 +254,9 @@ export class UserConfig {
         has2FA: this.has2FA,
         hint2FA: this.hint2FA,
       };
-      localStorage.setItem(`tg_user_config_${this.currentAccount}`, JSON.stringify(payload));
+      SecureSessionStorage.setItem(`tg_user_config_${this.currentAccount}`, payload);
 
-      if (this.currentUser) {
+      if (this.currentUser && !UserConfig.isMockUser(this.currentUser)) {
         AuthTokensHelper.getInstance().saveUserBackup(this.currentAccount, this.currentUser);
       }
     } catch (e) {
@@ -165,29 +271,41 @@ export class UserConfig {
     this.saveConfig();
   }
 
+  public getCurrentUser(): User | null {
+    return this.currentUser;
+  }
+
   public isClientAuthorized(): boolean {
-    if (this.isClientActivated && !!this.currentUser) return true;
+    if (this.isClientActivated && !!this.currentUser && !UserConfig.isMockUser(this.currentUser)) return true;
     return AuthTokensHelper.getInstance().hasPersistentSession(this.currentAccount);
   }
 
   /**
-   * Clears configuration, wipes local user session, only if explicitly requested on logout.
-   * Prevents accidental wipes during initialization or updates.
+   * Clears configuration, wipes local user session, only if explicitly requested on logout or revocation.
+   * Replicated from DrKLO/Telegram Android UserConfig.java clearConfig
    */
-  public clearConfig(fromUserLogout: boolean = false): void {
+  public clearConfig(fromUserLogout: boolean = true): void {
     if (!fromUserLogout) {
       console.warn('[UserConfig] clearConfig() called without fromUserLogout=true during runtime. Ignored to preserve session.');
       return;
     }
 
     this.currentUser = null;
+    this.clientUserId = '0';
     this.isClientActivated = false;
     this.passcodeHash = '';
     this.passcodeSalt = '';
     this.isAppLocked = false;
     if (typeof window !== 'undefined') {
-      localStorage.removeItem(`tg_user_config_${this.currentAccount}`);
-      localStorage.removeItem(`tg_mtproto_session_${this.currentAccount}`);
+      SecureSessionStorage.removeItem(`tg_user_config_${this.currentAccount}`);
+      SecureSessionStorage.removeItem(`tg_mtproto_session_${this.currentAccount}`);
+      if (this.currentAccount === UserConfig.selectedAccount || this.currentAccount === 0) {
+        SecureSessionStorage.removeItem('tg_session_string');
+        SecureSessionStorage.removeItem('tg_user');
+        SecureSessionStorage.removeItem('tg_phone');
+        SecureSessionStorage.removeItem('tg_auth_token');
+        SecureSessionStorage.removeItem('tg_current_user');
+      }
     }
     AuthTokensHelper.getInstance().clearAccountTokens(this.currentAccount);
   }

@@ -16,14 +16,6 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Bot: Bot,
 };
 
-export const FOLDERS = [
-  { id: 'all', name: 'All Chats', nameAr: 'كل المحادثات', icon: 'Folder' },
-  { id: 'personal', name: 'Personal', nameAr: 'الخاصة', icon: 'User' },
-  { id: 'groups', name: 'Groups', nameAr: 'المجموعات', icon: 'Users' },
-  { id: 'channels', name: 'Channels', nameAr: 'القنوات', icon: 'Megaphone' },
-  { id: 'bots', name: 'Bots', nameAr: 'البوتات', icon: 'Bot' },
-];
-
 export const FolderBar: React.FC = () => {
   const { folders, activeFolderId, setActiveFolderId, chats, settings } = useTelegram();
 
@@ -36,7 +28,7 @@ export const FolderBar: React.FC = () => {
     return chats
       .filter((c) => {
         if (folder.chatTypes && folder.chatTypes.includes(c.type)) return true;
-        if (folder.includedChatIds && folder.includedChatIds.includes(String(c.id))) return true;
+        if (folder.includedChatIds && folder.includedChatIds.includes(c.id)) return true;
         return false;
       })
       .reduce((sum, c) => sum + (c.unreadCount || 0), 0);

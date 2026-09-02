@@ -16,12 +16,6 @@ import {
   Download,
   Phone,
   Video,
-  Eraser,
-  LogOut,
-  Trash2,
-  Sliders,
-  Volume2,
-  VolumeX,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
@@ -37,10 +31,6 @@ export const ChatInfoPanel: React.FC = () => {
     startCall,
     openUserProfile,
     currentUser,
-    clearChatHistory,
-    deleteChat,
-    leaveChat,
-    toggleMuteChat,
     settings,
   } = useTelegram();
 
@@ -237,7 +227,7 @@ export const ChatInfoPanel: React.FC = () => {
                         url: m.media!.url!,
                         title: m.text || activeChat.title,
                         sender: m.senderName,
-                        timestamp: String(m.timestamp || ''),
+                        timestamp: m.timestamp,
                       })
                     }
                     className="aspect-square rounded-lg overflow-hidden cursor-pointer hover:opacity-85 transition-opacity"
@@ -394,79 +384,6 @@ export const ChatInfoPanel: React.FC = () => {
             </div>
           </div>
         )}
-
-        {/* ========================================================= */}
-        {/* CHAT MANAGEMENT & PRIVACY ACTIONS                         */}
-        {/* ========================================================= */}
-        <div className="p-3 border-t border-white/10 space-y-1.5 mt-2">
-          {/* Mute/Unmute Notifications */}
-          <button
-            onClick={() => toggleMuteChat(String(activeChat.id))}
-            className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-colors"
-          >
-            {activeChat.isMuted ? (
-              <>
-                <Volume2 className="w-4 h-4 text-emerald-400" />
-                <span>{isArabic ? 'إلغاء كتم الإشعارات' : 'Unmute Notifications'}</span>
-              </>
-            ) : (
-              <>
-                <VolumeX className="w-4 h-4 text-gray-400" />
-                <span>{isArabic ? 'كتم الإشعارات' : 'Mute Notifications'}</span>
-              </>
-            )}
-          </button>
-
-          {/* Group Admin Permissions */}
-          {(activeChat.type === 'group' || activeChat.type === 'supergroup') && (
-            <button
-              onClick={() => setActiveModal('group-admin' as any)}
-              className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-xl hover:bg-sky-500/10 text-sky-400 hover:text-sky-300 transition-colors"
-            >
-              <Sliders className="w-4 h-4" />
-              <span>{isArabic ? 'صلاحيات وإدارة المجموعة' : 'Group Administration'}</span>
-            </button>
-          )}
-
-          {/* Clear History */}
-          <button
-            onClick={() => clearChatHistory(String(activeChat.id))}
-            className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-xl hover:bg-amber-500/10 text-amber-400 hover:text-amber-300 transition-colors"
-          >
-            <Eraser className="w-4 h-4" />
-            <span>{isArabic ? 'مسح سجل الرسائل' : 'Clear Chat History'}</span>
-          </button>
-
-          {/* Leave Group / Channel */}
-          {(activeChat.type === 'group' || activeChat.type === 'channel' || activeChat.type === 'supergroup') && (
-            <button
-              onClick={() => {
-                leaveChat(String(activeChat.id));
-                setIsRightPanelOpen(false);
-              }}
-              className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-xl hover:bg-orange-500/10 text-orange-400 hover:text-orange-300 transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>
-                {activeChat.type === 'channel'
-                  ? isArabic ? 'مغادرة القناة' : 'Leave Channel'
-                  : isArabic ? 'مغادرة المجموعة' : 'Leave Group'}
-              </span>
-            </button>
-          )}
-
-          {/* Delete Chat */}
-          <button
-            onClick={() => {
-              deleteChat(String(activeChat.id));
-              setIsRightPanelOpen(false);
-            }}
-            className="w-full flex items-center gap-3 px-3 py-2 text-xs font-semibold rounded-xl hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 transition-colors"
-          >
-            <Trash2 className="w-4 h-4" />
-            <span>{isArabic ? 'حذف المحادثة' : 'Delete Chat'}</span>
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -42,24 +42,24 @@ export class NotificationCenter {
   public static readonly messagesRead = 29;
   public static readonly didClearDatabase = 30;
   public static readonly checkClientRole = 31;
-  public static readonly didUpdatePinnedMessage = 32;
-  public static readonly reactionsDidLoad = 33;
-  public static readonly userTyping = 34;
-  public static readonly messageSendError = 35;
-  public static readonly appDidLogout = 36;
-  public static readonly sessionRevoked = 37;
-  public static readonly storiesUpdated = 38;
-  public static readonly topicsDidLoaded = 39;
-  public static readonly appUpdateAvailable = 40;
-  public static readonly appUpdateNotModified = 41;
-  public static readonly appUpdateProgress = 42;
-  public static readonly appUpdateInstallReady = 43;
-  public static readonly privacyRulesUpdated = 44;
-  public static readonly twoStepStateChanged = 45;
-  public static readonly blockedUsersDidLoad = 46;
+  public static readonly storiesUpdated = 32;
+  public static readonly topicsDidLoaded = 33;
+  public static readonly privacyRulesUpdated = 34;
+  public static readonly mainUserInfoChanged = 35;
+  public static readonly twoStepStateUpdated = 36;
+  public static readonly authorizationsUpdated = 37;
+  public static readonly sponsoredMessagesLoaded = 38;
+  public static readonly cloudSettingsUpdated = 39;
+  public static readonly downloadSettingsUpdated = 40;
+  public static readonly appUpdateAvailable = 41;
+  public static readonly appUpdateNotModified = 42;
+  public static readonly appUpdateProgress = 43;
+  public static readonly appUpdateInstallReady = 44;
+  public static readonly appDidLogout = 45;
   public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0001;
   public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0002;
   public static readonly UPDATE_MASK_SEND_STATE = 0x0004;
+  public static readonly UPDATE_MASK_ALL = 0xffff;
 
   private static instances = new Map<number, NotificationCenter>();
   private static globalInstance: NotificationCenter;
@@ -89,14 +89,42 @@ export class NotificationCenter {
     this.currentAccount = account;
   }
 
-  public addObserver(observer: NotificationCenterDelegate | ((...args: any[]) => void), id: number | string): void {
+  public addObserver(
+    observerOrId: NotificationCenterDelegate | ((...args: any[]) => void) | number | string,
+    idOrObserver: number | string | NotificationCenterDelegate | ((...args: any[]) => void)
+  ): void {
+    let id: number | string;
+    let observer: NotificationCenterDelegate | ((...args: any[]) => void);
+
+    if (typeof observerOrId === 'number' || (typeof observerOrId === 'string' && typeof idOrObserver === 'function')) {
+      id = observerOrId;
+      observer = idOrObserver as NotificationCenterDelegate | ((...args: any[]) => void);
+    } else {
+      observer = observerOrId as NotificationCenterDelegate | ((...args: any[]) => void);
+      id = idOrObserver as number | string;
+    }
+
     if (!this.observers.has(id)) {
       this.observers.set(id, new Set());
     }
     this.observers.get(id)!.add(observer);
   }
 
-  public removeObserver(observer: NotificationCenterDelegate | ((...args: any[]) => void), id: number | string): void {
+  public removeObserver(
+    observerOrId: NotificationCenterDelegate | ((...args: any[]) => void) | number | string,
+    idOrObserver: number | string | NotificationCenterDelegate | ((...args: any[]) => void)
+  ): void {
+    let id: number | string;
+    let observer: NotificationCenterDelegate | ((...args: any[]) => void);
+
+    if (typeof observerOrId === 'number' || (typeof observerOrId === 'string' && typeof idOrObserver === 'function')) {
+      id = observerOrId;
+      observer = idOrObserver as NotificationCenterDelegate | ((...args: any[]) => void);
+    } else {
+      observer = observerOrId as NotificationCenterDelegate | ((...args: any[]) => void);
+      id = idOrObserver as number | string;
+    }
+
     const list = this.observers.get(id);
     if (list) {
       list.delete(observer);

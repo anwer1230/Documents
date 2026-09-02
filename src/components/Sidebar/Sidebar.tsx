@@ -94,9 +94,9 @@ export const Sidebar: React.FC = () => {
             chatId: cId,
             chatTitle: parentChat?.title || m.senderName || 'Chat',
             chatAvatar: parentChat?.avatar || m.senderAvatar || '',
-            msgId: String(m.id),
+            msgId: m.id,
             text: m.text,
-            date: String(m.timestamp || m.date || ''),
+            date: m.timestamp,
           });
         }
       });

@@ -1,5 +1,5 @@
 import Dexie, { Table } from 'dexie';
-import { MyMessagesBatch, LiveDiscoveredLink, SenderBatch, PlusConfig, AppSettings, MonitorAlert, AutoReplyRule } from '../types';
+import { MyMessagesBatch, LiveDiscoveredLink, SenderBatch, PlusConfig, AppSettings } from '../types';
 
 export interface SyncedPlusSettingsRecord {
   id: string; // 'global' or accountId
@@ -19,35 +19,17 @@ export class TelegramDexieDatabase extends Dexie {
   senderBatches!: Table<SenderBatch, string>;
   plusSettings!: Table<SyncedPlusSettingsRecord, string>;
   accountSettings!: Table<SyncedAccountSettingsRecord, string>;
-  monitorAlerts!: Table<MonitorAlert, string>;
-  autoReplyRules!: Table<AutoReplyRule, string>;
 
   constructor() {
     super('TelegramLocalDatabase');
 
     // Define tables and indexed keys
-    this.version(1).stores({
-      myMessageBatches: 'id, date, timestamp, groupsCount',
-      discoveredLinks: 'id, url, sourceChatId, status, timestamp, autoJoined',
-      senderBatches: 'id, createdAt, status, isScheduled',
-    });
-
     this.version(2).stores({
       myMessageBatches: 'id, date, timestamp, groupsCount',
       discoveredLinks: 'id, url, sourceChatId, status, timestamp, autoJoined',
       senderBatches: 'id, createdAt, status, isScheduled',
       plusSettings: 'id, updatedAt',
       accountSettings: 'accountId, updatedAt',
-    });
-
-    this.version(3).stores({
-      myMessageBatches: 'id, date, timestamp, groupsCount',
-      discoveredLinks: 'id, url, sourceChatId, status, timestamp, autoJoined',
-      senderBatches: 'id, createdAt, status, isScheduled',
-      plusSettings: 'id, updatedAt',
-      accountSettings: 'accountId, updatedAt',
-      monitorAlerts: 'id, keyword, sourceChatId, timestamp',
-      autoReplyRules: 'id, keyword, isEnabled, matchType, scope',
     });
   }
 }

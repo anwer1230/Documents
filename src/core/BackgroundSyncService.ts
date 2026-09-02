@@ -2,9 +2,8 @@
  * BackgroundSyncService.ts
  *
  * Dedicated background orchestration service that offloads:
- * 1. Live Link Radar & Discovery (regex URL pattern parsing, classification of public groups vs private channels)
- * 2. Strict Telegram Safe Rate-Limiter (Safe threshold join quota, Flood/ban prevention, pending queue persistence, and cooldown auto-resume)
- * 3. Auto-Responder Rules Engine (keyword, exact, regex evaluation, scope matching, rate-limiting)
+ * 1. Live Link Radar & Discovery (regex URL pattern parsing, normalization, de-duplication)
+ * 2. Auto-Responder Rules Engine (keyword, exact, regex evaluation, scope matching, rate-limiting)
  * to a dedicated Web Worker off the main UI thread.
  */
 
@@ -15,8 +14,7 @@ import {
 } from '../types';
 import { telegramDb, initTelegramDexieDb } from './telegramDexieDb';
 import { connectionsManager } from './ConnectionsManager';
-import { MessagesController } from './MessagesController';
-import { TLRPC } from './TLRPC';
+import { notificationsController } from './NotificationsController';
 
 export interface BackgroundWorkerStatus {
   isWorkerActive: boolean;
@@ -25,16 +23,6 @@ export interface BackgroundWorkerStatus {
   totalMessagesProcessed: number;
   totalLinksDiscovered: number;
   totalAutoRepliesTriggered: number;
-}
-
-export interface TelegramSafeLimitStatus {
-  joinsInWindow: number;
-  maxSafeLimit: number;
-  windowDurationMinutes: number;
-  isInSafeCooldown: boolean;
-  cooldownEndsAt: number;
-  remainingSeconds: number;
-  pendingQueueCount: number;
 }
 
 // Inlined Web Worker script code to ensure zero bundler/CORS loading issues in iframe
@@ -78,40 +66,22 @@ const WORKER_SCRIPT = `
         const { message, chatTitle, chatType, correlationId } = data;
         const text = (message && message.text) ? message.text : '';
 
-        // 1. Off-thread Link Discovery with strict classification
+        // 1. Off-thread Link Discovery
         let discoveredLinks = [];
         if (isLiveDiscoverActive && text) {
           const matches = text.matchAll(TG_LINK_REGEX);
           for (const match of matches) {
             const rawUrl = match[0];
             const fullUrl = rawUrl.startsWith('http') || rawUrl.startsWith('tg://') ? rawUrl : 'https://' + rawUrl;
-
-            // Check if private invite link (+hash, joinchat/hash, tg://join?invite=hash)
-            const isPrivate = fullUrl.includes('+') || fullUrl.includes('joinchat') || fullUrl.includes('invite=');
-            let cleanHandle = '';
-            if (!isPrivate) {
-              cleanHandle = fullUrl
-                .replace(/^https?:\\/\\/(?:www\\.)?(?:t\\.me|telegram\\.me|telegram\\.dog)\\//i, '')
-                .split('?')[0]
-                .split('/')[0]
-                .trim();
-            }
-
             discoveredLinks.push({
               id: 'disc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
               url: fullUrl,
-              cleanHandle: cleanHandle,
               sourceChatTitle: chatTitle || 'محادثة تلغرام',
               sourceChatId: message.chatId || 'chat_unknown',
               senderName: message.senderName || 'مستخدم',
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              discoveredAt: Date.now(),
-              status: isPrivate ? 'skipped' : 'pending',
-              linkType: isPrivate ? 'private_invite' : 'public_group',
-              isPrivate: isPrivate,
-              isGroup: !isPrivate,
-              failReason: isPrivate ? 'تم التخطي تلقائياً - رابط خاص (ممنوع الانضمام للقنوات الخاصة طبقاً للقواعد الرسمية)' : undefined,
-              autoJoined: false,
+              status: isInstantAutoJoinEnabled ? 'joining' : 'pending',
+              autoJoined: isInstantAutoJoinEnabled,
             });
           }
         }
@@ -173,44 +143,40 @@ const WORKER_SCRIPT = `
 
         self.postMessage({
           type: 'PROCESS_RESULT',
-          correlationId: correlationId,
-          discoveredLinks: discoveredLinks,
-          matchedRule: matchedRule,
-          autoReplyPayload: autoReplyPayload,
+          correlationId,
+          messageId: message.id,
+          discoveredLinks,
+          autoReplyPayload,
+          matchedRuleId: matchedRule ? matchedRule.id : null,
+          processedAt: Date.now(),
         });
+        break;
+      }
+
+      case 'PING': {
+        self.postMessage({ type: 'PONG', timestamp: Date.now() });
         break;
       }
     }
   };
 
-  self.postMessage({ type: 'WORKER_READY' });
+  self.postMessage({ type: 'WORKER_READY', timestamp: Date.now() });
 })();
 `;
 
 export class BackgroundSyncService {
   private static instance: BackgroundSyncService;
+
   private worker: Worker | null = null;
   private isWorkerReady = false;
-  private listeners = new Set<() => void>();
+  private listeners: Set<() => void> = new Set();
 
-  // Telegram Official Limits & Quotas Constants
-  public readonly SAFE_MAX_JOINS = 10; // 10 joins per 15 mins (Telegram threshold is ~15-20, so 10 is 100% safe from flood/spam restrictions)
-  public readonly SAFE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes rolling window
-  public readonly SAFE_JOIN_DELAY_MS = 3500; // 3.5s natural human delay between consecutive joins
-
-  // Rate Limiting Tracking State
-  private recentJoinTimestamps: number[] = [];
-  private isInSafeCooldown = false;
-  private cooldownEndsAt = 0;
-  private isQueueProcessing = false;
-  private queueIntervalTimer: any = null;
-
-  // Auto Reply Rules
+  // State caches
   private autoReplyRules: AutoReplyRule[] = [
     {
       id: 'rule_1',
       keyword: 'السلام عليكم',
-      replyText: 'وعليكم السلام ورحمة الله وبركاته! أهلاً بك وسهلاً 🌸 كيف يمكنني مساعدتك اليوم؟',
+      replyText: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
       matchType: 'contains',
       scope: 'all',
       isEnabled: true,
@@ -220,7 +186,7 @@ export class BackgroundSyncService {
     {
       id: 'rule_2',
       keyword: 'الأسعار',
-      replyText: 'قائمتنا للأسعار والعروض الحالية متاحة دائماً في الرابط المثبت أعلاه 💎',
+      replyText: 'أهلاً بك! يمكنك الاطلاع على باقات وأسعار الخدمات عبر الرابط: https://t.me/our_services_bot 💼',
       matchType: 'contains',
       scope: 'all',
       isEnabled: true,
@@ -260,7 +226,6 @@ export class BackgroundSyncService {
   private constructor() {
     this.initWorker();
     this.initStorage();
-    this.startQueueWorker();
   }
 
   public static getInstance(): BackgroundSyncService {
@@ -301,26 +266,7 @@ export class BackgroundSyncService {
       await initTelegramDexieDb();
       const savedLinks = await telegramDb.discoveredLinks.reverse().toArray();
       if (savedLinks && savedLinks.length > 0) {
-        // Enforce strict rules on existing links
-        this.discoveredLinks = savedLinks.map((l) => {
-          const isPriv = l.url.includes('+') || l.url.includes('joinchat') || l.url.includes('invite=');
-          if (isPriv) {
-            return {
-              ...l,
-              isPrivate: true,
-              isGroup: false,
-              linkType: 'private_invite',
-              status: l.status === 'joined' ? 'joined' : 'skipped',
-              failReason: l.status === 'joined' ? undefined : 'تم التخطي تلقائياً - رابط خاص (ممنوع الانضمام للقنوات الخاصة طبقاً للقواعد الرسمية)',
-            };
-          }
-          return {
-            ...l,
-            isPrivate: false,
-            isGroup: true,
-            linkType: l.linkType || 'public_group',
-          };
-        });
+        this.discoveredLinks = savedLinks;
       }
       this.syncStateToWorker();
       this.notifyStateChange();
@@ -359,12 +305,13 @@ export class BackgroundSyncService {
         // 1. Handle off-thread Discovered Links
         if (Array.isArray(data.discoveredLinks) && data.discoveredLinks.length > 0) {
           for (const newLink of data.discoveredLinks) {
-            // Check de-duplication
-            const exists = this.discoveredLinks.some((l) => l.url === newLink.url);
-            if (!exists) {
-              this.discoveredLinks.unshift(newLink);
-              telegramDb.discoveredLinks.put(newLink).catch(() => {});
-              this.statusMetrics.totalLinksDiscovered++;
+            this.discoveredLinks.unshift(newLink);
+            telegramDb.discoveredLinks.put(newLink).catch(() => {});
+            this.statusMetrics.totalLinksDiscovered++;
+
+            // Trigger instant auto-join if enabled
+            if (this.isInstantAutoJoinEnabled) {
+              this.manualJoinDiscoveredLink(newLink.id);
             }
           }
         }
@@ -373,6 +320,7 @@ export class BackgroundSyncService {
         if (data.autoReplyPayload && data.autoReplyPayload.replyText) {
           const { ruleId, replyText, delayMs } = data.autoReplyPayload;
 
+          // Increment rule trigger stats
           const rule = this.autoReplyRules.find((r) => r.id === ruleId);
           if (rule) {
             rule.timesTriggered = (rule.timesTriggered || 0) + 1;
@@ -384,6 +332,7 @@ export class BackgroundSyncService {
 
           this.statusMetrics.totalAutoRepliesTriggered++;
 
+          // Dispatch callback to send message
           const cb = this.pendingCallbacks.get(data.correlationId);
           if (cb) {
             setTimeout(() => {
@@ -411,17 +360,17 @@ export class BackgroundSyncService {
   // ==========================================
   public processIncomingMessage(
     message: Message,
-    chatTitle: string = 'محادثة تلغرام',
+    chatTitle: string,
     chatType: 'private' | 'group' | 'channel' = 'group',
     onAutoReply?: (replyText: string) => void
   ) {
-    const correlationId = 'corr_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-
+    const correlationId = `corr_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
     if (onAutoReply) {
       this.pendingCallbacks.set(correlationId, onAutoReply);
     }
 
     if (this.worker && this.isWorkerReady) {
+      // Offload to Web Worker thread
       this.worker.postMessage({
         type: 'PROCESS_INCOMING_MESSAGE',
         message: {
@@ -436,6 +385,7 @@ export class BackgroundSyncService {
         correlationId,
       });
     } else {
+      // Synchronous fallback if worker is unavailable
       this.fallbackProcessIncomingMessage(message, chatTitle, chatType, onAutoReply);
     }
   }
@@ -450,7 +400,7 @@ export class BackgroundSyncService {
     this.statusMetrics.totalMessagesProcessed++;
     this.statusMetrics.lastProcessedTimestamp = Date.now();
 
-    // 1. Link radar fallback with strict group rules
+    // 1. Link radar fallback
     if (this.isLiveLinkDiscoverActive && text) {
       const TG_LINK_REGEX =
         /(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/(?:\+([a-zA-Z0-9_-]+)|joinchat\/([a-zA-Z0-9_-]+)|([a-zA-Z0-9_]{4,}))|tg:\/\/join\?invite=([a-zA-Z0-9_-]+)/gi;
@@ -460,41 +410,24 @@ export class BackgroundSyncService {
         const fullUrl =
           rawUrl.startsWith('http') || rawUrl.startsWith('tg://') ? rawUrl : 'https://' + rawUrl;
 
-        // Check if already captured
-        if (this.discoveredLinks.some((l) => l.url === fullUrl)) continue;
-
-        const isPrivate = fullUrl.includes('+') || fullUrl.includes('joinchat') || fullUrl.includes('invite=');
-        let cleanHandle = '';
-        if (!isPrivate) {
-          cleanHandle = fullUrl
-            .replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\//i, '')
-            .split('?')[0]
-            .split('/')[0]
-            .trim();
-        }
-
         const discItem: LiveDiscoveredLink = {
           id: 'disc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
           url: fullUrl,
-          cleanHandle: cleanHandle,
           sourceChatTitle: chatTitle || 'محادثة تلغرام',
           sourceChatId: message.chatId || 'chat_unknown',
           senderName: message.senderName || 'مستخدم',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          discoveredAt: Date.now(),
-          status: isPrivate ? 'skipped' : 'pending',
-          linkType: isPrivate ? 'private_invite' : 'public_group',
-          isPrivate: isPrivate,
-          isGroup: !isPrivate,
-          failReason: isPrivate
-            ? 'تم التخطي تلقائياً - رابط خاص (ممنوع الانضمام للقنوات الخاصة طبقاً للقواعد الرسمية)'
-            : undefined,
-          autoJoined: false,
+          status: this.isInstantAutoJoinEnabled ? 'joining' : 'pending',
+          autoJoined: this.isInstantAutoJoinEnabled,
         };
 
         this.discoveredLinks.unshift(discItem);
         telegramDb.discoveredLinks.put(discItem).catch(() => {});
         this.statusMetrics.totalLinksDiscovered++;
+
+        if (this.isInstantAutoJoinEnabled) {
+          this.manualJoinDiscoveredLink(discItem.id);
+        }
       }
     }
 
@@ -543,175 +476,46 @@ export class BackgroundSyncService {
   }
 
   // ==========================================
-  // TELEGRAM SAFE QUEUE & RATE-LIMITING ENGINE
+  // AUTO RESPONDER CONTROLLER METHODS
   // ==========================================
-  private startQueueWorker() {
-    if (this.queueIntervalTimer) clearInterval(this.queueIntervalTimer);
-
-    this.queueIntervalTimer = setInterval(() => {
-      this.checkAndProcessSafeQueue();
-    }, 2000);
+  public getAutoReplyRules(): AutoReplyRule[] {
+    return this.autoReplyRules;
   }
 
-  private cleanRecentJoinHistory(): void {
-    const cutoff = Date.now() - this.SAFE_WINDOW_MS;
-    this.recentJoinTimestamps = this.recentJoinTimestamps.filter((ts) => ts > cutoff);
-
-    // Update cooldown state
-    if (this.recentJoinTimestamps.length < this.SAFE_MAX_JOINS) {
-      if (this.isInSafeCooldown) {
-        this.isInSafeCooldown = false;
-        this.cooldownEndsAt = 0;
-        this.notifyStateChange();
-      }
-    } else {
-      this.isInSafeCooldown = true;
-      const oldest = Math.min(...this.recentJoinTimestamps);
-      this.cooldownEndsAt = oldest + this.SAFE_WINDOW_MS;
-    }
-  }
-
-  public getTelegramSafeStatus(): TelegramSafeLimitStatus {
-    this.cleanRecentJoinHistory();
-    const joinsInWindow = this.recentJoinTimestamps.length;
-    const isInSafeCooldown = joinsInWindow >= this.SAFE_MAX_JOINS;
-    const remainingSeconds = this.cooldownEndsAt > Date.now()
-      ? Math.max(0, Math.ceil((this.cooldownEndsAt - Date.now()) / 1000))
-      : 0;
-
-    const pendingQueueCount = this.discoveredLinks.filter(
-      (l) => l.status === 'pending' && l.linkType === 'public_group'
-    ).length;
-
-    return {
-      joinsInWindow,
-      maxSafeLimit: this.SAFE_MAX_JOINS,
-      windowDurationMinutes: 15,
-      isInSafeCooldown,
-      cooldownEndsAt: this.cooldownEndsAt,
-      remainingSeconds,
-      pendingQueueCount,
+  public addAutoReplyRule(rule: Omit<AutoReplyRule, 'id' | 'timesTriggered'>) {
+    const newRule: AutoReplyRule = {
+      ...rule,
+      id: `rule_${Date.now()}`,
+      timesTriggered: 0,
     };
-  }
-
-  private async checkAndProcessSafeQueue() {
-    if (!this.isInstantAutoJoinEnabled || this.isQueueProcessing) return;
-
-    this.cleanRecentJoinHistory();
-
-    // 1. If currently in safe cooldown limit, pause joining to prevent Telegram restriction
-    if (this.recentJoinTimestamps.length >= this.SAFE_MAX_JOINS) {
-      return;
-    }
-
-    // 2. Find next pending public group link
-    const nextPending = this.discoveredLinks.find(
-      (l) => l.status === 'pending' && l.linkType === 'public_group'
-    );
-
-    if (!nextPending) return;
-
-    this.isQueueProcessing = true;
-
-    try {
-      await this.executeSafeJoin(nextPending.id, true);
-    } finally {
-      this.isQueueProcessing = false;
-    }
-  }
-
-  private async executeSafeJoin(linkId: string, isAutomatic: boolean): Promise<boolean> {
-    const item = this.discoveredLinks.find((l) => l.id === linkId);
-    if (!item) return false;
-
-    // Rule 1: NEVER join private channels or invite links
-    if (item.isPrivate || item.linkType === 'private_invite' || item.url.includes('+') || item.url.includes('joinchat')) {
-      item.status = 'skipped';
-      item.failReason = 'تم التخطي تلقائياً - رابط خاص (ممنوع الانضمام للقنوات الخاصة طبقاً للقواعد الرسمية)';
-      await telegramDb.discoveredLinks
-        .update(linkId, { status: 'skipped', failReason: item.failReason })
-        .catch(() => {});
-      this.notifyStateChange();
-      return false;
-    }
-
-    // Rule 2: Check Safe Limit
-    this.cleanRecentJoinHistory();
-    if (this.recentJoinTimestamps.length >= this.SAFE_MAX_JOINS) {
-      this.isInSafeCooldown = true;
-      const oldest = Math.min(...this.recentJoinTimestamps);
-      this.cooldownEndsAt = oldest + this.SAFE_WINDOW_MS;
-      this.notifyStateChange();
-      return false;
-    }
-
-    item.status = 'joining';
+    this.autoReplyRules.unshift(newRule);
+    this.syncStateToWorker();
     this.notifyStateChange();
+  }
 
-    // Human delay interval before sending RPC
-    await new Promise((res) => setTimeout(res, this.SAFE_JOIN_DELAY_MS));
-
-    const username = item.cleanHandle || item.url
-      .replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\//i, '')
-      .split('?')[0]
-      .split('/')[0]
-      .trim();
-
-    try {
-      // Step A: Resolve entity via MessagesController / TLRPC to verify it's a public group, NOT a broadcast channel
-      const messagesController = MessagesController.getInstance();
-      const resolved = await messagesController.resolveUsername(username);
-
-      if (resolved.chat) {
-        const isBroadcast = resolved.chat.type === 'channel' && !(resolved.chat as any).megagroup;
-        // Rule 3: NEVER join broadcast channels, ONLY public groups
-        if (isBroadcast) {
-          item.status = 'skipped';
-          item.linkType = 'broadcast_channel';
-          item.failReason = 'تم التخطي - قناة بث وليست مجموعة عامة (مسموح بالمجموعات العامة فقط)';
-          await telegramDb.discoveredLinks
-            .update(linkId, {
-              status: 'skipped',
-              linkType: 'broadcast_channel',
-              failReason: item.failReason,
-            })
-            .catch(() => {});
-          this.notifyStateChange();
-          return false;
-        }
-      }
-
-      // Step B: Send official MTProto TL_channels_joinChannel RPC
-      await connectionsManager.sendRequest({
-        _: 'TL_channels_joinChannel',
-        channel: { _: 'inputChannel', channel_id: username, access_hash: '0' },
-      });
-
-      // Step C: Join through MessagesController dialogs store
-      await messagesController.joinChannel(username);
-
-      // Record successful join timestamp for Telegram rate limit protection
-      this.recentJoinTimestamps.push(Date.now());
-      this.cleanRecentJoinHistory();
-
-      item.status = 'joined';
-      item.autoJoined = isAutomatic;
-      item.joinAttemptTime = Date.now();
-      await telegramDb.discoveredLinks
-        .update(linkId, { status: 'joined', autoJoined: isAutomatic, joinAttemptTime: Date.now() })
-        .catch(() => {});
-
+  public toggleRule(ruleId: string) {
+    const rule = this.autoReplyRules.find((r) => r.id === ruleId);
+    if (rule) {
+      rule.isEnabled = !rule.isEnabled;
+      this.syncStateToWorker();
       this.notifyStateChange();
-      return true;
-    } catch (e: any) {
-      item.status = 'failed';
-      item.failReason = e?.text || 'فشل الانضمام للمجموعة أو الرابط غير صالح';
-      await telegramDb.discoveredLinks
-        .update(linkId, { status: 'failed', failReason: item.failReason })
-        .catch(() => {});
-      this.notifyStateChange();
-      return false;
     }
+  }
+
+  public deleteRule(ruleId: string) {
+    this.autoReplyRules = this.autoReplyRules.filter((r) => r.id !== ruleId);
+    this.syncStateToWorker();
+    this.notifyStateChange();
+  }
+
+  public toggleGlobalAutoResponder(enabled: boolean) {
+    this.isAutoResponderGlobal = enabled;
+    this.syncStateToWorker();
+    this.notifyStateChange();
+  }
+
+  public isAutoResponderActive(): boolean {
+    return this.isAutoResponderGlobal;
   }
 
   // ==========================================
@@ -734,9 +538,6 @@ export class BackgroundSyncService {
   public toggleInstantAutoJoin(enabled: boolean) {
     this.isInstantAutoJoinEnabled = enabled;
     this.syncStateToWorker();
-    if (enabled) {
-      this.checkAndProcessSafeQueue();
-    }
     this.notifyStateChange();
   }
 
@@ -750,62 +551,50 @@ export class BackgroundSyncService {
     this.notifyStateChange();
   }
 
-  public async manualJoinDiscoveredLink(linkId: string): Promise<{ success: boolean; reason?: string }> {
+  public async manualJoinDiscoveredLink(linkId: string): Promise<boolean> {
     const item = this.discoveredLinks.find((l) => l.id === linkId);
-    if (!item) return { success: false, reason: 'الرابط غير موجود' };
+    if (!item) return false;
 
-    if (item.isPrivate || item.linkType === 'private_invite' || item.url.includes('+') || item.url.includes('joinchat')) {
-      return {
-        success: false,
-        reason: 'ممنوع الانضمام للقنوات الخاصة طبقاً لقواعد الأمان الرسمية (مجموعات عامة فقط)',
-      };
-    }
-
-    const success = await this.executeSafeJoin(linkId, false);
-    return { success, reason: item.failReason };
-  }
-
-  // ==========================================
-  // AUTO RESPONDER RULES MANAGEMENT
-  // ==========================================
-  public getAutoReplyRules(): AutoReplyRule[] {
-    return this.autoReplyRules;
-  }
-
-  public addAutoReplyRule(rule: Omit<AutoReplyRule, 'id'>): void {
-    const newRule: AutoReplyRule = {
-      ...rule,
-      id: 'rule_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-      timesTriggered: 0,
-    };
-    this.autoReplyRules.unshift(newRule);
-    this.syncStateToWorker();
+    item.status = 'joining';
     this.notifyStateChange();
-  }
 
-  public toggleRule(ruleId: string): void {
-    const r = this.autoReplyRules.find((rule) => rule.id === ruleId);
-    if (r) {
-      r.isEnabled = !r.isEnabled;
-      this.syncStateToWorker();
+    try {
+      if (item.url.includes('+') || item.url.includes('joinchat')) {
+        const hash = item.url.split('+')[1] || item.url.split('joinchat/')[1] || '';
+        await connectionsManager.sendRequest({
+          _: 'TL_messages_importChatInvite',
+          hash: hash.split('?')[0].split('/')[0],
+        });
+        item.status = 'joined';
+        item.autoJoined = false;
+        await telegramDb.discoveredLinks
+          .update(linkId, { status: 'joined', autoJoined: false })
+          .catch(() => {});
+        this.notifyStateChange();
+        return true;
+      } else {
+        const username = item.url.replace('https://t.me/', '').replace('http://t.me/', '').split('/')[0];
+        await connectionsManager.sendRequest({
+          _: 'TL_channels_joinChannel',
+          channel: { _: 'inputChannel', channel_id: username, access_hash: '0' },
+        });
+        item.status = 'joined';
+        item.autoJoined = false;
+        await telegramDb.discoveredLinks
+          .update(linkId, { status: 'joined', autoJoined: false })
+          .catch(() => {});
+        this.notifyStateChange();
+        return true;
+      }
+    } catch (e: any) {
+      item.status = 'failed';
+      item.failReason = e?.text || 'INVITE_EXPIRED_OR_PRIVATE';
+      await telegramDb.discoveredLinks
+        .update(linkId, { status: 'failed', failReason: item.failReason })
+        .catch(() => {});
       this.notifyStateChange();
+      return false;
     }
-  }
-
-  public deleteRule(ruleId: string): void {
-    this.autoReplyRules = this.autoReplyRules.filter((rule) => rule.id !== ruleId);
-    this.syncStateToWorker();
-    this.notifyStateChange();
-  }
-
-  public isAutoResponderActive(): boolean {
-    return this.isAutoResponderGlobal;
-  }
-
-  public toggleGlobalAutoResponder(active?: boolean): void {
-    this.isAutoResponderGlobal = active !== undefined ? active : !this.isAutoResponderGlobal;
-    this.syncStateToWorker();
-    this.notifyStateChange();
   }
 
   // ==========================================

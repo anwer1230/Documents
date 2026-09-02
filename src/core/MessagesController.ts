@@ -10,8 +10,10 @@ import { Chat, Message } from '../types';
 import { TLRPC } from './TLRPC';
 import { NotificationCenter } from './NotificationCenter';
 import { MessagesStorage } from './MessagesStorage';
+import { ConnectionsManager } from './ConnectionsManager';
 import { DialogsController } from './messenger/DialogsController';
 import { UserConfig } from './messenger/UserConfig';
+import { KeywordMonitor } from './messenger/KeywordMonitor';
 
 export interface ChatParticipantInfo {
   userId: string;
@@ -62,6 +64,13 @@ export class MessagesController {
   private adminOnlyPostingMap: Set<string> = new Set();
   private bannedUsersMap: Map<string, Set<string>> = new Map();
 
+  // MTProto Updates and Sync State
+  public pts: number = 0;
+  public seq: number = 0;
+  public lastDate: number = 0;
+  public qts: number = 0;
+  private gettingDifference: boolean = false;
+
   public static getInstance(accountNum: number = 0): MessagesController {
     if (!MessagesController.instances.has(accountNum)) {
       MessagesController.instances.set(accountNum, new MessagesController(accountNum));
@@ -90,6 +99,40 @@ export class MessagesController {
   }
 
   /**
+   * DrKLO MessagesController: Remote Forced Logout & Session Revocation
+   * Replicated from DrKLO/Telegram Android MessagesController.java
+   */
+  public performForcedLogout(reason: string = 'AUTH_KEY_UNREGISTERED'): void {
+    console.warn(
+      `[MessagesController] performForcedLogout triggered (reason: ${reason}) on account ${this.currentAccount}`
+    );
+
+    // 1. Terminate network connections
+    ConnectionsManager.getInstance(this.currentAccount).cleanup(false);
+
+    // 2. Wipe memory caches
+    this.cleanup();
+
+    // 3. Clear database tables & cached files
+    MessagesStorage.getInstance(this.currentAccount).cleanUp(true);
+
+    // 4. Wipe UserConfig and clear active credentials/tokens
+    UserConfig.getInstance(this.currentAccount).clearConfig(true);
+
+    // 5. Broadcast to NotificationCenter for UI stack reset (LaunchActivity -> LoginActivity)
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.appDidLogout,
+      this.currentAccount,
+      reason
+    );
+    NotificationCenter.getGlobalInstance().postNotificationName(
+      NotificationCenter.appDidLogout,
+      this.currentAccount,
+      reason
+    );
+  }
+
+  /**
    * Loads dialogs either from persistent storage or cloud MTProto service
    */
   public loadDialogs(offset: number = 0, count: number = 100, fromCache: boolean = true): void {
@@ -102,7 +145,7 @@ export class MessagesController {
       const storage = MessagesStorage.getInstance(this.currentAccount);
       const stored = storage.getDialogs(offset, count);
       this.dialogs = stored;
-      stored.forEach((c) => this.chats.set(String(c.id), c));
+      stored.forEach((c) => this.chats.set(c.id, c));
     }
 
     NotificationCenter.getInstance(this.currentAccount).postNotificationName(
@@ -227,7 +270,7 @@ export class MessagesController {
     if (msg.date) {
       const parsedFull = Date.parse(`${msg.date} ${msg.timestamp || '00:00'}`);
       if (!isNaN(parsedFull)) return parsedFull;
-      const parsedDateOnly = Date.parse(String(msg.date));
+      const parsedDateOnly = Date.parse(msg.date);
       if (!isNaN(parsedDateOnly)) return parsedDateOnly;
     }
     if (msg.timestamp && typeof msg.timestamp === 'string') {
@@ -270,28 +313,43 @@ export class MessagesController {
       };
     }
 
-    if (chat.isReadOnly) {
+    // Check if user is owner / admin
+    const chatRoles = this.participantsMap.get(chat.id);
+    const userRole = chatRoles?.get(currentUserId);
+    const isAdminOrCreator = Boolean(chat.creator || chat.isCreator || chat.isAdmin || (userRole && (userRole.role === 'creator' || userRole.role === 'admin')));
+
+    if (isAdminOrCreator) {
+      return { canSend: true };
+    }
+
+    // If chat is a broadcast channel (and not a supergroup/group)
+    const isBroadcastChannel = chat.type === 'channel' && !chat.megagroup && !chat.isGroup;
+    if (isBroadcastChannel || chat.isReadOnly) {
       return {
         canSend: false,
-        reason: 'هذه القناة للقراءة فقط، النشر مقتصر على المشرفين',
+        reason: 'القنوات مخصصة لبث الرسائل بواسطة المشرفين فقط',
         errorCode: 'CHAT_WRITE_FORBIDDEN',
       };
     }
 
-    if (chat.type === 'channel') {
-      const chatRoles = this.participantsMap.get(String(chat.id));
-      const userRole = chatRoles?.get(currentUserId);
-
-      if (!userRole || (userRole.role !== 'creator' && userRole.role !== 'admin')) {
-        return {
-          canSend: false,
-          reason: 'القنوات مخصصة لبث الرسائل بواسطة المشرفين فقط',
-          errorCode: 'CHAT_WRITE_FORBIDDEN',
-        };
-      }
+    // Check banned / restricted rights
+    if (chat.banned_rights?.send_messages || chat.banned_rights?.send_plain || chat.hasBannedRights) {
+      return {
+        canSend: false,
+        reason: 'المشرفون قيدوا قدرتك على إرسال الرسائل في هذه المجموعة',
+        errorCode: 'USER_BANNED_IN_CHANNEL',
+      };
     }
 
-    const bannedSet = this.bannedUsersMap.get(String(chat.id));
+    if (chat.default_banned_rights?.send_messages || chat.default_banned_rights?.send_plain) {
+      return {
+        canSend: false,
+        reason: 'إرسال الرسائل مقيد لجميع الأعضاء في هذه المجموعة',
+        errorCode: 'USER_BANNED_IN_CHANNEL',
+      };
+    }
+
+    const bannedSet = this.bannedUsersMap.get(chat.id);
     if (bannedSet && bannedSet.has(currentUserId)) {
       return {
         canSend: false,
@@ -300,19 +358,15 @@ export class MessagesController {
       };
     }
 
-    if (this.adminOnlyPostingMap.has(String(chat.id)) || chat.adminOnly) {
-      const chatRoles = this.participantsMap.get(String(chat.id));
-      const userRole = chatRoles?.get(currentUserId);
-      if (!userRole || (userRole.role !== 'creator' && userRole.role !== 'admin')) {
-        return {
-          canSend: false,
-          reason: 'تم تفعيل وضع المشرفين فقط بواسطة الإدارة',
-          errorCode: 'ADMIN_ONLY',
-        };
-      }
+    if (this.adminOnlyPostingMap.has(chat.id) || chat.adminOnly) {
+      return {
+        canSend: false,
+        reason: 'تم تفعيل وضع المشرفين فقط بواسطة الإدارة',
+        errorCode: 'ADMIN_ONLY',
+      };
     }
 
-    const slowmode = this.slowmodeMap.get(String(chat.id));
+    const slowmode = this.slowmodeMap.get(chat.id);
     const cooldown = chat.slowModeSeconds || slowmode?.cooldownSeconds || 0;
     if (cooldown > 0 && slowmode?.lastSentTimestamp) {
       const now = Date.now();
@@ -392,8 +446,8 @@ export class MessagesController {
         return (a.pinnedIndex ?? 0) - (b.pinnedIndex ?? 0);
       }
 
-      const draftA = this.draftsMap.get(String(a.id))?.date || 0;
-      const draftB = this.draftsMap.get(String(b.id))?.date || 0;
+      const draftA = this.draftsMap.get(a.id)?.date || 0;
+      const draftB = this.draftsMap.get(b.id)?.date || 0;
 
       const timeA = Math.max(this.getMessageEpoch(a.lastMessage as any), draftA);
       const timeB = Math.max(this.getMessageEpoch(b.lastMessage as any), draftB);
@@ -412,7 +466,7 @@ export class MessagesController {
       const epochA = this.getMessageEpoch(a);
       const epochB = this.getMessageEpoch(b);
       if (epochA !== epochB) return epochA - epochB;
-      return String(a.id || '').localeCompare(String(b.id || ''));
+      return (a.id || '').localeCompare(b.id || '');
     });
 
     const result: GroupedMessageItem[] = [];
@@ -424,7 +478,7 @@ export class MessagesController {
       const prevMsg = i > 0 ? sorted[i - 1] : null;
       const nextMsg = i < sorted.length - 1 ? sorted[i + 1] : null;
 
-      const dateStr = String(msg.date || this.formatDateDivider(new Date(this.getMessageEpoch(msg) || Date.now())));
+      const dateStr = msg.date || this.formatDateDivider(new Date(this.getMessageEpoch(msg) || Date.now()));
       if (dateStr !== lastDateStr) {
         result.push({
           type: 'date_divider',
@@ -601,734 +655,739 @@ export class MessagesController {
   }
 
   /**
-   * DrKLO TLRPC.TL_messages_checkChatInvite
-   * Checks private invite hash and returns invite metadata (or already participant status)
+   * Performs partial cache invalidation and triggers a fresh getDifference call
+   * specifically when a user session is successfully established or switched.
    */
-  public async checkChatInvite(
-    hash: string,
-    callback?: (response: TLRPC.TL_chatInvite | TLRPC.TL_chatInviteAlready | null, error: TLRPC.TL_error | null) => void
-  ): Promise<TLRPC.TL_chatInvite | TLRPC.TL_chatInviteAlready> {
-    const cleanHash = hash.replace(/^(?:https?:\/\/)?(?:t\.me\/(?:\+|joinchat\/)|tg:\/\/join\?invite=)/i, '').trim();
+  public async onUserSessionEstablished(forceFreshSync: boolean = true): Promise<void> {
+    const userConfig = UserConfig.getInstance(this.currentAccount);
+    if (!userConfig.isClientAuthorized()) {
+      console.warn(`[MessagesController] onUserSessionEstablished called for unauthorized account: ${this.currentAccount}`);
+      return;
+    }
 
-    // Check if we already have this chat in our dialogs
-    const existing = this.dialogs.find(
-      (c) => c.inviteHash === cleanHash || (c.id && String(c.id).toLowerCase().includes(cleanHash.toLowerCase()))
+    console.log(`[MessagesController] User session established for account ${this.currentAccount}. Performing partial cache invalidation and fresh getDifference...`);
+
+    // 1. Partial Cache Invalidation (clear stale state, gap wait timers, and transient buffers)
+    this.gettingDifference = false;
+    this.loadingDialogs = false;
+    this.dialogsEndReached = false;
+    this.pts = 0;
+    this.seq = 0;
+    this.lastDate = 0;
+    this.dialogs = [];
+    this.chats.clear();
+    this.participantsMap.clear();
+    this.draftsMap.clear();
+
+    // 2. Clear storage cached diff params for a clean baseline
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    storage.saveDiffParams(0, 0, 0, 0);
+
+    // 3. Immediately trigger fresh getDifference and dialogs load
+    if (forceFreshSync) {
+      await this.getDifference();
+      this.loadDialogs(0, 100, false);
+    }
+
+    // 4. Force sub-second UI notifications so messages and dialogs render instantly
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.dialogsNeedReload
     );
-
-    if (existing) {
-      const alreadyRes: TLRPC.TL_chatInviteAlready = {
-        _: 'chatInviteAlready',
-        chat: {
-          _: 'chat',
-          id: typeof existing.id === 'number' ? existing.id : Math.abs(cleanHash.split('').reduce((a, b) => a + b.charCodeAt(0), 0)),
-          title: existing.title,
-          participants_count: existing.memberCount || 1200,
-          date: Math.floor(Date.now() / 1000),
-          version: 1,
-        },
-      };
-      if (callback) callback(alreadyRes, null);
-      return alreadyRes;
-    }
-
-    try {
-      const res = await fetch(`/api/telegram/chat-invite/preview?hash=${encodeURIComponent(cleanHash)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const tlInvite: TLRPC.TL_chatInvite = {
-          _: 'chatInvite',
-          flags: 0,
-          channel: data.isChannel ?? false,
-          broadcast: data.isChannel ?? false,
-          public: data.isPublic ?? false,
-          megagroup: !data.isChannel,
-          request_needed: data.requestNeeded ?? false,
-          title: data.title || `Telegram Community (${cleanHash.slice(0, 6)})`,
-          about: data.about || 'Verified Telegram Community accessed securely via MTProto invite.',
-          photo: data.photo || '',
-          participants_count: data.participantsCount || 4800,
-        };
-        if (callback) callback(tlInvite, null);
-        return tlInvite;
-      }
-    } catch {
-      // Fall through to deterministic simulation
-    }
-
-    const hashSum = cleanHash.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-    const isChannel = hashSum % 2 === 0;
-
-    const simulatedInvite: TLRPC.TL_chatInvite = {
-      _: 'chatInvite',
-      flags: 0,
-      channel: isChannel,
-      broadcast: isChannel,
-      public: false,
-      megagroup: !isChannel,
-      request_needed: false,
-      title: isChannel ? `Channel: ${cleanHash.slice(0, 8)}` : `Group: ${cleanHash.slice(0, 8)}`,
-      about: `Verified Telegram ${isChannel ? 'channel' : 'community'} accessed via MTProto deep link.`,
-      photo: `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80`,
-      participants_count: 500 + (hashSum % 14500),
-    };
-
-    if (callback) callback(simulatedInvite, null);
-    return simulatedInvite;
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.updateInterfaces,
+      0
+    );
   }
 
   /**
-   * DrKLO TLRPC.TL_messages_importChatInvite
-   * Imports private invite link to join group or channel
+   * Forces partial cache invalidation and a fresh getDifference
    */
-  public async importChatInvite(
-    hash: string,
-    callback?: (response: any, error: TLRPC.TL_error | null) => void
-  ): Promise<{ ok: boolean; chat?: Chat; error?: string }> {
-    const cleanHash = hash.replace(/^(?:https?:\/\/)?(?:t\.me\/(?:\+|joinchat\/)|tg:\/\/join\?invite=)/i, '').trim();
+  public async forceResetAndGetDifference(): Promise<void> {
+    return this.onUserSessionEstablished(true);
+  }
+
+  /**
+   * Resynchronizes missed updates via MTProto updates.getDifference
+   */
+  public async getDifference(): Promise<void> {
+    if (this.gettingDifference) return;
+    this.gettingDifference = true;
 
     try {
-      const res = await fetch('/api/telegram/chat-invite/join', {
+      const userConfig = UserConfig.getInstance(this.currentAccount);
+      const user = userConfig.getCurrentUser();
+      const phone = user?.phone || '';
+      const sessionString = typeof window !== 'undefined' ? localStorage.getItem(`tg_session_string_${this.currentAccount}`) || localStorage.getItem('tg_session_string') || '' : '';
+
+      const storage = MessagesStorage.getInstance(this.currentAccount);
+
+      // 1. Request real cloud differential sync slice from backend MTProto proxy
+      const resp = await fetch('/api/telegram/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hash: cleanHash }),
+        body: JSON.stringify({
+          phone,
+          sessionString,
+          pts: this.pts,
+          date: this.lastDate,
+          qts: this.qts,
+        }),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        const err = new TLRPC.TL_error(400, errData.error || 'INVITE_HASH_EXPIRED');
-        if (callback) callback(null, err);
-        return { ok: false, error: err.text };
-      }
+      const data = await resp.json();
 
-      const data = await res.json();
-      const newChat: Chat = data.chat || {
-        id: `chat_invite_${cleanHash.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`,
-        type: 'group',
-        title: `Community ${cleanHash.slice(0, 6)}`,
-        avatar: '',
-        unreadCount: 0,
-        memberCount: 5200,
-        inviteHash: cleanHash,
-      };
-
-      this.chats.set(String(newChat.id), newChat);
-      this.dialogs = [newChat, ...this.dialogs.filter((c) => c.id !== newChat.id)];
-
-      // Post notification to update UI
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.chatDidCreated,
-        newChat
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-
-      if (callback) callback({ _: 'updates', chats: [newChat] }, null);
-      return { ok: true, chat: newChat };
-    } catch (e: any) {
-      // Local fallback
-      const hashSum = cleanHash.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-      const isChannel = hashSum % 2 === 0;
-      const newChat: Chat = {
-        id: `chat_invite_${cleanHash.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`,
-        type: isChannel ? 'channel' : 'group',
-        title: isChannel ? `Channel ${cleanHash.slice(0, 8)}` : `Group ${cleanHash.slice(0, 8)}`,
-        avatar: '',
-        unreadCount: 0,
-        memberCount: 1200 + (hashSum % 8000),
-        inviteHash: cleanHash,
-        lastMessage: {
-          id: `msg_${Date.now()}`,
-          senderName: isChannel ? `Channel ${cleanHash.slice(0, 8)}` : `Group ${cleanHash.slice(0, 8)}`,
-          text: 'Joined via MTProto importChatInvite deep link.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          isOutgoing: false,
-          status: 'read',
-        },
-      };
-
-      this.chats.set(String(newChat.id), newChat);
-      this.dialogs = [newChat, ...this.dialogs.filter((c) => c.id !== newChat.id)];
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.chatDidCreated,
-        newChat
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-
-      if (callback) callback({ _: 'updates', chats: [newChat] }, null);
-      return { ok: true, chat: newChat };
-    }
-  }
-
-  /**
-   * DrKLO TLRPC.TL_contacts_resolveUsername
-   * Resolves public username (@domain or t.me/domain) to peer / chat
-   */
-  public async resolveUsername(
-    username: string,
-    callback?: (response: any, error: TLRPC.TL_error | null) => void
-  ): Promise<{ peer?: any; chat?: Chat; user?: any; error?: string }> {
-    const cleanUsername = username.replace(/^@/, '').replace(/^(?:https?:\/\/)?(?:t\.me|telegram\.me|telegram\.dog)\//i, '').split('/')[0].trim();
-
-    if (!cleanUsername || cleanUsername.length < 3) {
-      const err = new TLRPC.TL_error();
-      err.code = 400;
-      err.text = 'USERNAME_INVALID';
-      if (callback) callback(null, err);
-      return { error: 'USERNAME_INVALID' };
-    }
-
-    // Check existing dialogs
-    const existing = this.dialogs.find(
-      (c) => c.username?.toLowerCase() === cleanUsername.toLowerCase()
-    );
-    if (existing) {
-      const res = { peer: { _: 'peerChannel', channel_id: existing.id }, chat: existing };
-      if (callback) callback(res, null);
-      return res;
-    }
-
-    try {
-      const res = await fetch(`/api/telegram/resolve-username?username=${encodeURIComponent(cleanUsername)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (callback) callback(data, null);
-        return data;
-      }
-    } catch {}
-
-    // Deterministic peer resolution
-    const createdChat: Chat = {
-      id: `chat_${cleanUsername.toLowerCase()}`,
-      type: cleanUsername.endsWith('bot') ? 'bot' : 'channel',
-      title: `@${cleanUsername}`,
-      username: cleanUsername,
-      avatar: '',
-      unreadCount: 0,
-      memberCount: 25000,
-      description: `Public Telegram channel @${cleanUsername} resolved via MTProto.`,
-    };
-
-    if (callback) callback({ peer: { _: 'peerChannel', channel_id: createdChat.id }, chat: createdChat }, null);
-    return { peer: { _: 'peerChannel', channel_id: createdChat.id }, chat: createdChat };
-  }
-
-  /**
-   * DrKLO TLRPC.TL_channels_joinChannel
-   * Joins public channel or group
-   */
-  public async joinChannel(
-    chatOrUsername: Chat | string,
-    callback?: (response: any, error: TLRPC.TL_error | null) => void
-  ): Promise<{ ok: boolean; chat?: Chat; error?: string }> {
-    let targetChat: Chat;
-    if (typeof chatOrUsername === 'string') {
-      const resolved = await this.resolveUsername(chatOrUsername);
-      if (resolved.error || !resolved.chat) {
-        if (callback) {
-          const err = new TLRPC.TL_error();
-          err.code = 400;
-          err.text = resolved.error || 'CHANNEL_INVALID';
-          callback(null, err);
+      if (data && data.success) {
+        if (data.chats && Array.isArray(data.chats)) {
+          this.dialogs = data.chats;
+          data.chats.forEach((c: any) => this.chats.set(c.id, c));
         }
-        return { ok: false, error: resolved.error || 'CHANNEL_INVALID' };
-      }
-      targetChat = resolved.chat;
-    } else {
-      targetChat = chatOrUsername;
-    }
 
-    this.chats.set(String(targetChat.id), targetChat);
-    this.dialogs = [targetChat, ...this.dialogs.filter((c) => c.id !== targetChat.id)];
-
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.chatInfoDidLoad,
-      targetChat
-    );
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.dialogsNeedReload
-    );
-
-    if (callback) callback({ _: 'updates', chats: [targetChat] }, null);
-    return { ok: true, chat: targetChat };
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_forwardMessages
-   * Forwards selected messages to target dialog
-   */
-  public async forwardMessages(
-    fromChatId: string,
-    toChatId: string,
-    messageIds: (string | number)[],
-    dropAuthor: boolean = false,
-    silent: boolean = false
-  ): Promise<{ ok: boolean; count: number }> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(fromChatId);
-    let count = 0;
-
-    for (const rawId of messageIds) {
-      const orig = msgs.find((m) => String(m.id) === String(rawId));
-      if (!orig) continue;
-
-      const fwdMsg: Message = {
-        id: `msg_${Date.now()}_fwd_${Math.random().toString(36).substring(2, 6)}`,
-        chatId: toChatId,
-        senderId: 'user_self',
-        senderName: 'أنت',
-        text: orig.text || '',
-        media: orig.media,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        date: new Date().toISOString().split('T')[0],
-        status: 'sent',
-        isOutgoing: true,
-        forwardedFrom: dropAuthor
-          ? undefined
-          : {
-              fromChatName: orig.senderName || 'مستخدم',
-              fromChatId: orig.chatId,
-              originalDate: orig.date,
-            },
-      };
-
-      storage.putMessage(fwdMsg);
-      count++;
-    }
-
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.dialogsNeedReload
-    );
-
-    return { ok: true, count };
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_editMessage
-   * Edits message content and updates storage & observers
-   */
-  public async editMessage(
-    chatId: string,
-    messageId: string | number,
-    newText: string
-  ): Promise<Message | null> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(chatId);
-    const target = msgs.find((m) => String(m.id) === String(messageId));
-    if (!target) return null;
-
-    target.text = newText;
-    target.isEdited = true;
-    storage.putMessage(target);
-
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.messageReceivedByAck,
-      messageId
-    );
-
-    return target;
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_deleteMessages
-   * Deletes messages from dialog with revoke option
-   */
-  public async deleteMessages(
-    chatId: string,
-    messageIds: (string | number)[],
-    revoke: boolean = true
-  ): Promise<boolean> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    for (const id of messageIds) {
-      storage.deleteMessage(String(id));
-    }
-
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.messagesDeleted,
-      messageIds
-    );
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.dialogsNeedReload
-    );
-
-    return true;
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_updatePinnedMessage
-   * Pins or unpins a message in chat
-   */
-  public async pinMessage(
-    chatId: string,
-    messageId: string | number,
-    silent: boolean = false,
-    unpin: boolean = false
-  ): Promise<boolean> {
-    const chat = this.chats.get(chatId) || this.dialogs.find((c) => c.id === chatId);
-    if (chat) {
-      if (unpin) {
-        chat.pinnedMessageId = undefined;
-      } else {
-        chat.pinnedMessageId = String(messageId);
-      }
-    }
-
-    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-      NotificationCenter.didUpdatePinnedMessage,
-      chatId,
-      messageId
-    );
-
-    return true;
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_sendScheduledMessages
-   */
-  public async sendScheduledMessage(
-    chatId: string,
-    messageId: string | number
-  ): Promise<boolean> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(chatId);
-    const target = msgs.find((m) => String(m.id) === String(messageId));
-    if (target) {
-      target.status = 'sent';
-      storage.putMessage(target);
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-    }
-    return true;
-  }
-
-  /**
-   * DrKLO processUpdates
-   * Real-time sync engine receiving TLRPC.Updates, TL_updateNewMessage, TL_updateReadHistoryOutbox, TL_updateUserTyping
-   */
-  public processUpdates(updates: any, isGetDifference: boolean = false): void {
-    if (!updates) return;
-
-    const list = Array.isArray(updates.updates)
-      ? updates.updates
-      : Array.isArray(updates)
-      ? updates
-      : [updates];
-
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-
-    for (const update of list) {
-      if (!update) continue;
-
-      // 1. TL_updateNewMessage
-      if (
-        update._ === 'updateNewMessage' ||
-        update.constructorId === TLRPC.CONSTRUCTOR_IDS.updateNewMessage ||
-        update.message
-      ) {
-        const msg = update.message || update;
-        if (msg.chatId || msg.peer_id) {
-          const cId = msg.chatId || (msg.peer_id?.channel_id ? `chat_${msg.peer_id.channel_id}` : `chat_${msg.peer_id?.user_id || 'unknown'}`);
-          storage.putMessage(msg);
-
-          // Update Dialog top message
-          const chat = this.chats.get(cId) || this.dialogs.find((c) => c.id === cId);
-          if (chat) {
-            chat.lastMessage = msg.text || '[Media]';
-            chat.lastMessageTime = msg.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            if (!msg.isOutgoing && msg.status !== 'read') {
-              chat.unreadCount = (chat.unreadCount || 0) + 1;
+        if (data.messages && typeof data.messages === 'object') {
+          Object.keys(data.messages).forEach((chatId) => {
+            const chatMsgs = data.messages[chatId];
+            if (Array.isArray(chatMsgs) && chatMsgs.length > 0) {
+              storage.putMessages(chatMsgs, chatId);
             }
-          }
-
-          NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-            NotificationCenter.didReceiveNewMessages,
-            cId,
-            [msg]
-          );
-          NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-            NotificationCenter.dialogsNeedReload
-          );
+          });
         }
-      }
-      // 2. TL_updateReadHistoryOutbox / updateReadHistoryInbox
-      else if (
-        update._ === 'updateReadHistoryOutbox' ||
-        update._ === 'updateReadHistoryInbox' ||
-        update._ === 'updateReadMessages' ||
-        update.constructorId === TLRPC.CONSTRUCTOR_IDS.updateReadMessages
-      ) {
-        const cId = update.chatId || (update.peer?.channel_id ? `chat_${update.peer.channel_id}` : `chat_${update.peer?.user_id || ''}`);
-        const maxId = update.max_id || update.id;
-        if (cId) {
-          this.markDialogAsReadLocal(cId, maxId);
-        }
-      }
-      // 3. TL_updateUserTyping / updateChatUserTyping
-      else if (
-        update._ === 'updateUserTyping' ||
-        update._ === 'updateChatUserTyping' ||
-        update.constructorId === TLRPC.CONSTRUCTOR_IDS.updateUserTyping ||
-        update.constructorId === TLRPC.CONSTRUCTOR_IDS.updateChatUserTyping
-      ) {
-        const cId = update.chatId || `chat_${update.user_id || ''}`;
-        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-          NotificationCenter.userTyping,
-          cId,
-          update.action || 'typing'
-        );
-      }
-      // 4. TL_updateMessageReactions
-      else if (update._ === 'updateMessageReactions' || update.reactions) {
-        const cId = update.chatId || `chat_${update.peer?.channel_id || update.peer?.user_id || ''}`;
-        const mId = update.msg_id || update.messageId;
-        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-          NotificationCenter.reactionsDidLoad,
-          cId,
-          mId,
-          update.reactions
-        );
-      }
-    }
-  }
 
-  /**
-   * DrKLO TLRPC.TL_messages_setTyping
-   * Broadcasts typing or media action indicator
-   */
-  public async sendTyping(chatId: string, actionType: number = 0): Promise<void> {
-    try {
-      fetch('/api/telegram/mtproto/invoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method: 'messages.setTyping',
-          params: {
-            peer: chatId,
-            action: actionType === 0 ? { _: 'sendMessageTypingAction' } : actionType === 1 ? { _: 'sendMessageRecordAudioAction' } : { _: 'sendMessageUploadPhotoAction' },
-          },
-        }),
-      }).catch(() => {});
-    } catch {}
-  }
+        this.pts = (this.pts || 0) + 1;
+        this.seq = (this.seq || 0) + 1;
+        this.lastDate = Math.floor(Date.now() / 1000);
+        storage.saveDiffParams(this.seq, this.pts, this.lastDate, this.qts);
 
-  /**
-   * DrKLO TLRPC.TL_messages_readHistory
-   * Marks incoming messages up to maxId as read
-   */
-  public async markDialogAsReadRemote(chatId: string, maxId: number | string): Promise<void> {
-    this.markDialogAsReadLocal(chatId, maxId);
-
-    try {
-      fetch('/api/telegram/mtproto/invoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method: 'messages.readHistory',
-          params: {
-            peer: chatId,
-            max_id: maxId,
-          },
-        }),
-      }).catch(() => {});
-    } catch {}
-  }
-
-  private markDialogAsReadLocal(chatId: string, maxId: number | string): void {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(chatId);
-    let changed = false;
-
-    for (const m of msgs) {
-      if (m.status !== 'read') {
-        m.status = 'read';
-        changed = true;
-      }
-    }
-
-    const chat = this.chats.get(chatId) || this.dialogs.find((c) => c.id === chatId);
-    if (chat) {
-      chat.unreadCount = 0;
-    }
-
-    if (changed) {
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.messagesRead,
-        chatId,
-        maxId
-      );
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-    }
-  }
-
-  /**
-   * DrKLO TLRPC.TL_messages_sendReaction
-   * Toggles or updates emoji reaction on message
-   */
-  public async sendReaction(
-    chatId: string,
-    messageId: string | number,
-    reactionEmoji: string,
-    addToRecent: boolean = true
-  ): Promise<void> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(chatId);
-    const target = msgs.find((m) => String(m.id) === String(messageId));
-
-    if (target) {
-      if (!target.reactions) target.reactions = [];
-      const existing = target.reactions.find((r) => r.emoji === reactionEmoji);
-      if (existing) {
-        if (existing.users.includes('user_self')) {
-          existing.users = existing.users.filter((u) => u !== 'user_self');
-          existing.count = Math.max(0, existing.count - 1);
-        } else {
-          existing.users.push('user_self');
-          existing.count += 1;
-        }
-      } else {
-        target.reactions.push({
-          emoji: reactionEmoji,
-          count: 1,
-          users: ['user_self'],
-        });
-      }
-      target.reactions = target.reactions.filter((r) => r.count > 0);
-      storage.putMessage(target);
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.reactionsDidLoad,
-        chatId,
-        messageId,
-        target.reactions
-      );
-    }
-
-    try {
-      fetch('/api/telegram/mtproto/invoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method: 'messages.sendReaction',
-          params: {
-            peer: chatId,
-            msg_id: messageId,
-            reaction: [{ _: 'reactionEmoji', emoticon: reactionEmoji }],
-            add_to_recent: addToRecent,
-          },
-        }),
-      }).catch(() => {});
-    } catch {}
-  }
-
-  /**
-   * DrKLO retrySendMessage
-   * Retries sending a failed message
-   */
-  public async retrySendMessage(chatId: string, messageId: string | number): Promise<void> {
-    const storage = MessagesStorage.getInstance(this.currentAccount);
-    const msgs = storage.getMessages(chatId);
-    const target = msgs.find((m) => String(m.id) === String(messageId));
-    if (target) {
-      target.status = 'sending';
-      storage.putMessage(target);
-
-      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
-        NotificationCenter.dialogsNeedReload
-      );
-
-      setTimeout(() => {
-        target.status = 'sent';
-        storage.putMessage(target);
         NotificationCenter.getInstance(this.currentAccount).postNotificationName(
           NotificationCenter.dialogsNeedReload
         );
-      }, 1000);
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          0
+        );
+      }
+    } catch (e) {
+      console.error('[MessagesController] getDifference failed:', e);
+    } finally {
+      this.gettingDifference = false;
     }
   }
 
   /**
-   * DrKLO TLRPC.TL_messages_editPeerFolders
-   * Archives (folder_id: 1) or unarchives (folder_id: 0) a dialog
+   * Primary MTProto Updates Processor (gap-checking & instant sub-second UI dispatch)
    */
-  public async editPeerFolders(chatId: string, folderId: number): Promise<boolean> {
-    const chat = this.chats.get(chatId) || this.dialogs.find((c) => c.id === chatId);
-    if (chat) {
-      chat.isArchived = folderId === 1;
+  public processUpdates(updates: any, isDifference: boolean = false): void {
+    if (!updates) return;
+
+    if (updates._ === 'TL_updates' || updates.updates) {
+      const updatesList = updates.updates || [];
+      if (updates.seq) {
+        this.seq = updates.seq;
+        this.lastDate = updates.date || Math.floor(Date.now() / 1000);
+      }
+
+      for (const upd of updatesList) {
+        if (upd.pts && upd.pts_count) {
+          // If PTS was uninitialized (e.g. fresh login), initialize directly without dropping
+          if (this.pts === 0) {
+            this.pts = upd.pts;
+          } else if (!isDifference && this.pts + upd.pts_count !== upd.pts) {
+            // Sequence gap detected -> trigger fresh getDifference immediately
+            this.getDifference();
+            return;
+          } else {
+            this.pts = upd.pts;
+          }
+        }
+        this.processSingleUpdate(upd);
+      }
+    } else if (Array.isArray(updates)) {
+      for (const upd of updates) {
+        this.processSingleUpdate(upd);
+      }
+    } else {
+      this.processSingleUpdate(updates);
+    }
+  }
+
+  public processSingleUpdate(update: any): void {
+    if (!update) return;
+
+    if (update._ === 'TL_updateNewMessage' || update.type === 'new_message') {
+      const msg = update.message || update;
+      const storage = MessagesStorage.getInstance(this.currentAccount);
+      if (msg.id && (msg.chatId || msg.peer_id)) {
+        storage.saveMessage(msg);
+      }
+
+      KeywordMonitor.getInstance(this.currentAccount).inspectMessage(msg);
+
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.didReceiveNewMessages,
+        msg.chatId || msg.peer_id,
+        [msg]
+      );
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.dialogsNeedReload
       );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.updateInterfaces,
+        0
+      );
+    } else if (update._ === 'TL_updateChannel' || update.type === 'update_channel') {
+      const channelId = update.channel_id || update.chatId;
+      if (channelId) {
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.chatInfoDidLoad,
+          channelId,
+          update
+        );
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_SELECT_DIALOG
+        );
+      }
+    } else if (
+      update._ === 'TL_updateNewAuthorization' ||
+      update._ === 'updateNewAuthorization' ||
+      update.type === 'updateNewAuthorization'
+    ) {
+      if (update.unregistered || update.is_current_revoked || update.hash === 'revoked' || update.hash === 'all') {
+        this.performForcedLogout('REMOTE_SESSION_REVOKED');
+        return;
+      }
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.authorizationsUpdated
+      );
+    } else if (update._ === 'TL_updateNewChannelMessage') {
+      const msg = update.message || update;
+      const storage = MessagesStorage.getInstance(this.currentAccount);
+      if (msg.id && (msg.chatId || msg.peer_id)) {
+        storage.saveMessage(msg);
+      }
+
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.didReceiveNewMessages,
+        msg.chatId || msg.peer_id,
+        [msg]
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.dialogsNeedReload
+      );
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.updateInterfaces,
+        NotificationCenter.UPDATE_MASK_READ_DIALOG_MESSAGE
+      );
     }
+  }
 
+  // ==========================================================
+  // 1. Two-Step Verification & Password Settings
+  // TLRPC.TL_account_getPassword / TLRPC.TL_account_updatePasswordSettings
+  // ==========================================================
+  public async loadPasswordSettings(): Promise<TLRPC.TL_account_password | null> {
     try {
-      fetch('/api/telegram/mtproto/invoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method: 'messages.editPeerFolders',
-          params: {
-            folder_peers: [
-              {
-                _: 'inputFolderPeer',
-                peer: chatId,
-                folder_id: folderId,
-              },
-            ],
-          },
-        }),
-      }).catch(() => {});
-    } catch {}
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_getPassword();
+      req._ = 'account.getPassword';
+      const res = await conn.sendRequest<TLRPC.TL_account_password>(req);
+      if (res) {
+        UserConfig.getInstance(this.currentAccount).set2FA(
+          !!res.has_password,
+          res.hint || '',
+          res.login_email_pattern || ''
+        );
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.twoStepStateUpdated,
+          res
+        );
+      }
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] loadPasswordSettings failed:', e);
+      return null;
+    }
+  }
 
+  public async updatePasswordSettings(
+    newSettings: TLRPC.TL_account_passwordInputSettings,
+    currentPasswordHash?: any
+  ): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_updatePasswordSettings();
+      req._ = 'account.updatePasswordSettings';
+      req.password = currentPasswordHash ? { hash: currentPasswordHash } : undefined;
+      req.new_settings = newSettings;
+
+      const res = await conn.sendRequest<any>(req);
+      const ok = !!(res && (res._ === 'boolTrue' || res === true));
+      if (ok) {
+        await this.loadPasswordSettings();
+      }
+      return ok;
+    } catch (e) {
+      console.warn('[MessagesController] updatePasswordSettings failed:', e);
+      return false;
+    }
+  }
+
+  // ==========================================================
+  // 2. Privacy & Security Settings
+  // TLRPC.TL_account_getPrivacy / TLRPC.TL_account_setPrivacy
+  // ==========================================================
+  public async loadPrivacySettings(key: TLRPC.PrivacyKey): Promise<TLRPC.PrivacyRule[]> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_getPrivacy();
+      req._ = 'account.getPrivacy';
+      req.key = key;
+
+      const res = await conn.sendRequest<TLRPC.TL_account_privacyRules>(req);
+      const rules = res?.rules || [];
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.privacyRulesUpdated,
+        key,
+        rules
+      );
+      return rules;
+    } catch (e) {
+      console.warn('[MessagesController] loadPrivacySettings failed:', e);
+      return [];
+    }
+  }
+
+  public async setPrivacy(key: TLRPC.PrivacyKey, rules: TLRPC.PrivacyRule[]): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_setPrivacy();
+      req._ = 'account.setPrivacy';
+      req.key = key;
+      req.rules = rules;
+
+      const res = await conn.sendRequest<TLRPC.TL_account_privacyRules>(req);
+      const ok = !!(res && res._ === 'account.privacyRules');
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.privacyRulesUpdated,
+        key,
+        res?.rules || rules
+      );
+      return ok;
+    } catch (e) {
+      console.warn('[MessagesController] setPrivacy failed:', e);
+      return false;
+    }
+  }
+
+  // ==========================================================
+  // 3. Active Sessions & Authorizations
+  // TLRPC.TL_account_getAuthorizations / TLRPC.TL_account_resetAuthorization
+  // ==========================================================
+  public async loadAuthorizations(force: boolean = false): Promise<TLRPC.TL_authorization[]> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_getAuthorizations();
+      req._ = 'account.getAuthorizations';
+
+      const res = await conn.sendRequest<TLRPC.TL_account_authorizations>(req);
+      const list = res?.authorizations || [];
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.authorizationsUpdated,
+        list
+      );
+      return list;
+    } catch (e) {
+      console.warn('[MessagesController] loadAuthorizations failed:', e);
+      return [];
+    }
+  }
+
+  public async resetAuthorization(hash: number | string): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_resetAuthorization();
+      req._ = 'account.resetAuthorization';
+      req.hash = hash;
+
+      const res = await conn.sendRequest<any>(req);
+      const ok = !!(res && (res._ === 'boolTrue' || res === true));
+      if (ok) {
+        await this.loadAuthorizations(true);
+      }
+      return ok;
+    } catch (e) {
+      console.warn('[MessagesController] resetAuthorization failed:', e);
+      return false;
+    }
+  }
+
+  public async resetOtherAuthorizations(): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_auth_resetAuthorizations();
+      req._ = 'auth.resetAuthorizations';
+
+      const res = await conn.sendRequest<any>(req);
+      const ok = !!(res && (res._ === 'boolTrue' || res === true));
+      if (ok) {
+        await this.loadAuthorizations(true);
+      }
+      return ok;
+    } catch (e) {
+      console.warn('[MessagesController] resetOtherAuthorizations failed:', e);
+      return false;
+    }
+  }
+
+  // ==========================================================
+  // 4. Stories Synchronization
+  // TLRPC.TL_stories_getAllStories / TLRPC.TL_stories_sendStory
+  // ==========================================================
+  public async loadAllStories(force: boolean = false): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_stories_getAllStories();
+      req._ = 'stories.getAllStories';
+
+      const res = await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.storiesUpdated,
+        res
+      );
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] loadAllStories failed:', e);
+      return null;
+    }
+  }
+
+  public async sendStory(
+    peer: TLRPC.InputPeer,
+    media: any,
+    caption: string,
+    period: number = 86400,
+    privacyRules: TLRPC.PrivacyRule[] = []
+  ): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_stories_sendStory();
+      req._ = 'stories.sendStory';
+      req.peer = peer;
+      req.media = media;
+      req.caption = caption;
+      req.period = period;
+      req.privacy_rules = privacyRules;
+
+      const res = await conn.sendRequest<any>(req);
+      await this.loadAllStories(true);
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] sendStory failed:', e);
+      return null;
+    }
+  }
+
+  // ==========================================================
+  // 5. Message History & Search
+  // TLRPC.TL_messages_getHistory / TLRPC.TL_messages_search / TLRPC.TL_messages_getDocument
+  // ==========================================================
+  public async loadHistory(
+    dialogId: string | number,
+    offsetId: number = 0,
+    limit: number = 50,
+    maxId: number = 0
+  ): Promise<Message[]> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = {
+        _: 'messages.getHistory',
+        peer: { _: 'inputPeerChat', chat_id: Number(dialogId) },
+        offset_id: offsetId,
+        limit,
+        max_id: maxId,
+      };
+
+      const res = await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.messagesDidLoad,
+        String(dialogId)
+      );
+      return res?.messages || [];
+    } catch (e) {
+      console.warn('[MessagesController] loadHistory failed:', e);
+      return [];
+    }
+  }
+
+  public async searchMessages(
+    dialogId: string | number,
+    query: string,
+    filter: any = null,
+    offsetId: number = 0,
+    limit: number = 50
+  ): Promise<Message[]> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_messages_search();
+      req._ = 'messages.search';
+      req.peer = { _: 'inputPeerChat', chat_id: Number(dialogId) } as any;
+      req.q = query;
+      req.filter = filter || { _: 'inputMessagesFilterEmpty' };
+      req.offset_id = offsetId;
+      req.limit = limit;
+
+      const res = await conn.sendRequest<any>(req);
+      return res?.messages || [];
+    } catch (e) {
+      console.warn('[MessagesController] searchMessages failed:', e);
+      return [];
+    }
+  }
+
+  public async getDocument(id: any): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_messages_getDocument();
+      req._ = 'messages.getDocument';
+      req.id = id;
+
+      return await conn.sendRequest<any>(req);
+    } catch (e) {
+      console.warn('[MessagesController] getDocument failed:', e);
+      return null;
+    }
+  }
+
+  // ==========================================================
+  // 6. Forum Topics (TLRPC.TL_channels_getForumTopics)
+  // ==========================================================
+  public async loadTopics(channelId: string | number, force: boolean = false): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_channels_getForumTopics();
+      req._ = 'channels.getForumTopics';
+      req.channel = { _: 'inputChannel', channel_id: Number(channelId), access_hash: '0' };
+
+      const res = await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.topicsDidLoaded,
+        String(channelId),
+        res?.topics || []
+      );
+      return res?.topics || [];
+    } catch (e) {
+      console.warn('[MessagesController] loadTopics failed:', e);
+      return [];
+    }
+  }
+
+  // ==========================================================
+  // 7. Profile Update (TLRPC.TL_account_updateProfile)
+  // ==========================================================
+  public async updateProfile(firstName?: string, lastName?: string, about?: string): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_updateProfile();
+      req._ = 'account.updateProfile';
+      req.first_name = firstName;
+      req.last_name = lastName;
+      req.about = about;
+
+      const res = await conn.sendRequest<any>(req);
+      if (res && res._ === 'user') {
+        const u = UserConfig.getInstance(this.currentAccount);
+        if (u.currentUser) {
+          u.currentUser.first_name = firstName || u.currentUser.first_name;
+          u.currentUser.last_name = lastName || u.currentUser.last_name;
+          u.saveConfig();
+        }
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.mainUserInfoChanged
+        );
+      }
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] updateProfile failed:', e);
+      return false;
+    }
+  }
+
+  // ==========================================================
+  // 8. Notifications Settings (TLRPC.TL_account_updateNotifySettings)
+  // ==========================================================
+  public async updateNotificationSettings(peer: any, settings: any): Promise<boolean> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_account_updateNotifySettings();
+      req._ = 'account.updateNotifySettings';
+      req.peer = peer;
+      req.settings = settings;
+
+      await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.notificationsCountUpdated
+      );
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] updateNotificationSettings failed:', e);
+      return false;
+    }
+  }
+
+  // ==========================================================
+  // 9. Sponsored Messages / Ads (TLRPC.TL_channels_getSponsoredMessages)
+  // ==========================================================
+  public async loadSponsoredMessages(peerId: string | number): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const req = new TLRPC.TL_channels_getSponsoredMessages();
+      req._ = 'channels.getSponsoredMessages';
+      req.channel = { _: 'inputChannel', channel_id: Number(peerId), access_hash: '0' };
+
+      const res = await conn.sendRequest<any>(req);
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.sponsoredMessagesLoaded,
+        peerId,
+        res
+      );
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] loadSponsoredMessages failed:', e);
+      return null;
+    }
+  }
+
+  public toggleSponsoredMessages(enabled: boolean): void {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`tg_ads_enabled_${this.currentAccount}`, JSON.stringify(enabled));
+    }
+    NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+      NotificationCenter.updateInterfaces,
+      NotificationCenter.UPDATE_MASK_ALL
+    );
+  }
+
+  public isSponsoredMessagesEnabled(): boolean {
+    if (typeof window !== 'undefined') {
+      const val = localStorage.getItem(`tg_ads_enabled_${this.currentAccount}`);
+      return val !== null ? JSON.parse(val) : true;
+    }
     return true;
   }
 
-  /**
-   * DrKLO TLRPC.TL_account_getWebPagePreview / messages.getWebPagePreview
-   * Fetches rich web page link preview
-   */
-  public async getWebPagePreview(messageText: string): Promise<TLRPC.WebPage | null> {
+  // ==========================================================
+  // 10. Save & Restore Settings (Cloud Sync)
+  // ==========================================================
+  public async saveSettingsToCloud(): Promise<boolean> {
     try {
-      const res = await fetch('/api/telegram/mtproto/invoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          method: 'messages.getWebPagePreview',
-          params: {
-            message: messageText,
-          },
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.result) return data.result;
-      }
-    } catch {}
-
-    // Fallback local extractor
-    const urlMatch = messageText.match(/(https?:\/\/[^\s<]+)/i);
-    if (urlMatch) {
-      const url = urlMatch[0];
-      try {
-        const p = new URL(url);
-        return {
-          _: 'webPage',
-          id: String(Date.now()),
-          url,
-          display_url: p.hostname,
-          hash: 0,
-          site_name: p.hostname.replace('www.', ''),
-          title: `${p.hostname} Preview`,
-          description: `Web preview for ${url}`,
+      if (typeof window !== 'undefined') {
+        const bundle = {
+          account: this.currentAccount,
+          userConfig: UserConfig.getInstance(this.currentAccount),
+          timestamp: Date.now(),
         };
-      } catch {}
+        localStorage.setItem(`tg_cloud_settings_backup_${this.currentAccount}`, JSON.stringify(bundle));
+      }
+      NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+        NotificationCenter.cloudSettingsUpdated
+      );
+      return true;
+    } catch (e) {
+      console.warn('[MessagesController] saveSettingsToCloud failed:', e);
+      return false;
     }
+  }
 
-    return null;
+  public async restoreSettingsFromCloud(): Promise<any> {
+    try {
+      if (typeof window !== 'undefined') {
+        const raw = localStorage.getItem(`tg_cloud_settings_backup_${this.currentAccount}`);
+        if (raw) {
+          const bundle = JSON.parse(raw);
+          NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+            NotificationCenter.cloudSettingsUpdated,
+            bundle
+          );
+          return bundle;
+        }
+      }
+      return null;
+    } catch (e) {
+      console.warn('[MessagesController] restoreSettingsFromCloud failed:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Checks for application update via MTProto / Backend (TLRPC.TL_help_getAppUpdate)
+   * Replicated from DrKLO/Telegram Android: org.telegram.messenger.MessagesController.checkAppUpdate
+   */
+  public async checkAppUpdate(isManual: boolean = false, context?: any): Promise<void> {
+    const { appUpdateController } = await import('./messenger/AppUpdateController');
+    await appUpdateController.checkAppUpdate(isManual);
+  }
+
+  /**
+   * Puts users into in-memory/cache storage (DrKLO MessagesController.putUsers)
+   */
+  public putUsers(users: any[], fromCache: boolean = false): void {
+    if (!users || !Array.isArray(users)) return;
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    for (const u of users) {
+      if (u && u.id) {
+        this.users.set(String(u.id), u);
+      }
+    }
+    if (!fromCache) {
+      storage.putUsersAndChats(users, [], false, true);
+    }
+  }
+
+  /**
+   * Puts chats/channels into in-memory/cache storage (DrKLO MessagesController.putChats)
+   */
+  public putChats(chats: any[], fromCache: boolean = false): void {
+    if (!chats || !Array.isArray(chats)) return;
+    const storage = MessagesStorage.getInstance(this.currentAccount);
+    for (const c of chats) {
+      if (c && c.id) {
+        this.chats.set(String(c.id), c);
+      }
+    }
+    if (!fromCache) {
+      storage.putUsersAndChats([], chats, false, true);
+    }
+  }
+
+  /**
+   * Loads full chat / channel information (DrKLO MessagesController.loadFullChat)
+   */
+  public loadFullChat(chatId: string | number, classGuidOrForce: number | boolean = 0, force: boolean = false): void {
+    const cid = String(chatId).replace(/^-100/, '').replace(/^-/, '');
+    const req = new TLRPC.TL_channels_getFullChannel();
+    req.channel = cid;
+    const conn = ConnectionsManager.getInstance(this.currentAccount);
+    conn.sendRequest(req, {
+      onSuccess: (response: any) => {
+        if (response && response.full_chat) {
+          NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+            NotificationCenter.chatInfoDidLoad,
+            chatId,
+            response.full_chat
+          );
+        }
+      },
+      onError: (err: any) => {
+        console.warn('[MessagesController] loadFullChat failed:', err);
+      },
+    }).catch(() => {});
+  }
+
+  public get pendingAppUpdate(): TLRPC.TL_help_appUpdate | null {
+    try {
+      const { appUpdateController } = require('./messenger/AppUpdateController');
+      return appUpdateController.pendingAppUpdate;
+    } catch {
+      return null;
+    }
   }
 }
 

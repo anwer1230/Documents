@@ -1,43 +1,25 @@
 /**
  * DownloadController.ts - org.telegram.messenger.DownloadController
- * Direct TypeScript translation of DrKLO/Telegram Android architecture
  */
 
-import { Message } from '../../types';
-import { NotificationCenter } from '../NotificationCenter';
-
 export class DownloadController {
-  public static readonly AUTODOWNLOAD_MASK_PHOTO = 1;
-  public static readonly AUTODOWNLOAD_MASK_AUDIO = 2;
-  public static readonly AUTODOWNLOAD_MASK_VIDEO = 4;
-  public static readonly AUTODOWNLOAD_MASK_DOCUMENT = 8;
-
   private static instances = new Map<number, DownloadController>();
   private currentAccount: number;
 
-  public static getInstance(account: number = 0): DownloadController {
-    if (!DownloadController.instances.has(account)) {
-      DownloadController.instances.set(account, new DownloadController(account));
+  public static getInstance(accountNum: number = 0): DownloadController {
+    if (!DownloadController.instances.has(accountNum)) {
+      DownloadController.instances.set(accountNum, new DownloadController(accountNum));
     }
-    return DownloadController.instances.get(account)!;
+    return DownloadController.instances.get(accountNum)!;
   }
 
-  private constructor(account: number) {
-    this.currentAccount = account;
+  constructor(accountNum: number = 0) {
+    this.currentAccount = accountNum;
   }
 
-  public canDownloadMedia(type: number): boolean {
-    const currentMask =
-      DownloadController.AUTODOWNLOAD_MASK_PHOTO |
-      DownloadController.AUTODOWNLOAD_MASK_AUDIO |
-      DownloadController.AUTODOWNLOAD_MASK_DOCUMENT;
-    return (currentMask & type) !== 0;
-  }
-
-  public checkAndDownloadMedia(message: Message): void {
-    if (!message || !message.media) return;
-    // Handled via FileLoader
+  public canDownloadMedia(): boolean {
+    return true;
   }
 }
 
-export const downloadController = DownloadController.getInstance();
+export const downloadController = DownloadController.getInstance(0);

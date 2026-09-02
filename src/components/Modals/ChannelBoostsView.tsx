@@ -23,7 +23,7 @@ export const ChannelBoostsView: React.FC<{ onBack: () => void }> = ({ onBack }) 
 
   const currentChannel = chats.find((c) => c.id === activeChatId) || chats.find((c) => c.isChannel) || chats[0];
   const [boostData, setBoostData] = useState<ChannelBoostData>(
-    channelBoostsController.getChannelBoost(String(currentChannel?.id || 'chat_telegram_news'))
+    channelBoostsController.getChannelBoost(currentChannel?.id || 'chat_telegram_news')
   );
 
   const handleBoost = () => {

@@ -14,10 +14,14 @@ export type ConnectionState =
   | 'CONNECTION_STATE_UPDATING'
   | 'CONNECTION_STATE_SUSPENDED';
 
-export interface RpcCallback<T = any> {
-  onSuccess: (response: T) => void;
-  onError: (error: TLRPC.TL_error) => void;
-}
+export type RequestDelegate<T = any> = (response: T | null, error: TLRPC.TL_error | null) => void;
+
+export type RpcCallback<T = any> =
+  | {
+      onSuccess?: (response: T) => void;
+      onError?: (error: TLRPC.TL_error) => void;
+    }
+  | RequestDelegate<T>;
 
 export interface MtprotoSession {
   sessionId: string;
@@ -133,9 +137,16 @@ export class ConnectionsManager {
     this.startNetworkPingLoop();
   }
 
-  public resumeNetworkMaybe() {
+  public resumeNetworkMaybe(isScreenOn: boolean = true) {
+    if (!this.isPaused) return;
     this.isPaused = false;
     this.updateState('CONNECTION_STATE_UPDATING');
+    
+    // Import and trigger difference reconciliation
+    import('./MessagesController').then(({ MessagesController }) => {
+      MessagesController.getInstance(this.accountNum).getDifference();
+    }).catch(() => {});
+
     setTimeout(() => {
       this.updateState('CONNECTION_STATE_CONNECTED');
     }, 250);
@@ -206,6 +217,32 @@ export class ConnectionsManager {
   }
 
   /**
+   * DrKLO ConnectionsManager: RPC Error Interception for Session Revocation / 401
+   */
+  public handleRpcError(err: TLRPC.TL_error): void {
+    if (!err) return;
+    const isAuthUnregistered =
+      err.code === 401 ||
+      err.text === 'AUTH_KEY_UNREGISTERED' ||
+      err.text === 'AUTH_KEY_INVALID' ||
+      err.text === 'USER_DEACTIVATED' ||
+      err.text === 'SESSION_REVOKED' ||
+      err.text === 'SESSION_EXPIRED';
+
+    if (isAuthUnregistered) {
+      console.warn(
+        `[ConnectionsManager] Intercepted 401 / ${err.text} on account ${this.accountNum}. Triggering cleanup and session revocation.`
+      );
+      this.cleanup(false);
+      import('./MessagesController')
+        .then(({ MessagesController }) => {
+          MessagesController.getInstance(this.accountNum).performForcedLogout(err.text || 'AUTH_KEY_UNREGISTERED');
+        })
+        .catch(() => {});
+    }
+  }
+
+  /**
    * Generates a compliant 64-bit MTProto message ID: (unix_time << 32) | (nano_fraction << 2) | 1
    */
   public generateMessageId(): bigint {
@@ -229,24 +266,43 @@ export class ConnectionsManager {
     await telegramDB.init();
 
     return new Promise((resolve, reject) => {
+      const notifySuccess = (res: any) => {
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(res, null);
+        } else if (callback.onSuccess) {
+          callback.onSuccess(res);
+        }
+      };
+
+      const notifyError = (err: TLRPC.TL_error) => {
+        this.handleRpcError(err);
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(null, err);
+        } else if (callback.onError) {
+          callback.onError(err);
+        }
+      };
+
       try {
         const reqType = request._;
 
         // 1. Process Channel Join Request
-        if (reqType === 'TL_channels_joinChannel') {
+        if (reqType === 'TL_channels_joinChannel' || reqType === 'channels.joinChannel') {
           if (request.channel === 'invalid_channel') {
-            const err = new TLRPC.TL_error(400, 'CHANNEL_PRIVATE');
-            if (callback?.onError) callback.onError(err);
+            const err: TLRPC.TL_error = { code: 400, text: 'CHANNEL_PRIVATE' };
+            notifyError(err);
             reject(err);
             return;
           }
           const success: any = {
             _: 'TL_updates',
-            updates: [{ _: 'TL_updateChannel', channel_id: request.channel }],
+            updates: [{ _: 'TL_updateChannel', channel_id: request.channel?.channel_id || request.channel || 0 }],
             date: Math.floor(Date.now() / 1000),
             seq: this.session.seqNo,
           };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           this.updateListeners.forEach((l) => l(success));
           resolve(success as T);
           return;
@@ -255,8 +311,8 @@ export class ConnectionsManager {
         // 2. Process Send Message Request
         if (reqType === 'TL_messages_sendMessage') {
           if (request.is_restricted) {
-            const err = new TLRPC.TL_error(403, 'CHAT_WRITE_FORBIDDEN');
-            if (callback?.onError) callback.onError(err);
+            const err: TLRPC.TL_error = { code: 403, text: 'CHAT_WRITE_FORBIDDEN' };
+            notifyError(err);
             reject(err);
             return;
           }
@@ -269,107 +325,26 @@ export class ConnectionsManager {
             pts_count: 1,
             seq: this.session.seqNo,
           };
-          if (callback?.onSuccess) callback.onSuccess(result);
+          notifySuccess(result);
           resolve(result as T);
           return;
         }
 
-        // 3. Process Account Privacy Rules (account.getPrivacy / account.setPrivacy)
-        if (reqType === 'account.getPrivacy' || reqType === 'TL_account_getPrivacy') {
-          const privacyKey = request.key;
-          let target = 'last_seen';
-          if (privacyKey?._ === 'privacyKeyPhoneNumber') target = 'phone_number';
-          else if (privacyKey?._ === 'privacyKeyProfilePhoto') target = 'profile_photos';
-          else if (privacyKey?._ === 'privacyKeyForwards') target = 'forwards';
-          else if (privacyKey?._ === 'privacyKeyPhoneCall') target = 'calls';
-          else if (privacyKey?._ === 'privacyKeyVoiceMessages') target = 'voice_messages';
-          else if (privacyKey?._ === 'privacyKeyStatusTimestamp') target = 'last_seen';
-
-          let savedSetting = 'everybody';
-          try {
-            if (typeof window !== 'undefined') {
-              const raw = localStorage.getItem(`tg_privacy_settings_${this.accountNum}`);
-              if (raw) {
-                const parsed = JSON.parse(raw);
-                if (parsed[target]) savedSetting = parsed[target];
-              }
-            }
-          } catch {
-            // ignore
-          }
-
-          const rule: TLRPC.PrivacyRule =
-            savedSetting === 'nobody'
-              ? { _: 'privacyValueDisallowAll' }
-              : savedSetting === 'contacts'
-              ? { _: 'privacyValueAllowContacts' }
-              : { _: 'privacyValueAllowAll' };
-
-          const privacyRes: TLRPC.TL_account_privacyRules = {
-            _: 'account.privacyRules',
-            rules: [rule],
-            users: [],
-            chats: [],
-          };
-
-          if (callback?.onSuccess) callback.onSuccess(privacyRes as unknown as T);
-          resolve(privacyRes as unknown as T);
-          return;
-        }
-
-        if (reqType === 'account.setPrivacy' || reqType === 'TL_account_setPrivacy') {
-          const privacyRes: TLRPC.TL_account_privacyRules = {
-            _: 'account.privacyRules',
-            rules: request.rules || [{ _: 'privacyValueAllowAll' }],
-            users: [],
-            chats: [],
-          };
-          if (callback?.onSuccess) callback.onSuccess(privacyRes as unknown as T);
-          resolve(privacyRes as unknown as T);
-          return;
-        }
-
-        // 4. Process Account Settings & 2FA Password Updates (account.getPassword)
+        // 3. Process Account Settings & 2FA Password Updates
         if (reqType === 'account.getPassword' || reqType === 'TL_account_getPassword') {
-          let hasPassword = true;
-          let hint = 'Security Hint';
-          let hasRecovery = true;
-          let emailPattern = 'a***@gmail.com';
-          let unconfirmedEmail: string | undefined;
-          let pendingResetDate: number | undefined;
-
-          try {
-            if (typeof window !== 'undefined') {
-              const raw = localStorage.getItem(`tg_two_step_settings_${this.accountNum}`);
-              if (raw) {
-                const parsed = JSON.parse(raw);
-                hasPassword = Boolean(parsed.hasPassword);
-                hint = parsed.hint || '';
-                hasRecovery = Boolean(parsed.hasRecoveryEmail);
-                emailPattern = parsed.emailPattern;
-                unconfirmedEmail = parsed.unconfirmedEmail;
-                pendingResetDate = parsed.pendingResetDate;
-              }
-            }
-          } catch {
-            // ignore
-          }
-
           const passRes: TLRPC.TL_account_password = {
             _: 'account.password',
-            has_password: hasPassword,
-            has_recovery: hasRecovery,
-            hint: hint,
-            login_email_pattern: emailPattern,
-            email_unconfirmed_pattern: unconfirmedEmail,
-            pending_reset_date: pendingResetDate,
+            has_password: true,
+            has_recovery: true,
+            hint: 'Security Hint',
+            login_email_pattern: 'a***@gmail.com',
             current_algo: {
               _: 'passwordKdfAlgoSHA256SHA256PBKDF2',
               salt1: 'c8f1e09214b7a19283f120194821',
               salt2: '8912efacb1928471928301928471',
             },
           };
-          if (callback?.onSuccess) callback.onSuccess(passRes as unknown as T);
+          notifySuccess(passRes as unknown as T);
           resolve(passRes as unknown as T);
           return;
         }
@@ -387,26 +362,221 @@ export class ConnectionsManager {
           reqType === 'TL_account_resetPassword'
         ) {
           const success: any = { _: 'TL_boolTrue', value: true };
-          if (callback?.onSuccess) callback.onSuccess(success);
+          notifySuccess(success);
           resolve(success as T);
           return;
         }
 
-        // 5. Standard RPC Generic Response
+        // 4. Privacy Settings (getPrivacy / setPrivacy)
+        if (reqType === 'account.getPrivacy' || reqType === 'TL_account_getPrivacy') {
+          const privRes: any = {
+            _: 'account.privacyRules',
+            rules: [{ _: 'privacyValueAllowAll' }],
+            users: [],
+            chats: [],
+          };
+          notifySuccess(privRes);
+          resolve(privRes as T);
+          return;
+        }
+
+        if (reqType === 'account.setPrivacy' || reqType === 'TL_account_setPrivacy') {
+          const privRes: any = {
+            _: 'account.privacyRules',
+            rules: request.rules || [{ _: 'privacyValueAllowAll' }],
+            users: [],
+            chats: [],
+          };
+          notifySuccess(privRes);
+          resolve(privRes as T);
+          return;
+        }
+
+        // 5. Active Sessions & Authorizations (getAuthorizations / resetAuthorization)
+        if (reqType === 'account.getAuthorizations' || reqType === 'TL_account_getAuthorizations') {
+          const authRes: any = {
+            _: 'account.authorizations',
+            authorizations: [
+              {
+                _: 'authorization',
+                hash: '1001',
+                device_model: 'Samsung Galaxy S24 Ultra',
+                platform: 'Android',
+                system_version: 'Android 14 (API 34)',
+                app_name: 'Telegram Android',
+                app_version: '10.14.5 (4890)',
+                date_created: Math.floor(Date.now() / 1000) - 86400 * 30,
+                date_active: Math.floor(Date.now() / 1000),
+                ip: '197.38.112.44',
+                country: 'Egypt',
+                region: 'Cairo',
+                current: true,
+                official_app: true,
+              },
+              {
+                _: 'authorization',
+                hash: '1002',
+                device_model: 'Telegram Desktop',
+                platform: 'Windows',
+                system_version: 'Windows 11 Pro 64-bit',
+                app_name: 'Telegram Desktop',
+                app_version: '5.2.1 x64',
+                date_created: Math.floor(Date.now() / 1000) - 86400 * 12,
+                date_active: Math.floor(Date.now() / 1000) - 3600 * 2,
+                ip: '156.204.18.91',
+                country: 'Egypt',
+                region: 'Alexandria',
+                current: false,
+                official_app: true,
+              },
+            ],
+          };
+          notifySuccess(authRes);
+          resolve(authRes as T);
+          return;
+        }
+
+        if (
+          reqType === 'account.resetAuthorization' ||
+          reqType === 'TL_account_resetAuthorization' ||
+          reqType === 'auth.resetAuthorizations' ||
+          reqType === 'TL_auth_resetAuthorizations'
+        ) {
+          const success: any = { _: 'TL_boolTrue', value: true };
+          notifySuccess(success);
+          resolve(success as T);
+          return;
+        }
+
+        // 6. Stories (getAllStories / sendStory)
+        if (reqType === 'stories.getAllStories' || reqType === 'TL_stories_getAllStories') {
+          const storiesRes: any = {
+            _: 'stories.allStories',
+            count: 0,
+            state: '',
+            peer_stories: [],
+            has_more: false,
+          };
+          notifySuccess(storiesRes);
+          resolve(storiesRes as T);
+          return;
+        }
+
+        if (reqType === 'stories.sendStory' || reqType === 'TL_stories_sendStory') {
+          const sendRes: any = {
+            _: 'updateStory',
+            story: {
+              id: Math.floor(Date.now() / 1000),
+              date: Math.floor(Date.now() / 1000),
+              caption: request.caption || '',
+              media: request.media,
+            },
+          };
+          notifySuccess(sendRes);
+          resolve(sendRes as T);
+          return;
+        }
+
+        // 7. Forum Topics & Sponsored Messages
+        if (reqType === 'channels.getForumTopics' || reqType === 'TL_channels_getForumTopics') {
+          const topicsRes: any = {
+            _: 'messages.forumTopics',
+            count: 2,
+            topics: [
+              { id: 1, title: 'General Discussion', icon_emoji_id: '💬', top_message: 10, unread_count: 0 },
+              { id: 2, title: 'Updates & Announcements', icon_emoji_id: '📢', top_message: 25, unread_count: 1 },
+            ],
+            messages: [],
+            chats: [],
+            users: [],
+          };
+          notifySuccess(topicsRes);
+          resolve(topicsRes as T);
+          return;
+        }
+
+        if (reqType === 'channels.getSponsoredMessages' || reqType === 'TL_channels_getSponsoredMessages') {
+          const adsRes: any = {
+            _: 'messages.sponsoredMessages',
+            messages: [
+              {
+                random_id: 'ad_1',
+                message: '🌟 Discover Telegram Official Channels and Community Updates.',
+                sponsor_info: 'Telegram Official',
+                link: 'https://t.me/telegram',
+              },
+            ],
+          };
+          notifySuccess(adsRes);
+          resolve(adsRes as T);
+          return;
+        }
+
+        // 8. Profile & Notify Settings Updates
+        if (reqType === 'account.updateProfile' || reqType === 'TL_account_updateProfile') {
+          const profRes: any = {
+            _: 'user',
+            id: 'self',
+            first_name: request.first_name || 'User',
+            last_name: request.last_name || '',
+            about: request.about || '',
+          };
+          notifySuccess(profRes);
+          resolve(profRes as T);
+          return;
+        }
+
+        if (reqType === 'account.updateNotifySettings' || reqType === 'TL_account_updateNotifySettings') {
+          const success: any = { _: 'TL_boolTrue', value: true };
+          notifySuccess(success);
+          resolve(success as T);
+          return;
+        }
+
+        // 9. Standard RPC Generic Response
         const genericResponse: any = {
           _: 'rpc_result',
           msg_id: msgId.toString(),
           result: { ok: true, request_type: reqType, date: Math.floor(Date.now() / 1000) },
         };
 
-        if (callback?.onSuccess) callback.onSuccess(genericResponse);
+        notifySuccess(genericResponse);
         resolve(genericResponse as T);
       } catch (err: any) {
-        const errorObj = new TLRPC.TL_error(500, err?.message || 'RPC_CALL_FAIL');
-        if (callback?.onError) callback.onError(errorObj);
+        const errorObj: TLRPC.TL_error = {
+          code: 500,
+          text: err?.message || 'RPC_CALL_FAIL',
+        };
+        notifyError(errorObj);
         reject(errorObj);
       }
     });
+  }
+
+  /**
+   * DrKLO ConnectionsManager.sendRequestTypedAndProcessUpdates
+   * Dispatches MTProto request and automatically feeds incoming Updates into MessagesController
+   */
+  public async sendRequestTypedAndProcessUpdates<T = any>(
+    request: { _: string; [key: string]: any },
+    callback?: (response: T | null, error?: TLRPC.TL_error) => void
+  ): Promise<T> {
+    try {
+      const res = await this.sendRequest<T>(request, {
+        onSuccess: (response: T) => {
+          if (callback) callback(response, undefined);
+        },
+        onError: (error: TLRPC.TL_error) => {
+          if (callback) callback(null, error);
+        },
+      });
+      return res;
+    } catch (err: any) {
+      if (callback) {
+        callback(null, { code: 500, text: err?.text || err?.message || 'RPC_ERROR' });
+      }
+      throw err;
+    }
   }
 }
 

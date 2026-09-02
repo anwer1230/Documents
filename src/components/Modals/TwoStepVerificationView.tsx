@@ -22,8 +22,6 @@ import {
   twoStepController,
   TwoStepState,
 } from '../../core/messenger/TwoStepVerificationController';
-import { AccountInstance } from '../../core/messenger/AccountInstance';
-import { UserConfig } from '../../core/messenger/UserConfig';
 
 interface TwoStepVerificationViewProps {
   onBack: () => void;
@@ -44,11 +42,7 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
 
-  const currentAcc = UserConfig.selectedAccount || 0;
-  const accInstance = AccountInstance.getInstance(currentAcc);
-  const twoStepCtrl = accInstance.getTwoStepVerificationController();
-
-  const [twoStepState, setTwoStepState] = useState<TwoStepState>(twoStepCtrl.getState());
+  const [twoStepState, setTwoStepState] = useState<TwoStepState>(twoStepController.getState());
   const [currentStep, setCurrentStep] = useState<Step>('overview');
   const [loading, setLoading] = useState(false);
 
@@ -67,10 +61,10 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
 
   // Load state on mount
   useEffect(() => {
-    accInstance.syncPasswordSettings().then((res) => {
-      setTwoStepState(twoStepCtrl.getState());
+    twoStepController.getPassword().then((res) => {
+      setTwoStepState(twoStepController.getState());
     });
-  }, [currentAcc]);
+  }, []);
 
   // Countdown timer for email code
   useEffect(() => {
@@ -117,11 +111,11 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
     setTimeout(async () => {
       setLoading(false);
       if (pendingAction === 'disable') {
-        await twoStepCtrl.updatePasswordSettings({
+        await twoStepController.updatePasswordSettings({
           currentPassword,
           newPassword: '',
         });
-        setTwoStepState(twoStepCtrl.getState());
+        setTwoStepState(twoStepController.getState());
         showToast(isArabic ? 'تم إلغاء كلمة المرور الثنائية' : '2FA Password disabled', '🔓');
         setCurrentStep('overview');
       } else {
@@ -167,7 +161,7 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
 
     try {
       const emailToSet = skipEmail ? '' : recoveryEmail.trim();
-      const result = await twoStepCtrl.updatePasswordSettings({
+      const result = await twoStepController.updatePasswordSettings({
         currentPassword: pendingAction === 'change' ? currentPassword : '',
         newPassword,
         hint,
@@ -175,7 +169,7 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
       });
 
       setLoading(false);
-      setTwoStepState(twoStepCtrl.getState());
+      setTwoStepState(twoStepController.getState());
 
       if (result.needEmailConfirm && emailToSet) {
         setTimerCount(60);
@@ -199,9 +193,9 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
     setErrorMessage('');
 
     try {
-      await twoStepCtrl.confirmEmailCode(emailCode);
+      await twoStepController.confirmEmailCode(emailCode);
       setLoading(false);
-      setTwoStepState(twoStepCtrl.getState());
+      setTwoStepState(twoStepController.getState());
       showToast(isArabic ? 'تم تأكيد البريد الإلكتروني وتفعيل التحقق بنجاح' : 'Email confirmed and 2FA active', '✅');
       setCurrentStep('overview');
     } catch (err: any) {
@@ -214,7 +208,7 @@ export const TwoStepVerificationView: React.FC<TwoStepVerificationViewProps> = (
     if (timerCount > 0) return;
     setIsResending(true);
     try {
-      await twoStepCtrl.resendEmailCode();
+      await twoStepController.resendEmailCode();
       setTimerCount(60);
       showToast(isArabic ? 'تمت إعادة إرسال الرمز للبريد' : 'Verification code resent', '📧');
     } finally {

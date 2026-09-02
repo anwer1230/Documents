@@ -38,7 +38,9 @@ import { LottieSticker } from './LottieSticker';
 import { CustomAnimatedEmoji } from './CustomAnimatedEmoji';
 import { extractLinkPreview } from '../../utils/linkParser';
 import { messagesController } from '../../core/MessagesController';
-import { AiTonesPickerModal } from '../Modals/AiTonesPickerModal';
+import { ChatObject } from '../../core/ChatObject';
+import { UserObject } from '../../core/UserObject';
+import { NotificationCenter } from '../../core/NotificationCenter';
 import confetti from 'canvas-confetti';
 
 export const ChatInput: React.FC = () => {
@@ -73,7 +75,6 @@ export const ChatInput: React.FC = () => {
   const [pickerTab, setPickerTab] = useState<'emoji' | 'custom_emoji' | 'stickers'>('stickers');
   const [isSolvingCaptcha, setIsSolvingCaptcha] = useState(false);
   const [dismissedPreviewUrl, setDismissedPreviewUrl] = useState<string | null>(null);
-  const [showAiTonesModal, setShowAiTonesModal] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
@@ -88,10 +89,22 @@ export const ChatInput: React.FC = () => {
   const isBotFather = activeChat?.username?.toLowerCase() === 'botfather';
   const isSavedMessages = activeChat?.type === 'saved';
 
-  // Evaluate TLRPC permissions & Moderation rights
-  const permissionCheck = activeChat
-    ? messagesController.canSendMessages(activeChat)
-    : { canSend: true, reason: undefined, errorCode: undefined };
+  // Evaluate TLRPC permissions & ChatObject moderation rights
+  const permissionCheck = React.useMemo(() => {
+    if (!activeChat) return { canSend: true, reason: undefined, errorCode: undefined };
+    
+    // Check ChatObject legal notice first
+    const notice = ChatObject.getRestrictedNotice(activeChat, isArabic);
+    if (notice.restricted) {
+      return {
+        canSend: false,
+        reason: notice.message,
+        errorCode: 'CHAT_WRITE_FORBIDDEN' as const,
+      };
+    }
+    
+    return messagesController.canSendMessages(activeChat);
+  }, [activeChat, isArabic]);
 
   // Live extracted link preview
   const livePreview: LinkPreviewData | null =
@@ -118,6 +131,23 @@ export const ChatInput: React.FC = () => {
     }
     setDismissedPreviewUrl(null);
   }, [activeChatId]);
+
+  // Real-time NotificationCenter listener (chatInfoDidLoad & updateInterfaces)
+  const [, setInterfaceVersion] = useState(0);
+  useEffect(() => {
+    const center = NotificationCenter.getInstance();
+    const handleUpdate = () => {
+      setInterfaceVersion((v) => v + 1);
+    };
+
+    center.addObserver(handleUpdate, NotificationCenter.chatInfoDidLoad);
+    center.addObserver(handleUpdate, NotificationCenter.updateInterfaces);
+
+    return () => {
+      center.removeObserver(handleUpdate, NotificationCenter.chatInfoDidLoad);
+      center.removeObserver(handleUpdate, NotificationCenter.updateInterfaces);
+    };
+  }, []);
 
   // Sync editing message text into input
   useEffect(() => {
@@ -755,7 +785,7 @@ export const ChatInput: React.FC = () => {
             <span>{isArabic ? 'الانضمام إلى القناة' : 'JOIN CHANNEL'}</span>
           </button>
           <button
-            onClick={() => toggleMuteChat(String(activeChat.id))}
+            onClick={() => toggleMuteChat(activeChat.id)}
             className={`p-3 rounded-2xl border transition-colors ${
               activeChat.isMuted
                 ? 'bg-rose-500/20 border-rose-500/30 text-rose-400'
@@ -776,7 +806,7 @@ export const ChatInput: React.FC = () => {
             </span>
           </div>
           <button
-            onClick={() => toggleMuteChat(String(activeChat.id))}
+            onClick={() => toggleMuteChat(activeChat.id)}
             className={`py-2.5 px-4 rounded-2xl border text-xs font-bold flex items-center gap-2 transition-colors shrink-0 ${
               activeChat.isMuted
                 ? 'bg-rose-500/20 border-rose-500/30 text-rose-400'
@@ -797,9 +827,38 @@ export const ChatInput: React.FC = () => {
           </button>
         </div>
       ) : !permissionCheck.canSend ? (
-        <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center gap-2 text-center text-xs font-semibold text-rose-300 animate-in fade-in">
-          <Lock className="w-4 h-4 shrink-0 text-rose-400" />
-          <span>{permissionCheck.reason}</span>
+        /* Authentic Telegram Bottom Overlay Container */
+        <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
+          <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/25 border border-white/10 flex items-center gap-2.5 text-xs text-gray-300">
+            {ChatObject.isChannel(activeChat) ? (
+              <Megaphone className="w-4 h-4 text-sky-400 shrink-0" />
+            ) : (
+              <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span className="truncate font-medium">{permissionCheck.reason}</span>
+          </div>
+          {ChatObject.isChannel(activeChat) && (
+            <button
+              onClick={() => toggleMuteChat(activeChat.id)}
+              className={`py-2.5 px-4 rounded-2xl border text-xs font-bold flex items-center gap-2 transition-all shrink-0 ${
+                activeChat.isMuted
+                  ? 'bg-rose-500/20 border-rose-500/30 text-rose-400'
+                  : 'bg-[#2481cc]/20 border-[#2481cc]/40 text-sky-300 hover:bg-[#2481cc]/30'
+              }`}
+            >
+              {activeChat.isMuted ? (
+                <>
+                  <BellOff className="w-4 h-4" />
+                  <span>{isArabic ? 'إلغاء الكتم' : 'UNMUTE'}</span>
+                </>
+              ) : (
+                <>
+                  <Bell className="w-4 h-4" />
+                  <span>{isArabic ? 'كتم الإشعارات' : 'MUTE'}</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       ) : activeChat?.requiresCaptcha && !activeChat.isCaptchaSolved ? (
         /* Captcha Verification Challenge Bar */
@@ -892,15 +951,6 @@ export const ChatInput: React.FC = () => {
                     color: 'var(--tg-theme-bubble-in-text)',
                   }}
                 />
-                {text.trim().length > 0 && (
-                  <button
-                    onClick={() => setShowAiTonesModal(true)}
-                    className="p-2 text-sky-400 hover:text-sky-300 transition-colors shrink-0 animate-in fade-in"
-                    title={isArabic ? 'إعادة الصياغة بالذكاء الاصطناعي (AI Tones)' : 'Rephrase with AI Tones'}
-                  >
-                    <Sparkles className="w-4 h-4" />
-                  </button>
-                )}
                 <button
                   onClick={() => {
                     setShowEmojiPicker((prev) => !prev);
@@ -947,16 +997,6 @@ export const ChatInput: React.FC = () => {
           )}
         </div>
       )}
-
-      {/* AI Tones Picker Modal */}
-      <AiTonesPickerModal
-        isOpen={showAiTonesModal}
-        onClose={() => setShowAiTonesModal(false)}
-        inputText={text}
-        onApplyText={(newText) => {
-          updateTextAndDraft(newText);
-        }}
-      />
     </div>
   );
 };

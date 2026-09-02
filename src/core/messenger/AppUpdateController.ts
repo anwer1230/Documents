@@ -38,7 +38,7 @@ export type UpdateState =
 export class AppUpdateController {
   private static instance: AppUpdateController | null = null;
 
-  public pendingAppUpdate: any = null;
+  public pendingAppUpdate: TLRPC.TL_help_appUpdate | null = null;
   public updateInfo: AppUpdateInfo | null = null;
   public state: UpdateState = 'idle';
   public isChecking: boolean = false;
@@ -87,7 +87,7 @@ export class AppUpdateController {
   /**
    * Executes official TLRPC.TL_help_getAppUpdate check against backend
    */
-  public async checkAppUpdate(isManual: boolean = false): Promise<any> {
+  public async checkAppUpdate(isManual: boolean = false): Promise<TLRPC.TL_help_appUpdate | null> {
     if (this.isChecking) return this.pendingAppUpdate;
 
     this.isChecking = true;
@@ -163,7 +163,7 @@ export class AppUpdateController {
       // If server route is connecting, fallback to default schema check
       const fallbackAvailable = isManual; // In manual test mode, provide sample update if requested
       if (fallbackAvailable) {
-        const dummyUpdate: any = {
+        const dummyUpdate: TLRPC.TL_help_appUpdate = {
           _: 'help.appUpdate',
           id: 110500,
           version: '11.5.0',

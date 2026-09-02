@@ -357,29 +357,80 @@ export class TelegramRPCRegistry {
             officialApp: Boolean(a.officialApp ?? true),
             current: Boolean(a.current),
           }));
-          return { success: true, rpc: method, serverTime, result: { authorizations: list } };
+          const ttlDays = rawAuths.authorizationTtlDays || 180;
+          return { success: true, rpc: method, serverTime, result: { authorizations: list, authorizationTtlDays: ttlDays } };
         }
 
         case 'account.resetAuthorization': {
           const { hash } = params;
-          await client.invoke(new Api.account.ResetAuthorization({ hash: Number(hash) as any }));
+          await client.invoke(new Api.account.ResetAuthorization({ hash: (typeof hash === 'string' ? BigInt(hash) : hash) as any }));
           return { success: true, rpc: method, serverTime, result: { terminated: true, hash } };
         }
 
         case 'auth.resetAuthorizations': {
           await client.invoke(new Api.auth.ResetAuthorizations());
-          return { success: true, rpc: method, serverTime, result: { terminatedAllOthers: true } };
+          return { success: true, rpc: method, serverTime, result: { terminatedAll: true } };
         }
 
-        case 'account.changeAuthorizationSettings': {
-          const { hash, confirmed } = params;
-          await client.invoke(
-            new Api.account.ChangeAuthorizationSettings({
-              hash: Number(hash) as any,
-              confirmed: Boolean(confirmed),
-            })
-          );
-          return { success: true, rpc: method, serverTime, result: { updated: true, hash, confirmed } };
+        case 'account.setAuthorizationTTL': {
+          const { authorizationTtlDays = 180 } = params;
+          await client.invoke(new Api.account.SetAuthorizationTTL({ authorizationTtlDays: Number(authorizationTtlDays) }));
+          return { success: true, rpc: method, serverTime, result: { authorizationTtlDays: Number(authorizationTtlDays) } };
+        }
+
+        case 'account.getPassword': {
+          const pwd: any = await client.invoke(new Api.account.GetPassword());
+          return {
+            success: true,
+            rpc: method,
+            serverTime,
+            result: {
+              hasPassword: Boolean(pwd.hasPassword),
+              hasRecovery: Boolean(pwd.hasRecovery),
+              hint: pwd.hint || '',
+              loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
+              emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
+              pendingResetDate: pwd.pendingResetDate || undefined,
+            },
+          };
+        }
+
+        case 'account.updatePasswordSettings': {
+          const { password, newSettings } = params;
+          const inputSettings = new Api.account.PasswordInputSettings({
+            newAlgo: newSettings?.newAlgo,
+            newPasswordHash: newSettings?.newPasswordHash ? Buffer.from(newSettings.newPasswordHash, 'hex') : undefined,
+            hint: newSettings?.hint,
+            email: newSettings?.email,
+          });
+          const updateRes = await client.invoke(new Api.account.UpdatePasswordSettings({
+            password: password ? new Api.InputCheckPasswordEmpty() : new Api.InputCheckPasswordEmpty(),
+            newSettings: inputSettings,
+          }));
+          return { success: true, rpc: method, serverTime, result: { updated: Boolean(updateRes) } };
+        }
+
+        case 'account.sendVerifyEmailCode': {
+          const { purpose, email } = params;
+          const sendRes: any = await client.invoke(new Api.account.SendVerifyEmailCode({
+            purpose: purpose || new Api.EmailVerifyPurposePassport(),
+            email: email || '',
+          }));
+          return { success: true, rpc: method, serverTime, result: { pattern: sendRes?.pattern || email, length: sendRes?.length || 6 } };
+        }
+
+        case 'account.verifyEmail': {
+          const { purpose, verification } = params;
+          const verifyRes: any = await client.invoke(new Api.account.VerifyEmail({
+            purpose: purpose || new Api.EmailVerifyPurposePassport(),
+            verification: verification || new Api.EmailVerificationCode({ code: params.code || '' }),
+          }));
+          return { success: true, rpc: method, serverTime, result: { verified: Boolean(verifyRes) } };
+        }
+
+        case 'account.cancelPasswordEmail': {
+          await client.invoke(new Api.account.CancelPasswordEmail());
+          return { success: true, rpc: method, serverTime, result: { cancelled: true } };
         }
 
         case 'users.getFullUser': {
@@ -508,76 +559,6 @@ export class TelegramRPCRegistry {
             thisDc: 4,
             testMode: false,
           },
-        };
-
-      case 'account.getAuthorizations':
-        return {
-          success: true,
-          rpc: method,
-          serverTime,
-          result: {
-            authorizations: [
-              {
-                hash: '9901',
-                deviceModel: 'Telegram Web & Android MTProto',
-                platform: 'Android / Web',
-                systemVersion: 'Android 14',
-                appName: 'Telegram_anwer',
-                appVersion: '10.14.5',
-                dateCreated: serverTime - 86400 * 30,
-                dateActive: serverTime,
-                ip: '197.38.112.44',
-                country: 'Egypt',
-                officialApp: true,
-                current: true,
-              },
-              {
-                hash: '9902',
-                deviceModel: 'Telegram Desktop x64',
-                platform: 'Windows 11 Pro',
-                systemVersion: 'Windows 11 Pro 64-bit',
-                appName: 'Telegram Desktop',
-                appVersion: '5.2.1',
-                dateCreated: serverTime - 86400 * 14,
-                dateActive: serverTime - 3600 * 3,
-                ip: '156.204.18.91',
-                country: 'Egypt',
-                officialApp: true,
-                current: false,
-              },
-              {
-                hash: '9903',
-                deviceModel: 'Chrome Browser (WebK)',
-                platform: 'Web',
-                systemVersion: 'macOS Sonoma',
-                appName: 'Telegram Web',
-                appVersion: '2.0.18',
-                dateCreated: serverTime - 86400 * 4,
-                dateActive: serverTime - 86400,
-                ip: '82.129.40.12',
-                country: 'United Arab Emirates',
-                officialApp: true,
-                current: false,
-              },
-            ],
-            authorization_ttl_days: 180,
-          },
-        };
-
-      case 'account.resetAuthorization':
-        return {
-          success: true,
-          rpc: method,
-          serverTime,
-          result: { terminated: true, hash: params.hash },
-        };
-
-      case 'auth.resetAuthorizations':
-        return {
-          success: true,
-          rpc: method,
-          serverTime,
-          result: { terminatedAllOthers: true },
         };
 
       default:

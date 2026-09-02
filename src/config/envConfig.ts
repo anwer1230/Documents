@@ -25,7 +25,7 @@ export const DEFAULT_CREDENTIALS = {
   GROQ_API_KEY: '',
   PORT: 3000,
   APP_URL: '',
-  NODE_ENV: 'production',
+  NODE_ENV: 'development',
 };
 
 /**
@@ -35,9 +35,9 @@ export function getServerConfig(): AppEnvConfig {
   const env = typeof process !== 'undefined' && process.env ? process.env : {};
 
   return {
-    API_ID: '22043994',
-    API_HASH: '56f64582b363d367280db96586b97801',
-    TDLIB_API_HASH: '56f64582b363d367280db96586b97801',
+    API_ID: env.API_ID || env.TELEGRAM_API_ID || DEFAULT_CREDENTIALS.API_ID,
+    API_HASH: env.API_HASH || env.TELEGRAM_API_HASH || DEFAULT_CREDENTIALS.API_HASH,
+    TDLIB_API_HASH: env.TDLIB_API_HASH || env.API_HASH || DEFAULT_CREDENTIALS.TDLIB_API_HASH,
     SESSION_SECRET: env.SESSION_SECRET || DEFAULT_CREDENTIALS.SESSION_SECRET,
     GEMINI_API_KEY: env.GEMINI_API_KEY || DEFAULT_CREDENTIALS.GEMINI_API_KEY,
     GROQ_API_KEY: env.GROQ_API_KEY || DEFAULT_CREDENTIALS.GROQ_API_KEY,
@@ -51,10 +51,19 @@ export function getServerConfig(): AppEnvConfig {
  * Safe public configuration for client-side UI
  */
 export function getClientConfig() {
+  let clientEnv: Record<string, string | undefined> = {};
+  try {
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      // @ts-ignore
+      clientEnv = import.meta.env;
+    }
+  } catch {}
+
   return {
-    API_ID: '22043994',
-    API_HASH: '56f64582b363d367280db96586b97801',
-    TDLIB_API_HASH: '56f64582b363d367280db96586b97801',
+    API_ID: clientEnv.VITE_API_ID || DEFAULT_CREDENTIALS.API_ID,
+    API_HASH: clientEnv.VITE_API_HASH || DEFAULT_CREDENTIALS.API_HASH,
+    TDLIB_API_HASH: clientEnv.VITE_TDLIB_API_HASH || DEFAULT_CREDENTIALS.TDLIB_API_HASH,
   };
 }
 

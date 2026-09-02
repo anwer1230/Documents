@@ -24,8 +24,8 @@ export const ForwardModal: React.FC = () => {
     c.username?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleSelectChat = (chatId: string | number) => {
-    forwardMessageTo(String(chatId), forwardingMessage);
+  const handleSelectChat = (chatId: string) => {
+    forwardMessageTo(chatId, forwardingMessage);
   };
 
   return (

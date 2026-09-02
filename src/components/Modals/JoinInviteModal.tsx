@@ -90,9 +90,9 @@ export const JoinInviteModal: React.FC = () => {
   };
 
   const handleOpenExisting = () => {
-    const existing = chats.find((c) => String(c.id) === String(inviteData.id) || c.username === inviteData.username);
+    const existing = chats.find((c) => c.id === inviteData.id || c.username === inviteData.username);
     if (existing) {
-      setActiveChatId(String(existing.id));
+      setActiveChatId(existing.id);
     }
     setInviteData(null);
   };

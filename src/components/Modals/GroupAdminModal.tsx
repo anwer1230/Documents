@@ -34,8 +34,8 @@ export const GroupAdminModal: React.FC = () => {
 
   useEffect(() => {
     if (activeChat && activeModal === ('group-admin' as any)) {
-      setParticipants(messagesController.getParticipants(String(activeChat.id)));
-      setAdminOnlyPosting(messagesController.isAdminOnlyPosting(String(activeChat.id)));
+      setParticipants(messagesController.getParticipants(activeChat.id));
+      setAdminOnlyPosting(messagesController.isAdminOnlyPosting(activeChat.id));
     }
   }, [activeChat, activeModal]);
 
@@ -43,7 +43,7 @@ export const GroupAdminModal: React.FC = () => {
 
   const handleToggleAdminOnly = (enabled: boolean) => {
     setAdminOnlyPosting(enabled);
-    messagesController.setAdminOnlyPosting(String(activeChat.id), enabled);
+    messagesController.setAdminOnlyPosting(activeChat.id, enabled);
     showToast(
       enabled
         ? 'تم تفعيل وضع "المشرفون فقط يكتبون" في المجموعة 🔒'
@@ -54,7 +54,7 @@ export const GroupAdminModal: React.FC = () => {
 
   const handleSetSlowMode = (seconds: number) => {
     setSlowmodeSeconds(seconds);
-    messagesController.setSlowMode(String(activeChat.id), seconds);
+    messagesController.setSlowMode(activeChat.id, seconds);
     showToast(
       seconds > 0
         ? `تم تفعيل الوضع البطيء: ${seconds} ثانية بين كل رسالة ⏳`
@@ -64,36 +64,36 @@ export const GroupAdminModal: React.FC = () => {
   };
 
   const handlePromoteToAdmin = async (user: ChatParticipantInfo) => {
-    await messagesController.editAdminRights(String(activeChat.id), String(user.userId), TLRPC.DEFAULT_ADMIN_RIGHTS);
-    setParticipants([...messagesController.getParticipants(String(activeChat.id))]);
+    await messagesController.editAdminRights(activeChat.id, user.userId, TLRPC.DEFAULT_ADMIN_RIGHTS);
+    setParticipants([...messagesController.getParticipants(activeChat.id)]);
     showToast(`تمت ترقية "${user.name}" إلى مشرف بنجاح ⭐`, '👑');
   };
 
   const handleRestrictUser = async (user: ChatParticipantInfo) => {
-    await messagesController.editBannedRights(String(activeChat.id), String(user.userId), {
+    await messagesController.editBannedRights(activeChat.id, user.userId, {
       ...TLRPC.DEFAULT_USER_BANNED_RIGHTS,
       send_messages: false,
       send_media: false,
       send_stickers: false,
     });
-    setParticipants([...messagesController.getParticipants(String(activeChat.id))]);
+    setParticipants([...messagesController.getParticipants(activeChat.id)]);
     showToast(`تم تقييد صلاحيات "${user.name}" بنجاح 🚫`, '⚠️');
   };
 
   const handleBanUser = async (user: ChatParticipantInfo) => {
-    await messagesController.editBannedRights(String(activeChat.id), String(user.userId), {
+    await messagesController.editBannedRights(activeChat.id, user.userId, {
       ...TLRPC.DEFAULT_USER_BANNED_RIGHTS,
       view_messages: true,
       send_messages: false,
       send_media: false,
     });
-    setParticipants([...messagesController.getParticipants(String(activeChat.id))]);
+    setParticipants([...messagesController.getParticipants(activeChat.id)]);
     showToast(`تم حظر "${user.name}" من المجموعة ❌`, '🚫');
   };
 
   const handleUnbanUser = async (user: ChatParticipantInfo) => {
-    await messagesController.unbanUser(String(activeChat.id), String(user.userId));
-    setParticipants([...messagesController.getParticipants(String(activeChat.id))]);
+    await messagesController.unbanUser(activeChat.id, user.userId);
+    setParticipants([...messagesController.getParticipants(activeChat.id)]);
     showToast(`تم إلغاء القيود عن "${user.name}" بنجاح ✅`, '✨');
   };
 

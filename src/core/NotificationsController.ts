@@ -273,6 +273,36 @@ export class NotificationsController {
     if (this.settings.inAppPreview) {
       this.listeners.forEach((l) => l(fullNotif));
     }
+
+    // HTML5 Desktop Notification
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const desktopNotif = new Notification(fullNotif.title, {
+          body: fullNotif.body,
+          icon: fullNotif.avatar || undefined,
+          tag: fullNotif.chatId || 'tg_incoming_msg',
+          silent: fullNotif.isSilent,
+        });
+        desktopNotif.onclick = () => {
+          window.focus();
+        };
+      } catch {}
+    }
+  }
+
+  /**
+   * Requests HTML5 Desktop Notification permission from user
+   */
+  public async requestNotificationPermission(): Promise<NotificationPermission> {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const perm = await Notification.requestPermission();
+        return perm;
+      } catch {
+        return 'default';
+      }
+    }
+    return 'denied';
   }
 
   /**

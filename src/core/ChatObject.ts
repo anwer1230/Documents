@@ -1,7 +1,10 @@
 /**
  * Official Telegram ChatObject Implementation (MTProto 2.0 & Android Architecture)
  * Handles Channels, Megagroups, Basic Groups, Admin Rights, and Banned/Restricted Rights.
+ * Replicates org.telegram.messenger.ChatObject logic from DrKLO/Telegram Android source.
  */
+
+import { TLRPC } from './TLRPC';
 
 export interface ChatRights {
   view_messages?: boolean;
@@ -32,6 +35,7 @@ export interface ChatRights {
   anonymous?: boolean;
   manage_call?: boolean;
   other?: boolean;
+  until_date?: number;
 }
 
 export interface TelegramChatEntity {
@@ -59,120 +63,200 @@ export interface TelegramChatEntity {
   isAdmin?: boolean;
   isCreator?: boolean;
   hasBannedRights?: boolean;
+  isReadOnly?: boolean;
+  adminOnly?: boolean;
+  // Raw TLRPC properties support
+  _?: string;
+  flags?: number;
 }
 
 export class ChatObject {
   /**
    * Check if chat is a broadcast channel (NOT a megagroup / supergroup)
+   * Replicates ChatObject.isChannelAndNotMegaGroup(TLRPC.Chat) from Telegram Android
    */
-  public static isChannelAndNotMegaGroup(chat?: TelegramChatEntity | null): boolean {
+  public static isChannelAndNotMegaGroup(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return false;
-    // In Telegram MTProto: channels have flags. If megagroup is true or type is 'group'/'supergroup', it is NOT a broadcast channel
-    if (chat.megagroup === true || chat.type === 'group' || chat.type === 'supergroup' || chat.isGroup === true) {
+    const c = chat as any;
+
+    // In Telegram MTProto / Android:
+    // If megagroup is true or explicitly marked as group/supergroup, it is NOT a broadcast channel
+    if (c.megagroup === true || c.type === 'group' || c.type === 'supergroup' || c.isGroup === true) {
       return false;
     }
-    return Boolean(chat.broadcast || chat.type === 'channel' || (chat.isChannel && !chat.megagroup && !chat.isGroup));
+
+    // Check broadcast flag or channel type without megagroup
+    if (c.broadcast === true) {
+      return true;
+    }
+
+    if (c.type === 'channel') {
+      return !c.megagroup;
+    }
+
+    if (c.isChannel && !c.megagroup && !c.isGroup) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
    * Check if chat is any channel-type (broadcast or supergroup)
    */
-  public static isChannel(chat?: TelegramChatEntity | null): boolean {
+  public static isChannel(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return false;
+    const c = chat as any;
     return Boolean(
-      chat.isChannel ||
-      chat.type === 'channel' ||
-      chat.type === 'supergroup' ||
-      chat.broadcast ||
-      chat.megagroup
+      c.isChannel ||
+      c.type === 'channel' ||
+      c.type === 'supergroup' ||
+      c.broadcast ||
+      c.megagroup ||
+      c._ === 'channel' ||
+      c._ === 'channelForbidden'
     );
   }
 
   /**
    * Check if chat is a megagroup / supergroup
    */
-  public static isMegagroup(chat?: TelegramChatEntity | null): boolean {
+  public static isMegagroup(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return false;
+    const c = chat as any;
     return Boolean(
-      chat.megagroup ||
-      chat.type === 'supergroup' ||
-      (chat.type === 'group' && chat.isChannel)
+      c.megagroup ||
+      c.type === 'supergroup' ||
+      (c.type === 'group' && (c.isChannel || c.broadcast === false))
     );
   }
 
   /**
    * Check if chat is a basic group or megagroup
    */
-  public static isGroup(chat?: TelegramChatEntity | null): boolean {
+  public static isGroup(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return false;
+    const c = chat as any;
     return Boolean(
-      chat.type === 'group' ||
-      chat.type === 'supergroup' ||
-      chat.megagroup ||
-      chat.isGroup ||
-      (!ChatObject.isChannelAndNotMegaGroup(chat) && chat.type !== 'private' && chat.type !== 'saved' && chat.type !== 'bot')
+      c.type === 'group' ||
+      c.type === 'supergroup' ||
+      c.megagroup ||
+      c.isGroup ||
+      (!ChatObject.isChannelAndNotMegaGroup(c) && c.type !== 'private' && c.type !== 'saved' && c.type !== 'bot')
     );
+  }
+
+  /**
+   * Check if user is creator / owner of the chat
+   */
+  public static isCreator(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
+    if (!chat) return false;
+    const c = chat as any;
+    return Boolean(c.creator === true || c.isCreator === true || c.admin_rights?.add_admins);
+  }
+
+  /**
+   * Check if user has administrator privileges
+   */
+  public static isAdmin(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
+    if (!chat) return false;
+    const c = chat as any;
+    if (ChatObject.isCreator(c)) return true;
+    if (c.isAdmin === true) return true;
+    if (c.admin_rights && (
+      c.admin_rights.post_messages ||
+      c.admin_rights.edit_messages ||
+      c.admin_rights.delete_messages ||
+      c.admin_rights.ban_users ||
+      c.admin_rights.change_info ||
+      c.admin_rights.invite_users ||
+      c.admin_rights.pin_messages
+    )) {
+      return true;
+    }
+    return false;
   }
 
   /**
    * Check if the current user can post in this chat/channel
    */
-  public static canPost(chat?: TelegramChatEntity | null): boolean {
+  public static canPost(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return true;
-    if (chat.creator || chat.isCreator || chat.isAdmin) return true;
-    if (chat.admin_rights?.post_messages || chat.admin_rights?.send_messages) return true;
+    const c = chat as any;
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) return true;
+    if (c.admin_rights?.post_messages || c.admin_rights?.send_messages) return true;
     
     // Broadcast channels only allow admins/creators to post
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) {
+    if (ChatObject.isChannelAndNotMegaGroup(c)) {
       return false;
     }
 
-    return ChatObject.canSendMessages(chat);
+    return ChatObject.canSendMessages(c);
   }
 
   /**
-   * Check if the current user can send normal messages
+   * Check if the authenticated user can send normal messages.
+   * Replicates ChatObject.canSendMessages(TLRPC.Chat) & ChatObject.hasAdminRights(TLRPC.Chat) from Telegram Android.
+   *
+   * Accurately parses:
+   *  1. Private / Saved Messages / Bot chats (always permitted)
+   *  2. Creator / Admin permissions (bypass standard and default restrictions)
+   *  3. Broadcast channels vs Megagroups (broadcast requires admin_rights.post_messages)
+   *  4. Specific user banned_rights vs Chat default_banned_rights vs Chat level restriction flags
    */
-  public static canSendMessages(chat?: TelegramChatEntity | null): boolean {
+  public static canSendMessages(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return true;
+    const c = chat as any;
     
-    // Private chats, Saved Messages, Direct Bot chats
-    if (chat.type === 'private' || chat.type === 'saved' || chat.type === 'bot') {
+    // 1. Private chats, Saved Messages, Direct Bot chats
+    if (c.type === 'private' || c.type === 'saved' || c.type === 'bot') {
       return true;
     }
 
-    // Owner or Admin with full rights
-    if (chat.creator || chat.isCreator || chat.isAdmin) {
+    // 2. Left / Kicked / Deactivated chats
+    if (c.left === true || c.kicked === true || c.deactivated === true) {
+      return false;
+    }
+
+    // 3. Creator or Admin with elevated permissions
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) {
       return true;
     }
 
-    // Broadcast channels (where megagroup is false)
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) {
-      return Boolean(chat.admin_rights?.post_messages || chat.creator);
+    // 4. Broadcast channels (where megagroup is FALSE)
+    // Megagroups (supergroups) are NOT broadcast channels and must NOT be blocked by this rule!
+    if (ChatObject.isChannelAndNotMegaGroup(c)) {
+      return Boolean(c.admin_rights?.post_messages || c.creator || c.isCreator);
     }
 
-    // Groups & Supergroups: evaluate banned_rights and default_banned_rights
-    const userBanned = chat.banned_rights;
-    const defaultBanned = chat.default_banned_rights;
-
-    // Check specific user penalty first
+    // 5. Check user-specific penalties (banned_rights from TLRPC.ChatParticipant / TLRPC.ChannelParticipantBanned)
+    const userBanned = c.banned_rights as ChatRights | undefined;
     if (userBanned) {
-      if (userBanned.send_messages === true || (userBanned.view_messages === true)) {
-        return false;
+      // Check if until_date expired
+      const untilDate = userBanned.until_date || 0;
+      const isExpired = untilDate > 0 && untilDate * 1000 < Date.now();
+      if (!isExpired) {
+        if (userBanned.send_messages === true || userBanned.view_messages === true || userBanned.send_plain === true) {
+          return false;
+        }
       }
-      if (userBanned.send_plain === true) {
+    }
+
+    // 6. Check chat default restrictions (default_banned_rights)
+    const defaultBanned = c.default_banned_rights as ChatRights | undefined;
+    if (defaultBanned) {
+      if (defaultBanned.send_messages === true || defaultBanned.send_plain === true) {
         return false;
       }
     }
 
-    // Check default chat permissions
-    if (defaultBanned) {
-      if (defaultBanned.send_messages === true) {
-        return false;
-      }
-      if (defaultBanned.send_plain === true) {
-        return false;
-      }
+    // 7. General chat-level restricted or read-only flags (checked after megagroup/admin verification)
+    if (c.isReadOnly === true && !ChatObject.isMegagroup(c)) {
+      return false;
+    }
+
+    if (c.adminOnly === true) {
+      return false;
     }
 
     return true;
@@ -181,57 +265,61 @@ export class ChatObject {
   /**
    * Check if user can send media (photos, videos, documents, voice)
    */
-  public static canSendMedia(chat?: TelegramChatEntity | null): boolean {
+  public static canSendMedia(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return true;
-    if (chat.creator || chat.isCreator || chat.isAdmin) return true;
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) {
-      return Boolean(chat.admin_rights?.post_messages || chat.admin_rights?.send_media);
+    const c = chat as any;
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) return true;
+    if (ChatObject.isChannelAndNotMegaGroup(c)) {
+      return Boolean(c.admin_rights?.post_messages || c.admin_rights?.send_media);
     }
 
-    if (chat.banned_rights?.send_media === true) return false;
-    if (chat.default_banned_rights?.send_media === true) return false;
+    if (c.banned_rights?.send_media === true) return false;
+    if (c.default_banned_rights?.send_media === true) return false;
 
-    return ChatObject.canSendMessages(chat);
+    return ChatObject.canSendMessages(c);
   }
 
   /**
    * Check if user can send stickers / GIFs
    */
-  public static canSendStickers(chat?: TelegramChatEntity | null): boolean {
+  public static canSendStickers(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return true;
-    if (chat.creator || chat.isCreator || chat.isAdmin) return true;
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) return false;
+    const c = chat as any;
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) return true;
+    if (ChatObject.isChannelAndNotMegaGroup(c)) return false;
 
-    if (chat.banned_rights?.send_stickers === true || chat.banned_rights?.send_gifs === true) return false;
-    if (chat.default_banned_rights?.send_stickers === true || chat.default_banned_rights?.send_gifs === true) return false;
+    if (c.banned_rights?.send_stickers === true || c.banned_rights?.send_gifs === true) return false;
+    if (c.default_banned_rights?.send_stickers === true || c.default_banned_rights?.send_gifs === true) return false;
 
-    return ChatObject.canSendMessages(chat);
+    return ChatObject.canSendMessages(c);
   }
 
   /**
    * Check if user can embed links
    */
-  public static canSendEmbed(chat?: TelegramChatEntity | null): boolean {
+  public static canSendEmbed(chat?: TelegramChatEntity | TLRPC.Chat | null): boolean {
     if (!chat) return true;
-    if (chat.creator || chat.isCreator || chat.isAdmin) return true;
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) return false;
+    const c = chat as any;
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) return true;
+    if (ChatObject.isChannelAndNotMegaGroup(c)) return false;
 
-    if (chat.banned_rights?.embed_links === true) return false;
-    if (chat.default_banned_rights?.embed_links === true) return false;
+    if (c.banned_rights?.embed_links === true) return false;
+    if (c.default_banned_rights?.embed_links === true) return false;
 
-    return ChatObject.canSendMessages(chat);
+    return ChatObject.canSendMessages(c);
   }
 
   /**
    * Returns precise user restriction notice message for UI input banner
    */
   public static getRestrictedNotice(
-    chat?: TelegramChatEntity | null,
+    chat?: TelegramChatEntity | TLRPC.Chat | null,
     isArabic: boolean = true
-  ): { restricted: boolean; reason?: 'channel' | 'banned' | 'kicked' | 'deactivated'; message?: string } {
+  ): { restricted: boolean; reason?: 'channel' | 'banned' | 'kicked' | 'deactivated' | 'admin_only'; message?: string } {
     if (!chat) return { restricted: false };
+    const c = chat as any;
 
-    if (chat.kicked || chat.left) {
+    if (c.kicked || c.left) {
       return {
         restricted: true,
         reason: 'kicked',
@@ -239,7 +327,7 @@ export class ChatObject {
       };
     }
 
-    if (chat.deactivated) {
+    if (c.deactivated) {
       return {
         restricted: true,
         reason: 'deactivated',
@@ -247,9 +335,14 @@ export class ChatObject {
       };
     }
 
-    // Broadcast channels ONLY
-    if (ChatObject.isChannelAndNotMegaGroup(chat)) {
-      const canAdminPost = Boolean(chat.creator || chat.isCreator || chat.isAdmin || chat.admin_rights?.post_messages);
+    // Owner or Admin bypasses all posting restrictions
+    if (ChatObject.isCreator(c) || ChatObject.isAdmin(c)) {
+      return { restricted: false };
+    }
+
+    // Broadcast channels ONLY (where megagroup is false)
+    if (ChatObject.isChannelAndNotMegaGroup(c)) {
+      const canAdminPost = Boolean(c.creator || c.isCreator || c.isAdmin || c.admin_rights?.post_messages);
       if (!canAdminPost) {
         return {
           restricted: true,
@@ -261,21 +354,21 @@ export class ChatObject {
     }
 
     // Groups & Supergroups
-    if (chat.creator || chat.isCreator || chat.isAdmin) {
-      return { restricted: false };
-    }
+    const userBanned = c.banned_rights as ChatRights | undefined;
+    const defaultBanned = c.default_banned_rights as ChatRights | undefined;
 
-    const userBanned = chat.banned_rights;
-    const defaultBanned = chat.default_banned_rights;
-
-    if (userBanned?.send_messages === true || userBanned?.send_plain === true) {
-      return {
-        restricted: true,
-        reason: 'banned',
-        message: isArabic
-          ? 'المشرفون قيدوا قدرتك على إرسال الرسائل في هذه المجموعة.'
-          : 'Administrators have restricted your ability to send messages in this group.',
-      };
+    if (userBanned) {
+      const untilDate = userBanned.until_date || 0;
+      const isExpired = untilDate > 0 && untilDate * 1000 < Date.now();
+      if (!isExpired && (userBanned.send_messages === true || userBanned.send_plain === true)) {
+        return {
+          restricted: true,
+          reason: 'banned',
+          message: isArabic
+            ? 'المشرفون قيدوا قدرتك على إرسال الرسائل في هذه المجموعة.'
+            : 'Administrators have restricted your ability to send messages in this group.',
+        };
+      }
     }
 
     if (defaultBanned?.send_messages === true || defaultBanned?.send_plain === true) {
@@ -288,6 +381,17 @@ export class ChatObject {
       };
     }
 
+    if (c.adminOnly === true) {
+      return {
+        restricted: true,
+        reason: 'admin_only',
+        message: isArabic
+          ? 'تم تفعيل وضع المشرفين فقط بواسطة الإدارة.'
+          : 'Admin-only mode is active in this group.',
+      };
+    }
+
     return { restricted: false };
   }
 }
+
