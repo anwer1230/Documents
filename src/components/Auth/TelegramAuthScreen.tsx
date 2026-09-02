@@ -326,41 +326,15 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
     }
   };
 
-  // 4. Quick Instant Demo Login
-  const handleQuickDemoLogin = () => {
-    setIsLoading(true);
-    setStatusMessage(isArabic ? 'جارٍ إنشاء جلسة سحابية مشفرة...' : 'Creating secure session...');
-
-    setTimeout(() => {
-      setIsLoading(false);
-      const fullPhone = `${selectedCountry.code} ${phoneNumber || '772 997 043'}`.trim();
-      login({
-        name: firstName.trim() || 'أنور فؤاد',
-        phone: fullPhone,
-        username: username.trim() || 'anwer_dev',
-        avatar: '',
-        bio: 'Telegram Native Client • Layer 184',
-      });
-      showToast(isArabic ? 'تم تفعيل الجلسة والاتصال بالسحابة' : 'Session activated', '✅');
-    }, 700);
-  };
-
-  // 5. QR Code Login Simulation
+  // 4. QR Code Navigation to Phone Auth
   const handleQrCodeConfirm = () => {
-    setIsLoading(true);
-    setStatusMessage(isArabic ? 'تم مسح رمز الاستجابة السريعة! جاري المصادقة...' : 'QR Scanned! Authenticating...');
-
-    setTimeout(() => {
-      setIsLoading(false);
-      login({
-        name: 'أنور فؤاد',
-        phone: '+967 772 997 043',
-        username: 'anwer_dev',
-        avatar: '',
-        bio: 'Telegram Desktop / Web Session Authenticated via QR',
-      });
-      showToast(isArabic ? 'تم تسجيل الدخول عبر رمز QR بنجاح' : 'QR Login Successful!', '🎉');
-    }, 1200);
+    setAuthMode('phone');
+    showToast(
+      isArabic
+        ? 'يرجى إدخال رقم هاتفك لاستلام رمز التحقق الرسمي من تيليجرام.'
+        : 'Please enter your phone number to receive the official Telegram verification code.',
+      '📱'
+    );
   };
 
   return (
@@ -585,16 +559,6 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
                       {isArabic ? <ArrowLeft size={16} /> : <ArrowRight size={16} />}
                     </>
                   )}
-                </button>
-
-                {/* Quick 1-Click Demo Login */}
-                <button
-                  type="button"
-                  onClick={handleQuickDemoLogin}
-                  className="w-full py-2.5 bg-white/5 hover:bg-white/10 active:scale-[0.99] text-gray-300 text-xs font-semibold rounded-2xl border border-white/10 flex items-center justify-center gap-2 transition-all"
-                >
-                  <Sparkles size={14} className="text-amber-400" />
-                  <span>{isArabic ? 'دخول فوري مباشر (Demo / Quick Connect)' : 'Instant Direct Connect (Demo)'}</span>
                 </button>
               </form>
             )}
@@ -878,14 +842,14 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
               </ol>
             </div>
 
-            {/* Quick Confirm Button */}
+            {/* Direct to Phone Auth Button */}
             <button
               type="button"
               onClick={handleQrCodeConfirm}
               className="w-full py-3 bg-[#2481cc] hover:bg-[#1f6fa8] text-white text-xs font-bold rounded-2xl shadow-lg shadow-[#2481cc]/25 transition-all flex items-center justify-center gap-2"
             >
-              <Check size={16} />
-              <span>{isArabic ? 'تأكيد تسجيل الدخول برمز QR' : 'Confirm QR Login'}</span>
+              <Phone size={16} />
+              <span>{isArabic ? 'تسجيل الدخول برقم الهاتف الرسمي' : 'Log in with Phone Number'}</span>
             </button>
           </div>
         )}

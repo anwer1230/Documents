@@ -246,18 +246,31 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [accounts, setAccounts] = useState<UserAccount[]>(() => {
     try {
       const isAuth = localStorage.getItem('tg_auth_session_active') === 'true';
-      if (!isAuth) return [];
+      if (!isAuth) {
+        localStorage.removeItem('tg_multi_accounts_v3');
+        localStorage.removeItem('tg_active_account_id_v3');
+        return [];
+      }
       const saved = localStorage.getItem('tg_multi_accounts_v3');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           // Filter out any legacy mock accounts
           const realAccs = parsed.filter(
-            (a: UserAccount) => a.id !== 'acc_personal' && a.id !== 'acc_personal_demo' && Boolean(a.user?.phone)
+            (a: UserAccount) =>
+              a.id !== 'acc_personal' &&
+              a.id !== 'acc_personal_demo' &&
+              Boolean(a.user?.phone) &&
+              a.user.phone.trim().length > 3
           );
-          return realAccs;
+          if (realAccs.length > 0) return realAccs;
         }
       }
+    } catch {}
+    try {
+      localStorage.removeItem('tg_auth_session_active');
+      localStorage.removeItem('tg_multi_accounts_v3');
+      localStorage.removeItem('tg_active_account_id_v3');
     } catch {}
     return [];
   });
@@ -268,7 +281,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const saved = localStorage.getItem('tg_multi_accounts_v3');
       if (auth === 'true' && saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.some((a: UserAccount) => a.id !== 'acc_personal' && a.id !== 'acc_personal_demo' && Boolean(a.user?.phone))) {
+        if (
+          Array.isArray(parsed) &&
+          parsed.some(
+            (a: UserAccount) =>
+              a.id !== 'acc_personal' &&
+              a.id !== 'acc_personal_demo' &&
+              Boolean(a.user?.phone) &&
+              a.user.phone.trim().length > 3
+          )
+        ) {
           return true;
         }
       }
@@ -293,7 +315,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [chats, setChats] = useState<Chat[]>(initialActiveAcc ? initialActiveAcc.chats : []);
   const [messages, setMessages] = useState<Record<string, Message[]>>(initialActiveAcc ? initialActiveAcc.messages : {});
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [activeChatId, setActiveChatId] = useState<string | null>(initialActiveAcc?.chats?.[0]?.id || null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -669,7 +691,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
     setChats(targetAcc.chats || []);
     setMessages(targetAcc.messages || {});
-    setActiveChatId(targetAcc.chats?.[0]?.id || 'chat_saved_messages');
+    setActiveChatId(null);
     setIsDrawerOpen(false);
 
     setAccounts(updatedAccounts);
@@ -793,7 +815,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setChats(initialAccChats);
     setMessages(initialAccMessages);
     setSettings(defaultAccSettings);
-    setActiveChatId('chat_saved_messages');
+    setActiveChatId(null);
     setIsAuthenticated(true);
 
     try {
@@ -947,7 +969,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setCurrentUser(newUser);
     setChats(initialAccChats);
     setMessages(initialAccMessages);
-    setActiveChatId('chat_saved_messages');
+    setActiveChatId(null);
     setActiveModal('none');
 
     try {
@@ -1391,33 +1413,43 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       const data = await res.json();
 
-      if (data.sessionRevoked || data.error === 'SESSION_REVOKED') {
-        console.warn('[MTProto Sync] Session was revoked or expired on Telegram server.');
-        localStorage.removeItem('tg_session_string');
-        setAccounts((prev) =>
-          prev.map((acc) =>
-            acc.id === activeAccountId ? { ...acc, sessionString: undefined } : acc
-          )
+      if (data.sessionRevoked || data.error === 'SESSION_REVOKED' || data.error === 'NO_ACTIVE_SESSION' || !data.success || data.authenticated === false) {
+        console.warn('[MTProto Sync] No active or authenticated session found. Removing unverified account.');
+        const validRemaining = accounts.filter(
+          (a) => a.id !== activeAccountId && Boolean(a.sessionString) && a.sessionString !== activeSessionStr
         );
-        showToast(
-          settings.language === 'ar'
-            ? 'انتهت صلاحية جلسة تيليجرام أو تم تسجيل الخروج من أجهزة أخرى. يرجى تسجيل الدخول مجدداً.'
-            : 'Telegram session expired or revoked. Please log in again.',
-          '⚠️'
-        );
-        setChats((prev) => (prev && prev.length > 0 ? prev : INITIAL_CHATS));
+        if (validRemaining.length === 0) {
+          try {
+            localStorage.removeItem('tg_session_string');
+            localStorage.removeItem('tg_auth_session_active');
+            localStorage.removeItem('tg_multi_accounts_v3');
+            localStorage.removeItem('tg_active_account_id_v3');
+          } catch {}
+          setAccounts([]);
+          setIsAuthenticated(false);
+          setActiveAccountId('');
+          setActiveChatId(null);
+          setChats([]);
+          setMessages({});
+          setCurrentUser(CURRENT_USER);
+        } else {
+          setAccounts(validRemaining);
+          setActiveAccountId(validRemaining[0].id);
+          setCurrentUser(validRemaining[0].user);
+          setChats(validRemaining[0].chats || []);
+          setMessages(validRemaining[0].messages || {});
+          setActiveChatId(null);
+        }
         return;
       }
 
       if (data.success && data.user) {
-        const resolvedName = (currentUser.name && currentUser.name !== 'مستخدم تيليجرام' && currentUser.name !== 'أنور فؤاد')
-          ? currentUser.name
-          : (data.user.name || currentUser.name || 'مستخدم تيليجرام');
+        const resolvedName = data.user.name || currentUser.name || 'مستخدم تيليجرام';
 
         const updatedUser: User = {
           id: data.user.id || currentUser.id,
           name: resolvedName,
-          username: (currentUser.username && currentUser.username !== 'anwar_fouad') ? currentUser.username : (data.user.username || currentUser.username),
+          username: data.user.username || currentUser.username,
           phone: data.user.phone || currentUser.phone,
           avatar: data.user.avatar || currentUser.avatar,
           bio: data.user.bio || currentUser.bio,
@@ -1428,51 +1460,42 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         setCurrentUser(updatedUser);
 
-        // Map Dialogs from MTProto messages.getDialogs merging with existing chats safely
+        // Map Dialogs from real MTProto messages.getDialogs filtering out any mock bot fixtures
+        const mockBotIds = new Set(['chat_telegram_news', 'chat_botfather', 'chat_durov', 'chat_ton_community', 'chat_sarah', 'chat_secret_alex']);
         const chatMap = new Map<string, Chat>();
-        INITIAL_CHATS.forEach((c) => chatMap.set(c.id, c));
-        chats.forEach((c) => chatMap.set(c.id, c));
         if (data.chats && Array.isArray(data.chats)) {
-          data.chats.forEach((c: Chat) => chatMap.set(c.id, c));
+          data.chats.forEach((c: Chat) => {
+            if (!mockBotIds.has(c.id)) {
+              chatMap.set(c.id, c);
+            }
+          });
         }
+        // Keep existing real chats from local state
+        chats.forEach((c) => {
+          if (!mockBotIds.has(c.id) && !chatMap.has(c.id)) {
+            chatMap.set(c.id, c);
+          }
+        });
 
         let finalChats = Array.from(chatMap.values());
 
-        // Guarantee Saved Messages exists and has user avatar
+        // Update Saved Messages avatar if present
         const savedChatIdx = finalChats.findIndex((c) => c.id === 'chat_saved_messages' || c.type === 'saved');
         if (savedChatIdx >= 0) {
           finalChats[savedChatIdx] = {
             ...finalChats[savedChatIdx],
             avatar: updatedUser.avatar || finalChats[savedChatIdx].avatar,
           };
-        } else {
-          finalChats.unshift({
-            id: 'chat_saved_messages',
-            type: 'saved',
-            title: 'الرسائل المحفوظة',
-            avatar: updatedUser.avatar || '',
-            isPinned: true,
-            unreadCount: 0,
-            description: 'سحابة التخزين الشخصية الرسمية من تيليجرام.',
-            lastMessage: {
-              id: `m_saved_${Date.now()}`,
-              senderName: 'You',
-              text: 'مرحباً بك في مساحتك السحابية الآمنة لحفظ الرسائل والملفات.',
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              isOutgoing: true,
-              status: 'read',
-            },
-          });
         }
 
         setChats(finalChats);
 
-        // Auto-select active chat if none or invalid
+        // Do NOT auto-open Saved Messages or any chat on sync/refresh. Keep chat open only if user was already in it.
         setActiveChatId((prev) => {
           if (prev && finalChats.some((c) => c.id === prev)) {
             return prev;
           }
-          return finalChats[0]?.id || 'chat_saved_messages';
+          return null;
         });
 
         // Map Messages from MTProto
@@ -1480,11 +1503,6 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setMessages((prev) => ({
             ...prev,
             ...data.messages,
-          }));
-        } else {
-          setMessages((prev) => ({
-            ...INITIAL_MESSAGES,
-            ...prev,
           }));
         }
 

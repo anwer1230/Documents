@@ -86,7 +86,13 @@ export class UserConfig {
       // If currentUser is null, check persistent AuthTokensHelper backup
       if (!this.currentUser) {
         const backup = AuthTokensHelper.getInstance().restoreUserBackup(this.currentAccount);
-        if (backup) {
+        if (
+          backup &&
+          backup.phone &&
+          backup.phone.trim().length > 3 &&
+          backup.id !== 'acc_personal' &&
+          backup.id !== 'acc_personal_demo'
+        ) {
           this.currentUser = backup;
           this.clientUserId = String(backup.id);
           this.isClientActivated = true;

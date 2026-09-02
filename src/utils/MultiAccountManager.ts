@@ -96,7 +96,15 @@ export class UserConfig {
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            this.accounts = parsed.slice(0, this.MAX_ACCOUNT_COUNT);
+            this.accounts = parsed
+              .filter(
+                (a: UserAccount) =>
+                  a.id !== 'acc_personal' &&
+                  a.id !== 'acc_personal_demo' &&
+                  Boolean(a.user?.phone) &&
+                  a.user.phone.trim().length > 3
+              )
+              .slice(0, this.MAX_ACCOUNT_COUNT);
           }
         }
 
