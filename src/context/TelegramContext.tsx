@@ -216,6 +216,7 @@ interface TelegramContextType {
   toggleMuteChat: (chatId: string) => void;
   togglePinChat: (chatId: string) => void;
   markChatReadUnread: (chatId: string) => void;
+  markChatAsRead: (chatId: string) => void;
   clearChatHistory: (chatId: string) => void;
   deleteChat: (chatId: string) => void;
   leaveChat: (chatId: string) => Promise<void>;
@@ -2420,6 +2421,36 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
+  const markChatAsRead = (chatId: string) => {
+    if (!chatId) return;
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
+    );
+    setMessages((prev) => {
+      const currentList = prev[chatId];
+      if (!currentList || currentList.length === 0) return prev;
+      const hasUnread = currentList.some((m) => !m.isOutgoing && m.status !== 'read');
+      if (!hasUnread) return prev;
+      return {
+        ...prev,
+        [chatId]: currentList.map((m) => (!m.isOutgoing ? { ...m, status: 'read' } : m)),
+      };
+    });
+    messagesController.markDialogAsRead(chatId, 'max');
+
+    try {
+      const activeSessionStr = localStorage.getItem('tg_session_string') || '';
+      const activePhone = currentUser.phone || '';
+      if (activeSessionStr || activePhone) {
+        fetch('/api/telegram/messages/read-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chatId, maxId: 'max', sessionString: activeSessionStr, phone: activePhone }),
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  };
+
   const markChatReadUnread = (chatId: string) => {
     let newUnread = 0;
     setChats((prev) =>
@@ -2432,7 +2463,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
     );
     if (newUnread === 0) {
-      messagesController.markDialogAsRead(chatId, 'max');
+      markChatAsRead(chatId);
     }
   };
 
@@ -3226,6 +3257,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         toggleMuteChat,
         togglePinChat,
         markChatReadUnread,
+        markChatAsRead,
         clearChatHistory,
         deleteChat,
         leaveChat,
