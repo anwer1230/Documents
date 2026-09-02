@@ -95,6 +95,7 @@ async function startServer() {
   const httpServer = http.createServer(app);
   const io = new SocketIOServer(httpServer, {
     cors: { origin: '*' },
+    transports: ['polling', 'websocket'],
   });
   const PORT = 3000;
 

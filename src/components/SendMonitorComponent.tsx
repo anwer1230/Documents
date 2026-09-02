@@ -141,9 +141,9 @@ export const SendMonitorComponent: React.FC<SendMonitorComponentProps> = ({ onBa
   // 1. Socket.IO Lifecycle
   useEffect(() => {
     const socket = io({
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
-      timeout: 10000
+      transports: ['polling', 'websocket'],
+      reconnectionAttempts: 5,
+      timeout: 5000,
     });
     socketRef.current = socket;
 
