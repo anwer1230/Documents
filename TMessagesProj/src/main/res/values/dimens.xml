@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Official Telegram Android Dimensions & Spacings -->
+    <dimen name="chat_font_size_default">16sp</dimen>
+    <dimen name="chat_bubble_radius_default">16dp</dimen>
+    <dimen name="chat_avatar_size">35dp</dimen>
+    <dimen name="chat_bubble_padding_h">12dp</dimen>
+    <dimen name="chat_bubble_padding_v">6dp</dimen>
+    <dimen name="dialog_cell_height">72dp</dimen>
+    <dimen name="dialog_avatar_size">54dp</dimen>
+    <dimen name="action_bar_height">56dp</dimen>
+</resources>

@@ -1,3 +1,11 @@
+/*
+ * This is the source code of Telegram for Android v. 12.x.x.
+ * It is licensed under GNU GPL v. 2 or later.
+ * You should have received a copy of the license in this archive (see LICENSE).
+ *
+ * Copyright Nikolai Kudashov, 2013-2024.
+ */
+
 package org.telegram.ui.Cells;
 
 import android.content.Context;
@@ -12,13 +20,21 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.ActionBar.ThemeColors;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 
 /**
- * DialogCell - Official Telegram Chat list item view
- * Renders avatar circle, title, date, snippet text, and unread badge.
+ * DialogCell - Official Telegram Chat list item view (DrKLO/Telegram)
+ * Exact dimensions:
+ * - Row height: dp(72)
+ * - Avatar: 54dp x 54dp circle, leftMargin dp(11) / dp(72) start text offset
+ * - Title text: 16sp, topMargin dp(12)
+ * - Message snippet: 15sp, topMargin dp(38)
+ * - Time: 12sp, rightMargin dp(16), topMargin dp(14)
+ * - Unread Badge: 20dp height, rightMargin dp(16), bottomMargin dp(14)
  */
 public class DialogCell extends FrameLayout {
 
@@ -29,14 +45,12 @@ public class DialogCell extends FrameLayout {
     private final Paint avatarPaint;
     private final Paint avatarTextPaint;
     private final Paint dividerPaint;
-
     private String avatarLetter = "";
     private int avatarColor = Color.parseColor("#50A7EA");
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
 
     public DialogCell(Context context) {
         super(context);
-
         avatarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         avatarTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         avatarTextPaint.setColor(Color.WHITE);
@@ -46,12 +60,11 @@ public class DialogCell extends FrameLayout {
         dividerPaint = new Paint();
         dividerPaint.setColor(Color.parseColor("#E0E0E0"));
         dividerPaint.setStrokeWidth(AndroidUtilities.dp(1));
-
         setWillNotDraw(false);
 
-        // Name
+        // Name (16sp, leftMargin 72dp)
         nameTextView = new TextView(context);
-        nameTextView.setTextColor(Color.parseColor("#222222"));
+        nameTextView.setTextColor(Theme.getColor(ThemeColors.key_chats_name));
         nameTextView.setTextSize(16);
         nameTextView.setSingleLine(true);
         nameTextView.setEllipsize(TextUtils.TruncateAt.END);
@@ -61,29 +74,29 @@ public class DialogCell extends FrameLayout {
         lpName.rightMargin = AndroidUtilities.dp(60);
         addView(nameTextView, lpName);
 
-        // Message Snippet
+        // Message Snippet (15sp, leftMargin 72dp, topMargin 38dp)
         messageTextView = new TextView(context);
-        messageTextView.setTextColor(Color.parseColor("#8E8E93"));
-        messageTextView.setTextSize(14);
+        messageTextView.setTextColor(Theme.getColor(ThemeColors.key_chats_message));
+        messageTextView.setTextSize(15);
         messageTextView.setSingleLine(true);
         messageTextView.setEllipsize(TextUtils.TruncateAt.END);
         LayoutParams lpMsg = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         lpMsg.leftMargin = AndroidUtilities.dp(72);
-        lpMsg.topMargin = AndroidUtilities.dp(36);
+        lpMsg.topMargin = AndroidUtilities.dp(38);
         lpMsg.rightMargin = AndroidUtilities.dp(44);
         addView(messageTextView, lpMsg);
 
-        // Time
+        // Time (12sp, topMargin 14dp, rightMargin 16dp)
         timeTextView = new TextView(context);
-        timeTextView.setTextColor(Color.parseColor("#A0A0A5"));
+        timeTextView.setTextColor(Theme.getColor(ThemeColors.key_chats_date));
         timeTextView.setTextSize(12);
         LayoutParams lpTime = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
         lpTime.gravity = Gravity.TOP | Gravity.RIGHT;
-        lpTime.topMargin = AndroidUtilities.dp(12);
+        lpTime.topMargin = AndroidUtilities.dp(14);
         lpTime.rightMargin = AndroidUtilities.dp(16);
         addView(timeTextView, lpTime);
 
-        // Unread Badge
+        // Unread Badge (20dp x 20dp, bottomMargin 14dp, rightMargin 16dp)
         countTextView = new TextView(context);
         countTextView.setTextColor(Color.WHITE);
         countTextView.setTextSize(11);
@@ -91,7 +104,7 @@ public class DialogCell extends FrameLayout {
         countTextView.setBackgroundColor(Color.parseColor("#4DA6EA"));
         LayoutParams lpCount = new LayoutParams(AndroidUtilities.dp(20), AndroidUtilities.dp(20));
         lpCount.gravity = Gravity.BOTTOM | Gravity.RIGHT;
-        lpCount.bottomMargin = AndroidUtilities.dp(12);
+        lpCount.bottomMargin = AndroidUtilities.dp(14);
         lpCount.rightMargin = AndroidUtilities.dp(16);
         addView(countTextView, lpCount);
     }
@@ -99,7 +112,6 @@ public class DialogCell extends FrameLayout {
     public void setDialog(TLRPC.Dialog dialog, int currentAccount) {
         if (dialog == null) return;
         MessagesController mc = MessagesController.getInstance(currentAccount);
-
         String title = "Chat";
         if (dialog.id > 0) {
             TLRPC.User user = mc.getUser(dialog.id);
@@ -133,7 +145,6 @@ public class DialogCell extends FrameLayout {
         } else {
             countTextView.setVisibility(GONE);
         }
-
         invalidate();
     }
 
@@ -159,10 +170,10 @@ public class DialogCell extends FrameLayout {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        // Draw Avatar Circle
+        // Draw Avatar Circle (54dp diameter -> 27dp radius centered at (36dp, 36dp))
         float cx = AndroidUtilities.dp(36);
         float cy = AndroidUtilities.dp(36);
-        float radius = AndroidUtilities.dp(24);
+        float radius = AndroidUtilities.dp(27);
         avatarPaint.setColor(avatarColor);
         canvas.drawCircle(cx, cy, radius, avatarPaint);
 

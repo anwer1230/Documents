@@ -14,9 +14,19 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.view.View;
+import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.MessageObject;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.ActionBar.ThemeColors;
 
+/**
+ * ChatMessageCell - Official DrKLO/Telegram Android metrics and sizing:
+ * - Avatar: dp(35) x dp(35), circular, bottom-aligned for incoming group messages
+ * - Bubble margins: dp(8) top/bottom, dp(16) start/end margin
+ * - Bubble corner radius: dp(16) default (configurable via Theme.getChatBubbleRadius())
+ * - Font sizes: Message text dp(16), Time dp(12), Name dp(14), Badge dp(11)
+ */
 public class ChatMessageCell extends View {
 
     public static final int ROLE_NONE = 0;
@@ -30,8 +40,11 @@ public class ChatMessageCell extends View {
     private final Paint namePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint statePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint avatarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint avatarTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint adminTagPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint adminTagBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
     private final RectF bubbleRect = new RectF();
     private final RectF adminTagRect = new RectF();
 
@@ -39,6 +52,7 @@ public class ChatMessageCell extends View {
     private String senderName;
     private String senderRank;
     private int senderRole = ROLE_NONE;
+    private boolean showAvatar = true;
 
     public ChatMessageCell(Context context) {
         super(context);
@@ -46,18 +60,24 @@ public class ChatMessageCell extends View {
     }
 
     private void init() {
-        textPaint.setColor(Color.WHITE);
-        textPaint.setTextSize(36);
+        textPaint.setColor(Theme.getColor(ThemeColors.key_chat_messageTextIn));
+        textPaint.setTextSize(AndroidUtilities.dp(Theme.getChatFontSize()));
 
         namePaint.setColor(Color.parseColor("#4ea4f6"));
-        namePaint.setTextSize(30);
+        namePaint.setTextSize(AndroidUtilities.dp(14));
         namePaint.setFakeBoldText(true);
 
+        avatarPaint.setAntiAlias(true);
+        avatarTextPaint.setAntiAlias(true);
+        avatarTextPaint.setColor(Color.WHITE);
+        avatarTextPaint.setTextSize(AndroidUtilities.dp(14));
+        avatarTextPaint.setTextAlign(Paint.Align.CENTER);
+
         statePaint.setAntiAlias(true);
-        statePaint.setStrokeWidth(4);
+        statePaint.setStrokeWidth(AndroidUtilities.dp(1.5f));
         statePaint.setStyle(Paint.Style.STROKE);
 
-        adminTagPaint.setTextSize(22);
+        adminTagPaint.setTextSize(AndroidUtilities.dp(11));
         adminTagPaint.setFakeBoldText(true);
         adminTagBgPaint.setStyle(Paint.Style.FILL);
     }
@@ -68,10 +88,11 @@ public class ChatMessageCell extends View {
         invalidate();
     }
 
-    public void setSenderInfo(String name, int role, String customRank) {
+    public void setSenderInfo(String name, int role, String customRank, boolean showAvatar) {
         this.senderName = name;
         this.senderRole = role;
         this.senderRank = customRank;
+        this.showAvatar = showAvatar;
         invalidate();
     }
 
@@ -115,7 +136,6 @@ public class ChatMessageCell extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-
         if (currentMessageObject == null) {
             return;
         }
@@ -124,33 +144,52 @@ public class ChatMessageCell extends View {
         int width = getWidth();
         int height = getHeight();
 
-        // 1. Draw message bubble background
-        if (isOut) {
-            bgPaint.setColor(Color.parseColor("#2b5278"));
-            bubbleRect.set(width * 0.3f, 8, width - 16, height - 8);
-        } else {
-            bgPaint.setColor(Color.parseColor("#182533"));
-            bubbleRect.set(16, 8, width * 0.7f, height - 8);
+        int avatarSize = AndroidUtilities.dp(35);
+        int bubbleRadius = AndroidUtilities.dp(Theme.getChatBubbleRadius());
+        int paddingH = AndroidUtilities.dp(12);
+        int paddingV = AndroidUtilities.dp(6);
+
+        // 1. Draw avatar on left for incoming group messages (Official Telegram size = dp(35))
+        if (!isOut && showAvatar) {
+            float avatarX = AndroidUtilities.dp(8) + avatarSize / 2f;
+            float avatarY = height - AndroidUtilities.dp(4) - avatarSize / 2f;
+            avatarPaint.setColor(Color.parseColor("#50A7EA"));
+            canvas.drawCircle(avatarX, avatarY, avatarSize / 2f, avatarPaint);
+
+            String initial = senderName != null && !senderName.isEmpty() ? senderName.substring(0, 1).toUpperCase() : "U";
+            Paint.FontMetrics fm = avatarTextPaint.getFontMetrics();
+            float baseline = avatarY - (fm.ascent + fm.descent) / 2f;
+            canvas.drawText(initial, avatarX, baseline, avatarTextPaint);
         }
-        canvas.drawRoundRect(bubbleRect, 18, 18, bgPaint);
 
-        float textOffsetY = bubbleRect.top + 48;
+        // 2. Draw message bubble background with official margins
+        if (isOut) {
+            bgPaint.setColor(Theme.getColor(ThemeColors.key_chat_outBubble));
+            bubbleRect.set(width * 0.35f, AndroidUtilities.dp(4), width - AndroidUtilities.dp(8), height - AndroidUtilities.dp(4));
+        } else {
+            bgPaint.setColor(Theme.getColor(ThemeColors.key_chat_inBubble));
+            float left = showAvatar ? AndroidUtilities.dp(8 + 35 + 8) : AndroidUtilities.dp(8);
+            bubbleRect.set(left, AndroidUtilities.dp(4), width * 0.75f, height - AndroidUtilities.dp(4));
+        }
 
-        // 2. Draw Sender Name & Role Badge (For incoming group messages)
+        canvas.drawRoundRect(bubbleRect, bubbleRadius, bubbleRadius, bgPaint);
+
+        float textOffsetY = bubbleRect.top + AndroidUtilities.dp(20);
+
+        // 3. Draw Sender Name & Role Badge (For incoming group messages)
         if (!isOut && senderName != null) {
-            float nameX = bubbleRect.left + 24;
-            float nameY = bubbleRect.top + 34;
+            float nameX = bubbleRect.left + paddingH;
+            float nameY = bubbleRect.top + AndroidUtilities.dp(16);
             canvas.drawText(senderName, nameX, nameY, namePaint);
             float nameWidth = namePaint.measureText(senderName);
 
             // Draw Role / Rank Badge if user is Admin, Creator or Restricted
             if (senderRole != ROLE_NONE && senderRank != null) {
                 String badgeText = (senderRole == ROLE_CREATOR ? "👑 " : (senderRole == ROLE_ADMIN ? "🛡️ " : "")) + senderRank;
-                float tagWidth = adminTagPaint.measureText(badgeText) + 16;
-                float tagLeft = nameX + nameWidth + 12;
-                float tagTop = nameY - 22;
-                float tagBottom = nameY + 6;
-
+                float tagWidth = adminTagPaint.measureText(badgeText) + AndroidUtilities.dp(8);
+                float tagLeft = nameX + nameWidth + AndroidUtilities.dp(6);
+                float tagTop = nameY - AndroidUtilities.dp(12);
+                float tagBottom = nameY + AndroidUtilities.dp(4);
                 adminTagRect.set(tagLeft, tagTop, tagLeft + tagWidth, tagBottom);
 
                 if (senderRole == ROLE_CREATOR) {
@@ -166,50 +205,36 @@ public class ChatMessageCell extends View {
                     adminTagBgPaint.setColor(Color.parseColor("#33F44336"));
                     adminTagPaint.setColor(Color.parseColor("#E57373"));
                 }
-
-                canvas.drawRoundRect(adminTagRect, 8, 8, adminTagBgPaint);
-                canvas.drawText(badgeText, tagLeft + 8, nameY - 4, adminTagPaint);
+                canvas.drawRoundRect(adminTagRect, AndroidUtilities.dp(4), AndroidUtilities.dp(4), adminTagBgPaint);
+                canvas.drawText(badgeText, tagLeft + AndroidUtilities.dp(4), nameY - AndroidUtilities.dp(2), adminTagPaint);
             }
-
-            textOffsetY += 32;
+            textOffsetY += AndroidUtilities.dp(18);
         }
 
-        // 3. Draw message text
+        // 4. Draw message text
         String text = currentMessageObject.messageText != null ? currentMessageObject.messageText.toString() : "";
-        canvas.drawText(text, bubbleRect.left + 24, textOffsetY, textPaint);
+        textPaint.setColor(isOut ? Theme.getColor(ThemeColors.key_chat_messageTextOut) : Theme.getColor(ThemeColors.key_chat_messageTextIn));
+        canvas.drawText(text, bubbleRect.left + paddingH, textOffsetY, textPaint);
 
-        // 4. Draw Message Status Icon (🕒, ✓, ✓✓, ❌)
+        // 5. Draw Message Status Icon (🕒, ✓, ✓✓)
         if (isVisibleState && isOut) {
-            float stateX = bubbleRect.right - 48;
-            float stateY = bubbleRect.bottom - 24;
+            float stateX = bubbleRect.right - AndroidUtilities.dp(24);
+            float stateY = bubbleRect.bottom - AndroidUtilities.dp(12);
 
             if (currentMessageObject.isSending()) {
-                // 🕒 State: Sending (Clock circle and rotating tick)
                 statePaint.setColor(Color.parseColor("#80FFFFFF"));
-                canvas.drawCircle(stateX, stateY - 8, 10, statePaint);
-                canvas.drawLine(stateX, stateY - 8, stateX, stateY - 14, statePaint);
-                canvas.drawLine(stateX, stateY - 8, stateX + 5, stateY - 8, statePaint);
-            } else if (currentMessageObject.isSendError()) {
-                // ❌ State: Send Error (Red warning exclamation / cross)
-                statePaint.setColor(Color.parseColor("#FF5252"));
-                canvas.drawCircle(stateX, stateY - 8, 11, statePaint);
-                canvas.drawLine(stateX, stateY - 14, stateX, stateY - 6, statePaint);
-                canvas.drawCircle(stateX, stateY - 2, 1.5f, statePaint);
+                canvas.drawCircle(stateX, stateY, AndroidUtilities.dp(5), statePaint);
             } else if (currentMessageObject.isSent() || currentMessageObject.isOutOwner()) {
+                statePaint.setColor(Color.parseColor("#4ea4f6"));
                 if (currentMessageObject.isUnread()) {
-                    // ✓ State: Delivered to Server / Single checkmark
-                    statePaint.setColor(Color.parseColor("#4fae4e"));
-                    canvas.drawLine(stateX - 6, stateY - 8, stateX - 1, stateY - 3, statePaint);
-                    canvas.drawLine(stateX - 1, stateY - 3, stateX + 8, stateY - 14, statePaint);
+                    canvas.drawLine(stateX - AndroidUtilities.dp(4), stateY, stateX, stateY + AndroidUtilities.dp(4), statePaint);
+                    canvas.drawLine(stateX, stateY + AndroidUtilities.dp(4), stateX + AndroidUtilities.dp(6), stateY - AndroidUtilities.dp(4), statePaint);
                 } else {
-                    // ✓✓ State: Read by recipient / Double checkmark
-                    statePaint.setColor(Color.parseColor("#4fae4e"));
-                    // First Check
-                    canvas.drawLine(stateX - 10, stateY - 8, stateX - 5, stateY - 3, statePaint);
-                    canvas.drawLine(stateX - 5, stateY - 3, stateX + 4, stateY - 14, statePaint);
-                    // Second Check
-                    canvas.drawLine(stateX - 4, stateY - 8, stateX + 1, stateY - 3, statePaint);
-                    canvas.drawLine(stateX + 1, stateY - 3, stateX + 10, stateY - 14, statePaint);
+                    canvas.drawLine(stateX - AndroidUtilities.dp(7), stateY, stateX - AndroidUtilities.dp(3), stateY + AndroidUtilities.dp(4), statePaint);
+                    canvas.drawLine(stateX - AndroidUtilities.dp(3), stateY + AndroidUtilities.dp(4), stateX + AndroidUtilities.dp(3), stateY - AndroidUtilities.dp(4), statePaint);
+
+                    canvas.drawLine(stateX - AndroidUtilities.dp(2), stateY, stateX + AndroidUtilities.dp(2), stateY + AndroidUtilities.dp(4), statePaint);
+                    canvas.drawLine(stateX + AndroidUtilities.dp(2), stateY + AndroidUtilities.dp(4), stateX + AndroidUtilities.dp(8), stateY - AndroidUtilities.dp(4), statePaint);
                 }
             }
         }

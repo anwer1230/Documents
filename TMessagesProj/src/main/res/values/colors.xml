@@ -1,8 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#2AABEE</color>
+    <!-- Official Telegram Android Primary Color Palette -->
+    <color name="colorPrimary">#50A7EA</color>
     <color name="colorPrimaryDark">#229ED9</color>
     <color name="colorAccent">#50A7EA</color>
+    
+    <!-- Backgrounds -->
     <color name="windowBackgroundWhite">#FFFFFF</color>
     <color name="windowBackgroundGray">#F0F2F5</color>
+    <color name="dialogBackground">#FFFFFF</color>
+    
+    <!-- Text Colors -->
+    <color name="dialogTextBlack">#222222</color>
+    <color name="dialogTextGray">#8E8E93</color>
+    <color name="chat_messageTextIn">#000000</color>
+    <color name="chat_messageTextOut">#000000</color>
+    
+    <!-- Message Bubbles -->
+    <color name="chat_inBubble">#FFFFFF</color>
+    <color name="chat_outBubble">#EFFDDE</color>
 </resources>
