@@ -435,6 +435,15 @@ public class ConnectionsManager extends BaseController {
                         final long delta = Math.max(0, (System.currentTimeMillis() - finalStartRequestTime) - ping_time);
                         DefaultBandwidthMeter.getSingletonInstance(ApplicationLoader.applicationContext).onTransfer(size, delta);
                     }
+                    if (error != null && (error.code == 401 || "AUTH_KEY_UNREGISTERED".equals(error.text) || "AUTH_KEY_INVALID".equals(error.text) || "SESSION_REVOKED".equals(error.text) || "SESSION_EXPIRED".equals(error.text) || "USER_DEACTIVATED".equals(error.text))) {
+                        if (getUserConfig().isClientActivated()) {
+                            FileLog.e("ConnectionsManager: received 401 / " + error.text + " -> initiating forced logout for account " + currentAccount);
+                            cleanup(false);
+                            AndroidUtilities.runOnUIThread(() -> {
+                                AccountInstance.getInstance(currentAccount).getMessagesController().performLogout(0);
+                            });
+                        }
+                    }
                     if (BuildVars.DEBUG_PRIVATE_VERSION && !getUserConfig().isClientActivated() && error != null && error.code == 400 && Objects.equals(error.text, "CONNECTION_NOT_INITED")) {
                         if (BuildVars.LOGS_ENABLED) {
                             FileLog.d("Cleanup keys for " + currentAccount + " because of CONNECTION_NOT_INITED");
