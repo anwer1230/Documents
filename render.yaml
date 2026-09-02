@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: telegram-web
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt && pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    startCommand: pnpm --filter @workspace/api-server run start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: anwer1230/Documents
+      - key: GITHUB_BRANCH
+        value: replit-telegram-services
+      - key: LEGACY_FLASK_ENABLED
+        value: "true"
+      - key: LEGACY_FLASK_PORT
+        value: "5001"
