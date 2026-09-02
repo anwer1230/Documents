@@ -155,6 +155,7 @@ from telethon import TelegramClient, events, functions
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError, UserAlreadyParticipantError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.sessions import StringSession
 import socket
+from instant_join import InstantJoinMonitor
 
 # ══════════════════════════════════════════════════════════
 #  استيراد نظام المصادقة المستقل — auth.py
@@ -1407,7 +1408,12 @@ def load_all_sessions():
     with USERS_LOCK:
         try:
             for filename in os.listdir(SESSIONS_DIR):
-                if filename.endswith('.json'):
+                # ملفات الحالة المشتركة داخل مجلد الجلسات ليست حسابات Telegram.
+                # محاولة تحميل push_subscriptions.json كإعدادات مستخدم تسبب
+                # استدعاءً متكررًا داخل load_settings/save_settings.
+                if filename.endswith('.json') and filename not in {
+                    'push_subscriptions.json',
+                }:
                     user_id = filename.split('.')[0]
                     settings = load_settings(user_id)
                     if settings and 'phone' in settings:
@@ -1448,6 +1454,13 @@ class TelegramClientManager:
         self.monitored_keywords = []
         self.monitored_groups = []
         self._processed_msg_ids = set()
+        self.instant_join = InstantJoinMonitor(
+            manager=self,
+            load_settings=load_settings,
+            save_settings=save_settings,
+            notify=self._notify_instant_join,
+            log=self._log_instant_join,
+        )
 
     async def send_to_saved_messages(self, text):
         try:
@@ -1456,6 +1469,31 @@ class TelegramClientManager:
                 logger.info(f"Sent message to saved messages for user {self.user_id}")
         except Exception as e:
             logger.error(f"Failed to send to saved messages: {str(e)}")
+
+    def _log_instant_join(self, message):
+        try:
+            socketio.emit("log_update", {"message": message}, to=self.user_id)
+        except Exception:
+            pass
+
+    async def _notify_instant_join(self, title, body, data):
+        """إشعار الحساب نفسه وواجهة الويب وWeb Push بعد نجاح الانضمام."""
+        try:
+            await self.send_to_saved_messages(body)
+        except Exception:
+            pass
+        try:
+            socketio.emit(
+                "instant_join_notification",
+                {"title": title, "body": body, "data": data},
+                to=self.user_id,
+            )
+        except Exception:
+            pass
+        try:
+            send_push_notification(self.user_id, title, body, data=data)
+        except Exception as error:
+            logger.debug(f"Instant join push notification failed for {self.user_id}: {error}")
 
     async def get_group_protection_details(self, entity_obj):
         """
@@ -1638,6 +1676,7 @@ class TelegramClientManager:
                 await self.client.connect()
                 self.is_ready.set()
                 await self._register_event_handlers()
+                await self.instant_join.start()
                 async def _watch_stop():
                     while not self.stop_flag.is_set():
                         await asyncio.sleep(0.5)
@@ -1685,6 +1724,10 @@ class TelegramClientManager:
         except Exception as e:
             logger.error(f"Client main error: {str(e)}")
         finally:
+            try:
+                await self.instant_join.stop()
+            except Exception:
+                pass
             try:
                 if self.client and self.client.is_connected():
                     await self.client.disconnect()
@@ -1740,6 +1783,11 @@ class TelegramClientManager:
 
             is_outgoing = getattr(message, 'out', False)
             logger.info(f"📨 [{self.user_id}] {'صادرة' if is_outgoing else 'واردة'} | {group_identifier} | {text[:50]!r}")
+
+            try:
+                await self.instant_join.handle_message(event, chat=chat)
+            except Exception as instant_err:
+                logger.error(f"Instant join monitor error for {self.user_id}: {instant_err}")
 
             if not is_outgoing:
                 try:
@@ -11648,6 +11696,80 @@ def api_auto_join_status():
     with USERS_LOCK:
         state = USERS.get(user_id, {}).get('auto_join_state', {})
     return jsonify({"success": True, "state": state})
+
+
+@app.route("/api/instant_join/settings", methods=["GET", "POST"])
+def api_instant_join_settings():
+    """إعدادات مراقب الانضمام الفوري — مفعّل افتراضياً لكل حساب."""
+    user_id = session.get('user_id', 'user_1')
+    try:
+        settings = load_settings(user_id)
+        if request.method == "POST":
+            data = request.json or {}
+            if "enabled" in data:
+                settings["instant_join_enabled"] = bool(data["enabled"])
+            if "daily_limit" in data:
+                try:
+                    settings["instant_join_daily_limit"] = max(1, min(20, int(data["daily_limit"])))
+                except (TypeError, ValueError):
+                    pass
+            if "min_interval_seconds" in data:
+                try:
+                    settings["instant_join_min_interval"] = max(
+                        60, min(3600, int(data["min_interval_seconds"]))
+                    )
+                except (TypeError, ValueError):
+                    pass
+            save_settings(user_id, settings)
+
+            with USERS_LOCK:
+                client_manager = USERS.get(user_id, {}).get("client_manager")
+            if client_manager and client_manager.loop and client_manager.loop.is_running():
+                try:
+                    if settings.get("instant_join_enabled", True):
+                        client_manager.run_coroutine(client_manager.instant_join.start())
+                    else:
+                        client_manager.run_coroutine(client_manager.instant_join.stop())
+                except Exception as monitor_error:
+                    logger.debug(f"Instant join settings runtime update failed: {monitor_error}")
+
+        return jsonify({
+            "success": True,
+            "enabled": settings.get("instant_join_enabled", True),
+            "daily_limit": settings.get("instant_join_daily_limit", InstantJoinMonitor.DEFAULT_DAILY_LIMIT),
+            "min_interval_seconds": settings.get(
+                "instant_join_min_interval", InstantJoinMonitor.DEFAULT_MIN_INTERVAL
+            ),
+        })
+    except Exception as error:
+        logger.error(f"Instant join settings error: {error}")
+        return jsonify({"success": False, "message": str(error)}), 500
+
+
+@app.route("/api/instant_join/status", methods=["GET"])
+def api_instant_join_status():
+    """الحالة الحالية والطابور المحفوظ للحساب الحالي."""
+    user_id = session.get('user_id', 'user_1')
+    with USERS_LOCK:
+        client_manager = USERS.get(user_id, {}).get("client_manager")
+    if client_manager and getattr(client_manager, "instant_join", None):
+        snapshot = client_manager.instant_join.snapshot()
+    else:
+        settings = load_settings(user_id)
+        snapshot = {
+            "enabled": settings.get("instant_join_enabled", True),
+            "running": False,
+            "pending_count": 0,
+            "pending": [],
+            "joined_last_24h": 0,
+            "daily_limit": settings.get("instant_join_daily_limit", InstantJoinMonitor.DEFAULT_DAILY_LIMIT),
+            "min_interval_seconds": settings.get(
+                "instant_join_min_interval", InstantJoinMonitor.DEFAULT_MIN_INTERVAL
+            ),
+            "next_attempt_at": None,
+            "last_result": {},
+        }
+    return jsonify({"success": True, **snapshot})
 
 
 @app.route("/api/auto_join/history", methods=["GET"])

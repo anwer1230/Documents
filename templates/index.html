@@ -887,6 +887,14 @@
                                     <span class="small fw-bold">الانضمام المتقدم</span>
                                 </button>
                             </div>
+                            <div class="col-6 col-md-4">
+                                <button type="button" class="btn btn-outline-success w-100 h-100 py-3 d-flex flex-column align-items-center justify-content-center"
+                                        id="btnInstantJoin" data-bs-toggle="modal" data-bs-target="#instantJoinModal">
+                                    <i class="fas fa-satellite-dish fa-2x mb-2"></i>
+                                    <span class="small fw-bold">الانضمام الفوري الخاص</span>
+                                    <span id="instantJoinCardBadge" class="badge bg-success mt-1" style="font-size:0.58rem;">يعمل افتراضياً</span>
+                                </button>
+                            </div>
                             <!-- تم إخفاء زر صحة النظام -->
                             <div class="col-6 col-md-4" id="btnSystemHealth" style="display:none;">
                                 <div class="w-100 h-100">
@@ -2247,6 +2255,88 @@
       </div>
     </div>
 
+    <!-- 6) الانضمام الفوري الخاص — يعمل افتراضياً -->
+    <div class="modal fade" id="instantJoinModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content" style="background:#0d1117;color:#e2e8f0;border:1px solid rgba(16,185,129,0.35);">
+          <div class="modal-header text-white" style="background:linear-gradient(135deg,#047857,#065f46);">
+            <h5 class="modal-title"><i class="fas fa-satellite-dish me-2"></i>الانضمام الفوري الخاص</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-success py-2" style="font-size:0.84rem;">
+              <i class="fas fa-circle-check me-1"></i>
+              يعمل افتراضياً بشكل دائم مع رسائل المجموعات الواردة. يفحص روابط Telegram العامة،
+              يتخطى القنوات الخاصة وروابط الدعوة، ويرسل إشعاراً إلى الرسائل المحفوظة بعد نجاح الانضمام.
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center border rounded p-3 mb-3" style="border-color:rgba(16,185,129,0.35)!important;background:rgba(16,185,129,0.07);">
+              <div>
+                <strong>تشغيل المراقب</strong>
+                <div class="small text-muted">لا يتم الانضمام إلا إلى المجموعات العامة</div>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="instantJoinEnabled" checked style="width:2.7em;height:1.35em;">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold" for="instantJoinDailyLimit">الحد خلال 24 ساعة</label>
+                <input type="number" class="form-control" id="instantJoinDailyLimit" min="1" max="20" value="8">
+                <div class="form-text">افتراضي محافظ: 8 مجموعات</div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small fw-bold" for="instantJoinInterval">الفاصل الأدنى بين الانضمامات</label>
+                <div class="input-group">
+                  <input type="number" class="form-control" id="instantJoinInterval" min="60" max="3600" value="120">
+                  <span class="input-group-text">ثانية</span>
+                </div>
+                <div class="form-text">يتم احترام FloodWait وإعادة المحاولة بعد انتهائه</div>
+              </div>
+            </div>
+
+            <div class="card mb-3" style="background:#111827;border-color:#374151;">
+              <div class="card-body py-2">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <strong><i class="fas fa-chart-line me-1 text-success"></i>الحالة الحالية</strong>
+                  <button type="button" class="btn btn-sm btn-outline-light" id="instantJoinRefreshBtn">
+                    <i class="fas fa-sync-alt me-1"></i>تحديث
+                  </button>
+                </div>
+                <div class="row g-2 text-center">
+                  <div class="col-4">
+                    <div class="border rounded p-2">
+                      <div class="fs-5 fw-bold text-warning" id="instantJoinPendingCount">0</div>
+                      <small class="text-muted">روابط مؤجلة</small>
+                    </div>
+                  </div>
+                  <div class="col-4">
+                    <div class="border rounded p-2">
+                      <div class="fs-5 fw-bold text-success" id="instantJoinJoinedCount">0</div>
+                      <small class="text-muted">انضمام اليوم</small>
+                    </div>
+                  </div>
+                  <div class="col-4">
+                    <div class="border rounded p-2">
+                      <div class="fs-5 fw-bold text-info" id="instantJoinRuntimeStatus">متوقف</div>
+                      <small class="text-muted">المراقب</small>
+                    </div>
+                  </div>
+                </div>
+                <div id="instantJoinNextAttempt" class="small text-muted mt-2 text-center"></div>
+              </div>
+            </div>
+
+            <div id="instantJoinPendingList" class="small"></div>
+            <button type="button" class="btn btn-success w-100 mt-3" id="instantJoinSaveBtn">
+              <i class="fas fa-save me-1"></i>حفظ وتشغيل
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 6) صحة النظام (مودال مخفي، يستخدم عند الطلب) -->
     <div class="modal fade" id="systemHealthModal" tabindex="-1" aria-hidden="true">
       <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -3597,6 +3687,102 @@
         advResetUI(r.total || links.length);
         advOut.innerHTML = `<div class="alert alert-info mb-0">${escapeHtml(r.message)}</div>`;
       });
+
+      // ============== 5.5) الانضمام الفوري الخاص ==============
+      const instantJoinModal = document.getElementById('instantJoinModal');
+      const instantJoinEnabled = document.getElementById('instantJoinEnabled');
+      const instantJoinCardBadge = document.getElementById('instantJoinCardBadge');
+      const instantJoinPendingCount = document.getElementById('instantJoinPendingCount');
+      const instantJoinJoinedCount = document.getElementById('instantJoinJoinedCount');
+      const instantJoinRuntimeStatus = document.getElementById('instantJoinRuntimeStatus');
+      const instantJoinNextAttempt = document.getElementById('instantJoinNextAttempt');
+      const instantJoinPendingList = document.getElementById('instantJoinPendingList');
+
+      function instantJoinFormatTime(timestamp) {
+        if (!timestamp) return '';
+        try { return new Date(Number(timestamp) * 1000).toLocaleString('ar-SA'); }
+        catch (e) { return ''; }
+      }
+
+      function instantJoinRender(state) {
+        if (!state) return;
+        instantJoinEnabled.checked = state.enabled !== false;
+        document.getElementById('instantJoinDailyLimit').value = state.daily_limit || 8;
+        document.getElementById('instantJoinInterval').value = state.min_interval_seconds || 120;
+        instantJoinPendingCount.textContent = String(state.pending_count || 0);
+        instantJoinJoinedCount.textContent = `${state.joined_last_24h || 0}/${state.daily_limit || 8}`;
+        instantJoinRuntimeStatus.textContent = state.enabled !== false && state.running ? 'يعمل' : 'متوقف';
+        instantJoinRuntimeStatus.className = 'fs-5 fw-bold ' + (state.enabled !== false && state.running ? 'text-success' : 'text-secondary');
+        instantJoinCardBadge.textContent = state.enabled !== false ? 'يعمل افتراضياً' : 'متوقف مؤقتاً';
+        instantJoinCardBadge.className = 'badge mt-1 ' + (state.enabled !== false ? 'bg-success' : 'bg-secondary');
+        instantJoinNextAttempt.textContent = state.next_attempt_at
+          ? `المحاولة القادمة: ${instantJoinFormatTime(state.next_attempt_at)}`
+          : 'لا توجد روابط مؤجلة حالياً';
+
+        const pending = state.pending || [];
+        if (!pending.length) {
+          instantJoinPendingList.innerHTML = '<div class="alert alert-secondary py-2 mb-0">لا توجد روابط محفوظة لإعادة المحاولة.</div>';
+          return;
+        }
+        instantJoinPendingList.innerHTML = `
+          <div class="fw-bold mb-1">الروابط المحفوظة (${pending.length})</div>
+          <div class="list-group">
+            ${pending.slice(0, 20).map(item => `
+              <div class="list-group-item d-flex justify-content-between align-items-center gap-2" style="background:#111827;color:#d1d5db;border-color:#374151;">
+                <span class="text-truncate">${escapeHtml(item.url || '')}</span>
+                <small class="text-warning text-nowrap">${item.next_attempt_at ? instantJoinFormatTime(item.next_attempt_at) : 'قيد الفحص'}</small>
+              </div>
+            `).join('')}
+          </div>`;
+      }
+
+      async function instantJoinLoad() {
+        try {
+          const [settings, status] = await Promise.all([
+            fetch('/api/instant_join/settings', { credentials: 'same-origin' }).then(r => r.json()),
+            fetch('/api/instant_join/status', { credentials: 'same-origin' }).then(r => r.json())
+          ]);
+          if (settings.success && status.success) instantJoinRender(status);
+        } catch (error) {
+          instantJoinPendingList.innerHTML = `<div class="alert alert-danger py-2 mb-0">تعذر تحميل حالة الانضمام الفوري: ${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      async function instantJoinSave() {
+        const saveBtn = document.getElementById('instantJoinSaveBtn');
+        saveBtn.disabled = true;
+        try {
+          const response = await fetch('/api/instant_join/settings', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              enabled: instantJoinEnabled.checked,
+              daily_limit: Number(document.getElementById('instantJoinDailyLimit').value || 8),
+              min_interval_seconds: Number(document.getElementById('instantJoinInterval').value || 120)
+            })
+          });
+          const result = await response.json();
+          if (!result.success) throw new Error(result.message || 'فشل الحفظ');
+          await instantJoinLoad();
+          showAlert('تم حفظ إعدادات الانضمام الفوري', 'success');
+        } catch (error) {
+          showAlert('تعذر حفظ إعدادات الانضمام الفوري: ' + error.message, 'danger');
+        } finally {
+          saveBtn.disabled = false;
+        }
+      }
+
+      if (instantJoinModal) {
+        instantJoinModal.addEventListener('show.bs.modal', instantJoinLoad);
+        document.getElementById('instantJoinRefreshBtn').addEventListener('click', instantJoinLoad);
+        document.getElementById('instantJoinSaveBtn').addEventListener('click', instantJoinSave);
+      }
+
+      // تحديث حالة البطاقة عند نجاح أي انضمام من الحساب الحالي.
+      if (window.socket) {
+        window.socket.on('instant_join_notification', instantJoinLoad);
+      }
 
       // زر إيقاف مؤقت
       advPauseBtn.addEventListener('click', async () => {
