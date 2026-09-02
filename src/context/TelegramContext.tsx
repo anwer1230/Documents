@@ -419,7 +419,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [inAppNotifications, setInAppNotifications] = useState<InAppNotification[]>([]);
 
   const [apiConfig, setApiConfig] = useState<TelegramApiConfig>(DEFAULT_TELEGRAM_API_CONFIG);
-  const [settings, setSettings] = useState<AppSettings>(initialActiveAcc.settings || {
+  const [settings, setSettings] = useState<AppSettings>(initialActiveAcc?.settings || {
     theme: 'dark',
     accentColor: '#5288c1',
     fontSize: 16,
