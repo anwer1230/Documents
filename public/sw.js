@@ -668,6 +668,40 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  // Handle remote session revocation or forced logout
+  if (
+    rawData?.data?.type === 'SESSION_REVOKED' ||
+    rawData?.type === 'SESSION_REVOKED' ||
+    rawData?.data?.reason === 'AUTH_KEY_UNREGISTERED'
+  ) {
+    const title = rawData.title || '⚠️ تيليجرام: تم إلغاء الجلسة';
+    const body = rawData.body || 'تم إنهاء الجلسة من جهاز آخر أو انتهت صلاحيتها. تم تسجيل الخروج لحماية حسابك.';
+    event.waitUntil(
+      Promise.all([
+        self.registration.showNotification(title, {
+          body,
+          icon: 'https://telegram.org/img/t_logo.png',
+          badge: '/telegram-logo.svg',
+          tag: 'tg_session_revoked',
+          data: {
+            url: '/#/login',
+            type: 'SESSION_REVOKED',
+            reason: rawData?.data?.reason || 'SESSION_REVOKED',
+          },
+        }),
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({
+              type: 'SESSION_REVOKED',
+              reason: rawData?.data?.reason || 'SESSION_REVOKED',
+            });
+          });
+        }),
+      ])
+    );
+    return;
+  }
+
   const payload = parsePushPayload(rawData);
   event.waitUntil(showTelegramPushNotification(payload));
 });
@@ -677,6 +711,25 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const notificationData = event.notification.data || {};
   const action = event.action;
+
+  // Handle Session Revoked click
+  if (notificationData?.type === 'SESSION_REVOKED' || notificationData?.url === '/#/login') {
+    event.waitUntil(
+      (async () => {
+        const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const client of clientList) {
+          if ('focus' in client) {
+            client.postMessage({ type: 'SESSION_REVOKED', reason: notificationData?.reason || 'SESSION_REVOKED' });
+            return client.focus();
+          }
+        }
+        if (self.clients.openWindow) {
+          return self.clients.openWindow('/#/login');
+        }
+      })()
+    );
+    return;
+  }
 
   // Extract target dialog_id accurately
   const targetDialogId =

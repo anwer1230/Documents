@@ -38,6 +38,15 @@ if ('serviceWorker' in navigator) {
       console.warn('[PWA] Service Worker registration failed:', error);
     },
   });
+
+  // Background Web Push & Real-Time Sync initialization
+  import('./services/WebPushManager').then(({ webPushManager }) => {
+    webPushManager.initSSEListener();
+    webPushManager.onSessionRevoked((reason) => {
+      console.warn('[PWA] Remote forced logout received via Web Push / SSE:', reason);
+      window.dispatchEvent(new CustomEvent('telegram:session_revoked', { detail: { reason } }));
+    });
+  }).catch(() => {});
 }
 
 createRoot(document.getElementById('root')!).render(

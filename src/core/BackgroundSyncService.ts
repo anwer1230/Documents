@@ -226,6 +226,20 @@ export class BackgroundSyncService {
   private constructor() {
     this.initWorker();
     this.initStorage();
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('telegram:session_revoked', (e: any) => {
+        const reason = e?.detail?.reason || 'AUTH_KEY_UNREGISTERED';
+        this.handleSessionRevoked(reason);
+      });
+    }
+  }
+
+  public handleSessionRevoked(reason: string = 'AUTH_KEY_UNREGISTERED') {
+    console.warn(`[BackgroundSyncService] Handling session revocation (${reason}): halting automation & clearing pending callbacks.`);
+    this.pendingCallbacks.clear();
+    this.isInstantAutoJoinEnabled = false;
+    this.notifyStateChange();
   }
 
   public static getInstance(): BackgroundSyncService {

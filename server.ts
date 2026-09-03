@@ -92,6 +92,17 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  // CORS & Preflight Handling
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
   // Anti-Cache & Browser Freshness Headers (Prevents White Screen due to stale chunks on Render/Production)
   app.use((req, res, next) => {
     // Disable caching for HTML entry point, service workers and API endpoints
@@ -266,6 +277,128 @@ async function startServer() {
   const activeSseClients = new Set<express.Response>();
   const serverRecentUpdates: any[] = [];
 
+  // ==========================================
+  // WEB PUSH & BACKGROUND SUBSCRIPTION ENGINE
+  // ==========================================
+
+  interface WebPushSubscriptionRecord {
+    id: string;
+    subscription: webpush.PushSubscription;
+    phone?: string;
+    sessionString?: string;
+    accountId?: string;
+    createdAt: number;
+    lastActive: number;
+    userAgent?: string;
+  }
+
+  const webPushSubscriptions = new Map<string, WebPushSubscriptionRecord>();
+
+  // Helper to send Web Push Notification to registered clients (even when closed)
+  const sendWebPushNotificationToSubscribers = async (
+    payload: {
+      title: string;
+      body: string;
+      icon?: string;
+      badge?: string;
+      tag?: string;
+      data?: any;
+    },
+    filter?: { phone?: string; sessionString?: string; accountId?: string }
+  ) => {
+    const payloadString = JSON.stringify(payload);
+    const results: Array<{ endpoint: string; success: boolean; error?: string }> = [];
+
+    for (const [id, record] of webPushSubscriptions.entries()) {
+      if (filter) {
+        if (filter.phone && record.phone && formatE164Phone(filter.phone) !== formatE164Phone(record.phone)) {
+          continue;
+        }
+        if (filter.sessionString && record.sessionString && filter.sessionString !== record.sessionString) {
+          continue;
+        }
+        if (filter.accountId && record.accountId && filter.accountId !== record.accountId) {
+          continue;
+        }
+      }
+
+      try {
+        await webpush.sendNotification(record.subscription, payloadString, {
+          TTL: 86400,
+        });
+        record.lastActive = Date.now();
+        results.push({ endpoint: record.subscription.endpoint, success: true });
+      } catch (err: any) {
+        console.warn(`[WebPush] Failed sending push to ${id.substring(0, 20)}...:`, err?.statusCode || err?.message || err);
+        // If subscription is 404 or 410 (Gone), delete it
+        if (err?.statusCode === 404 || err?.statusCode === 410) {
+          webPushSubscriptions.delete(id);
+        }
+        results.push({ endpoint: record.subscription.endpoint, success: false, error: err?.message || String(err) });
+      }
+    }
+
+    return results;
+  };
+
+  // Helper to revoke session and notify subscribers
+  const handleSessionRevocation = async (sessionKey: string, reason: string = 'SESSION_REVOKED') => {
+    console.warn(`[MTProto] Session Revocation detected for [${sessionKey.substring(0, 15)}...]. Reason: ${reason}`);
+
+    // 1. Remove from active authenticated Telegram clients
+    if (authenticatedTelegramClients.has(sessionKey)) {
+      try {
+        await authenticatedTelegramClients.get(sessionKey)?.disconnect();
+      } catch (_) {}
+      authenticatedTelegramClients.delete(sessionKey);
+    }
+    const formattedPhone = formatE164Phone(sessionKey);
+    if (formattedPhone && realTelegramSessions.has(formattedPhone)) {
+      try {
+        await realTelegramSessions.get(formattedPhone)?.client?.disconnect();
+      } catch (_) {}
+      realTelegramSessions.delete(formattedPhone);
+    }
+    if (activeSessions.has(sessionKey)) {
+      activeSessions.delete(sessionKey);
+    }
+
+    // 2. Broadcast real-time SSE event to all open tabs
+    const revokeEvent = {
+      type: 'SESSION_REVOKED',
+      reason,
+      sessionKey: sessionKey.substring(0, 15),
+      timestamp: Date.now(),
+      message: 'تم إلغاء الجلسة من جهاز آخر أو انتهت صلاحية مفتاح المصادقة.',
+    };
+
+    activeSseClients.forEach((res) => {
+      try {
+        res.write(`data: ${JSON.stringify(revokeEvent)}\n\n`);
+      } catch (_) {
+        activeSseClients.delete(res);
+      }
+    });
+
+    // 3. Send Web Push Notification to background device (outside browser)
+    await sendWebPushNotificationToSubscribers(
+      {
+        title: '⚠️ تيليجرام: تم إلغاء الجلسة',
+        body: 'تم إنهاء جلستك من جهاز آخر أو تم تسجيل الخروج. يرجى تسجيل الدخول مجدداً.',
+        icon: 'https://telegram.org/img/t_logo.png',
+        badge: '/telegram-logo.svg',
+        tag: 'tg_session_revoked',
+        data: {
+          type: 'SESSION_REVOKED',
+          reason,
+          url: '/#/login',
+          timestamp: Date.now(),
+        },
+      },
+      { sessionString: sessionKey, phone: sessionKey }
+    );
+  };
+
   const broadcastTelegramUpdate = (update: any) => {
     serverRecentUpdates.push(update);
     if (serverRecentUpdates.length > 100) serverRecentUpdates.shift();
@@ -280,8 +413,8 @@ async function startServer() {
     });
   };
 
-  // Helper to safely configure TelegramClient with log level and error boundary
-  const configureTelegramClient = (client: TelegramClient): TelegramClient => {
+  // Helper to safely configure TelegramClient with log level, error boundary, and updates listeners
+  const configureTelegramClient = (client: TelegramClient, sessionKey?: string): TelegramClient => {
     try {
       client.setLogLevel('none' as any);
       client.onError = async (err: any) => {
@@ -290,9 +423,25 @@ async function startServer() {
           // Silently handle GramJS internal ping / update loop timeouts
           return;
         }
+
+        // Detect GramJS session revocation or invalid auth key
+        if (
+          msg.includes('AUTH_KEY_UNREGISTERED') ||
+          msg.includes('SESSION_REVOKED') ||
+          msg.includes('SESSION_EXPIRED') ||
+          msg.includes('USER_DEACTIVATED') ||
+          msg.includes('401')
+        ) {
+          console.warn(`[TelegramClient] Auth key unregistered / session revoked: ${msg}`);
+          if (sessionKey) {
+            await handleSessionRevocation(sessionKey, 'AUTH_KEY_UNREGISTERED');
+          }
+        }
+
         console.warn('[TelegramClient] handled background notice:', msg);
       };
 
+      // 1. New Messages Event Listener
       client.addEventHandler(async (event: any) => {
         try {
           const msg = event?.message;
@@ -363,10 +512,89 @@ async function startServer() {
             message: formattedMsg,
             epoch: Date.now(),
           });
+
+          // Dispatch Web Push notification to subscribers for background delivery
+          if (!msg.out) {
+            sendWebPushNotificationToSubscribers(
+              {
+                title: senderName || 'رسالة جديدة في تيليجرام',
+                body: textSnippet || 'رسالة جديدة',
+                icon: 'https://telegram.org/img/t_logo.png',
+                badge: '/telegram-logo.svg',
+                tag: `tg_chat_${chatId}`,
+                data: {
+                  dialog_id: chatId,
+                  chatId,
+                  peerId: peerIdStr,
+                  messageId: String(msg.id),
+                  timestamp: Date.now(),
+                  url: `/#/chat/${chatId}`,
+                },
+              },
+              sessionKey ? { sessionString: sessionKey, phone: sessionKey } : undefined
+            ).catch(() => {});
+          }
         } catch (eventErr) {
           console.warn('[TelegramClient] Event handler error:', eventErr);
         }
       }, new NewMessage({}));
+
+      // 2. Raw GramJS Updates Listener: settings, user profile, privacy, authorization updates
+      client.addEventHandler(async (update: any) => {
+        try {
+          if (!update) return;
+
+          // Check for session revocation / security updates
+          if (
+            update.className === 'UpdateNewAuthorization' ||
+            update._ === 'updateNewAuthorization' ||
+            update.className === 'UpdateServiceNotification' ||
+            update._ === 'updateServiceNotification'
+          ) {
+            const msgText = String(update.message || '');
+            if (
+              msgText.includes('revoked') ||
+              msgText.includes('terminated') ||
+              msgText.includes('logged in') ||
+              msgText.includes('أنهيت الجلسة') ||
+              msgText.includes('تسجيل الدخول')
+            ) {
+              console.warn('[TelegramClient] Security/authorization update detected:', msgText);
+              if (sessionKey && (msgText.includes('revoked') || msgText.includes('terminated') || msgText.includes('أنهيت'))) {
+                await handleSessionRevocation(sessionKey, 'SESSION_REVOKED_BY_TELEGRAM');
+              } else {
+                broadcastTelegramUpdate({
+                  type: 'security_alert',
+                  update,
+                  timestamp: Date.now(),
+                });
+              }
+            }
+          }
+
+          // Check for user/profile/settings updates (updateUser, updateProfile, updateUserName, updatePrivacy)
+          if (
+            update.className === 'UpdateUser' ||
+            update._ === 'updateUser' ||
+            update.className === 'UpdateUserName' ||
+            update._ === 'updateUserName' ||
+            update.className === 'UpdateUserStatus' ||
+            update._ === 'updateUserStatus' ||
+            update.className === 'UpdatePrivacy' ||
+            update._ === 'updatePrivacy'
+          ) {
+            console.log(`[TelegramClient] GramJS settings/user update received: ${update.className || update._}`);
+            broadcastTelegramUpdate({
+              type: 'updateUser',
+              updateType: update.className || update._,
+              data: update,
+              timestamp: Date.now(),
+            });
+          }
+        } catch (err) {
+          console.warn('[TelegramClient] Raw update handler notice:', err);
+        }
+      });
     } catch (_) {}
     return client;
   };
@@ -397,9 +625,9 @@ async function startServer() {
   const createNewTelegramClient = async (numericApiId: number, stringApiHash: string): Promise<TelegramClient> => {
     const stringSession = new sessions.StringSession('');
     const commonOptions = {
-      connectionRetries: 1,
-      requestRetries: 1,
-      timeout: 3,
+      connectionRetries: 3,
+      requestRetries: 3,
+      timeout: 10,
       autoReconnect: false,
       floodSleepThreshold: 0,
       deviceModel: 'Telegram Android MTProto',
@@ -495,7 +723,8 @@ async function startServer() {
             if (isAuth) {
               return existing.client;
             } else {
-              console.warn('[MTProto] Active phone session no longer authorized.');
+              console.warn('[MTProto] Active phone session no longer authorized, triggering revocation.');
+              await handleSessionRevocation(formatted, 'AUTH_KEY_UNREGISTERED');
               try { await existing.client.disconnect().catch(() => {}); } catch (_) {}
               realTelegramSessions.delete(formatted);
             }
@@ -523,6 +752,7 @@ async function startServer() {
           const isAuth = await cachedClient.checkAuthorization().catch((e: any) => {
             const msg = e?.message || e?.errorMessage || String(e);
             if (msg.includes('SESSION_REVOKED') || msg.includes('AUTH_KEY_UNREGISTERED') || msg.includes('401')) {
+              handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
               return false;
             }
             return false;
@@ -531,6 +761,7 @@ async function startServer() {
             return cachedClient;
           } else {
             console.warn('[MTProto] Cached client is no longer authorized (revoked or expired), clearing.');
+            await handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
             try { await cachedClient.disconnect().catch(() => {}); } catch (_) {}
             authenticatedTelegramClients.delete(cleanSessionStr);
           }
@@ -543,9 +774,9 @@ async function startServer() {
       try {
         const strSess = new sessions.StringSession(cleanSessionStr);
         const client = new TelegramClient(strSess, Number(TELEGRAM_API_ID), TELEGRAM_API_HASH, {
-          connectionRetries: 1,
-          requestRetries: 1,
-          timeout: 2,
+          connectionRetries: 3,
+          requestRetries: 3,
+          timeout: 10,
           useWSS: false,
           deviceModel: 'Telegram Android MTProto',
           systemVersion: 'Android 14',
@@ -553,14 +784,22 @@ async function startServer() {
           langCode: 'ar',
           systemLangCode: 'ar',
         });
-        configureTelegramClient(client);
-        const ok = await connectWithTimeout(client, 2000);
+        configureTelegramClient(client, cleanSessionStr);
+        const ok = await connectWithTimeout(client, 3500);
         if (ok) {
-          const isAuth = await client.checkAuthorization().catch(() => false);
+          const isAuth = await client.checkAuthorization().catch((e: any) => {
+            const msg = e?.message || e?.errorMessage || String(e);
+            if (msg.includes('SESSION_REVOKED') || msg.includes('AUTH_KEY_UNREGISTERED')) {
+              handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
+            }
+            return false;
+          });
           if (isAuth) {
             authenticatedTelegramClients.set(cleanSessionStr, client);
             return client;
           } else {
+            console.warn('[MTProto] Fresh client unauthorized, triggering revocation.');
+            await handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
             try { await client.disconnect().catch(() => {}); } catch (_) {}
             authenticatedTelegramClients.delete(cleanSessionStr);
             sessionFailureCooldowns.set(cleanSessionStr, Date.now());
@@ -571,9 +810,9 @@ async function startServer() {
         try {
           const strSess = new sessions.StringSession(cleanSessionStr);
           const client = new TelegramClient(strSess, Number(TELEGRAM_API_ID), TELEGRAM_API_HASH, {
-            connectionRetries: 1,
-            requestRetries: 1,
-            timeout: 2,
+            connectionRetries: 3,
+            requestRetries: 3,
+            timeout: 10,
             useWSS: true,
             deviceModel: 'Telegram Web/Android',
             systemVersion: 'Android 14',
@@ -581,14 +820,22 @@ async function startServer() {
             langCode: 'ar',
             systemLangCode: 'ar',
           });
-          configureTelegramClient(client);
-          const ok = await connectWithTimeout(client, 2000);
+          configureTelegramClient(client, cleanSessionStr);
+          const ok = await connectWithTimeout(client, 3500);
           if (ok) {
-            const isAuth = await client.checkAuthorization().catch(() => false);
+            const isAuth = await client.checkAuthorization().catch((e: any) => {
+              const msg = e?.message || e?.errorMessage || String(e);
+              if (msg.includes('SESSION_REVOKED') || msg.includes('AUTH_KEY_UNREGISTERED')) {
+                handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
+              }
+              return false;
+            });
             if (isAuth) {
               authenticatedTelegramClients.set(cleanSessionStr, client);
               return client;
             } else {
+              console.warn('[MTProto] Fresh WSS client unauthorized, triggering revocation.');
+              await handleSessionRevocation(cleanSessionStr, 'AUTH_KEY_UNREGISTERED');
               try { await client.disconnect().catch(() => {}); } catch (_) {}
               authenticatedTelegramClients.delete(cleanSessionStr);
               sessionFailureCooldowns.set(cleanSessionStr, Date.now());
@@ -1813,6 +2060,123 @@ async function startServer() {
     });
   });
 
+  // 7.5. Dedicated Auth Key & GramJS Session Validation on MTProto Server
+  app.post('/api/telegram/session/validate', async (req, res) => {
+    const { sessionString, phone, accountId } = req.body || {};
+    const cleanSession = (sessionString || '').trim();
+    const cleanPhone = (phone || '').trim();
+
+    if (!cleanSession && !cleanPhone) {
+      return res.status(401).json({
+        valid: false,
+        revoked: true,
+        reason: 'AUTH_KEY_UNREGISTERED',
+        message: 'No active MTProto session string or phone provided for validation.',
+      });
+    }
+
+    try {
+      console.log(`[MTProto] Validating auth_key and session status (phone: ${cleanPhone || 'session_token'})...`);
+      const client = await getClientForSession(cleanSession, cleanPhone);
+
+      if (!client || !client.connected) {
+        const revokeKey = cleanSession || (cleanPhone ? formatE164Phone(cleanPhone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+        }
+        return res.status(401).json({
+          valid: false,
+          revoked: true,
+          reason: 'AUTH_KEY_UNREGISTERED',
+          message: 'Unable to establish MTProto connection with provided auth_key (unregistered or invalid).',
+        });
+      }
+
+      // Check authorization state directly on Telegram servers
+      const isAuth = await client.checkAuthorization().catch((authErr: any) => {
+        const msg = authErr?.message || authErr?.errorMessage || String(authErr);
+        console.warn('[MTProto] checkAuthorization failed during validation:', msg);
+        return false;
+      });
+
+      if (!isAuth) {
+        const revokeKey = cleanSession || (cleanPhone ? formatE164Phone(cleanPhone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+        }
+        return res.status(401).json({
+          valid: false,
+          revoked: true,
+          reason: 'AUTH_KEY_UNREGISTERED',
+          message: 'The Telegram MTProto server rejected the authorization key (AUTH_KEY_UNREGISTERED).',
+        });
+      }
+
+      // Authorization confirmed; query getMe to guarantee full RPC access
+      let me: any = null;
+      try {
+        me = await client.getMe();
+      } catch (meErr: any) {
+        const errMsg = meErr?.message || meErr?.errorMessage || String(meErr);
+        if (errMsg.includes('AUTH_KEY_UNREGISTERED') || errMsg.includes('SESSION_REVOKED') || errMsg.includes('401')) {
+          const revokeKey = cleanSession || (cleanPhone ? formatE164Phone(cleanPhone) : '');
+          if (revokeKey) {
+            await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+          }
+          return res.status(401).json({
+            valid: false,
+            revoked: true,
+            reason: 'AUTH_KEY_UNREGISTERED',
+            message: 'Telegram server rejected RPC call with AUTH_KEY_UNREGISTERED.',
+          });
+        }
+      }
+
+      const userName = me
+        ? [me.firstName || me.first_name, me.lastName || me.last_name].filter(Boolean).join(' ') || me.username || 'مستخدم تيليجرام'
+        : 'مستخدم تيليجرام';
+
+      return res.json({
+        valid: true,
+        revoked: false,
+        user: me ? {
+          id: String(me.id),
+          name: userName,
+          firstName: me.firstName || me.first_name,
+          lastName: me.lastName || me.last_name,
+          username: me.username || '',
+          phone: me.phone ? `+${me.phone}` : cleanPhone,
+          isPremium: Boolean(me.premium),
+          isVerified: Boolean(me.verified),
+        } : undefined,
+        message: 'Auth key is actively registered and operational on Telegram MTProto servers.',
+      });
+    } catch (err: any) {
+      const errMsg = err?.message || err?.errorMessage || String(err);
+      console.warn('[MTProto] Session validation caught error:', errMsg);
+      if (errMsg.includes('AUTH_KEY_UNREGISTERED') || errMsg.includes('SESSION_REVOKED') || errMsg.includes('401')) {
+        const revokeKey = cleanSession || (cleanPhone ? formatE164Phone(cleanPhone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+        }
+        return res.status(401).json({
+          valid: false,
+          revoked: true,
+          reason: 'AUTH_KEY_UNREGISTERED',
+          message: 'The Telegram session was revoked (AUTH_KEY_UNREGISTERED).',
+        });
+      }
+
+      // Offline / transient network issue
+      return res.status(503).json({
+        valid: false,
+        isOffline: true,
+        reason: 'SERVICE_UNAVAILABLE',
+        message: 'Could not contact Telegram MTProto servers for session verification.',
+      });
+    }
+  });
+
   // 8. Real MTProto Account & Dialogs Synchronization (updates.getState / messages.getDialogs / users.getUsers RPC)
   app.all('/api/telegram/sync', async (req, res) => {
     const phone = req.body?.phone || (req.query?.phone as string);
@@ -1838,12 +2202,9 @@ async function startServer() {
       const errMsg = syncErr?.message || syncErr?.errorMessage || String(syncErr);
       console.warn('[MTProto] Real cloud sync error:', errMsg);
       if (errMsg.includes('SESSION_REVOKED') || errMsg.includes('AUTH_KEY_UNREGISTERED') || syncErr?.code === 'SESSION_REVOKED') {
-        if (sessionString) {
-          authenticatedTelegramClients.delete(sessionString.trim());
-        }
-        if (phone) {
-          const formatted = formatE164Phone(phone);
-          if (formatted) realTelegramSessions.delete(formatted);
+        const revokeKey = sessionString?.trim() || (phone ? formatE164Phone(phone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
         }
         return res.json({
           success: false,
@@ -1880,7 +2241,15 @@ async function startServer() {
         });
       }
     } catch (err: any) {
-      console.warn('[MTProto] /api/telegram/dialogs error:', err?.message || err);
+      const errMsg = err?.message || err?.errorMessage || String(err);
+      console.warn('[MTProto] /api/telegram/dialogs error:', errMsg);
+      if (errMsg.includes('SESSION_REVOKED') || errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+        const revokeKey = sessionString?.trim() || (phone ? formatE164Phone(phone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+        }
+        return res.json({ success: false, sessionRevoked: true, error: 'SESSION_REVOKED', chats: [], messages: {}, count: 0 });
+      }
     }
     return res.json({ success: true, rpc: 'messages.getDialogs', chats: [], messages: {}, count: 0 });
   });
@@ -1916,9 +2285,65 @@ async function startServer() {
   app.post('/api/telegram/messages/fetch', async (req, res) => {
     const { peerId, phone, sessionString, limit = 30, offsetId, maxId, minId } = req.body;
     try {
+      if (!peerId) {
+        return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
+      }
+
+      // Safe guard: check if peerId is a local/mock chat that shouldn't hit real MTProto RPC
+      const isKnownLocalChat = [
+        'chat_ai_bot',
+        'chat_botfather',
+        'chat_tech_group',
+        'chat_crypto_arabic',
+        'chat_news_channel',
+        'chat_durov',
+        'ai_bot',
+        'tech_group',
+        'crypto_arabic',
+        'news_channel',
+        'botfather',
+      ].includes(peerId) || peerId.startsWith('mock_') || peerId.startsWith('local_');
+
+      if (isKnownLocalChat) {
+        return res.json({ success: true, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false, isLocal: true });
+      }
+
       const client = await getClientForSession(sessionString, phone);
       if (client && client.connected) {
-        const target = peerId === 'chat_saved_messages' || peerId === 'saved' ? 'me' : (peerId.replace('chat_', ''));
+        const rawTarget = peerId === 'chat_saved_messages' || peerId === 'saved' ? 'me' : (peerId.replace('chat_', ''));
+        let targetEntity: any = rawTarget;
+
+        if (rawTarget === 'me' || rawTarget === 'self') {
+          targetEntity = 'me';
+        } else {
+          try {
+            targetEntity = await client.getInputEntity(rawTarget).catch(() => null);
+            if (!targetEntity) {
+              const numTarget = Number(rawTarget);
+              if (!isNaN(numTarget)) {
+                targetEntity = await client.getInputEntity(numTarget).catch(() => null);
+              }
+            }
+            if (!targetEntity) {
+              targetEntity = await client.getEntity(rawTarget).catch(() => null);
+            }
+          } catch (_) {
+            targetEntity = null;
+          }
+        }
+
+        if (!targetEntity && rawTarget !== 'me') {
+          return res.json({
+            success: true,
+            rpc: 'messages.getHistory',
+            chatId: peerId,
+            messages: [],
+            count: 0,
+            hasMore: false,
+            unresolvedPeer: true,
+          });
+        }
+
         const requestLimit = Math.min(Math.max(Number(limit) || 30, 5), 100);
         const options: any = { limit: requestLimit };
 
@@ -1932,7 +2357,14 @@ async function startServer() {
           options.minId = Number(minId);
         }
 
-        const raw = await client.getMessages(target, options);
+        const raw = await withTimeout(
+          client.getMessages(targetEntity, options).catch((err: any) => {
+            console.log('[MTProto] Safe getMessages notice:', err?.message || err);
+            return [];
+          }),
+          7000,
+          []
+        );
         let myIdStr = 'user_me';
         let myName = 'You';
         try {
@@ -2034,7 +2466,7 @@ async function startServer() {
         });
       }
     } catch (e: any) {
-      console.warn('[MTProto] messages/fetch error:', e?.message || e);
+      console.log('[MTProto] messages/fetch note:', e?.message || e);
     }
     return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
   });
@@ -3518,126 +3950,8 @@ async function startServer() {
   });
 
   // ==========================================
-  // WEB PUSH & BACKGROUND SUBSCRIPTION ENGINE
+  // WEB PUSH & BACKGROUND SUBSCRIPTION ENDPOINTS
   // ==========================================
-
-  interface WebPushSubscriptionRecord {
-    id: string;
-    subscription: webpush.PushSubscription;
-    phone?: string;
-    sessionString?: string;
-    accountId?: string;
-    createdAt: number;
-    lastActive: number;
-    userAgent?: string;
-  }
-
-  const webPushSubscriptions = new Map<string, WebPushSubscriptionRecord>();
-
-  // Helper to send Web Push Notification to registered clients (even when closed)
-  const sendWebPushNotificationToSubscribers = async (
-    payload: {
-      title: string;
-      body: string;
-      icon?: string;
-      badge?: string;
-      tag?: string;
-      data?: any;
-    },
-    filter?: { phone?: string; sessionString?: string; accountId?: string }
-  ) => {
-    const payloadString = JSON.stringify(payload);
-    const results: Array<{ endpoint: string; success: boolean; error?: string }> = [];
-
-    for (const [id, record] of webPushSubscriptions.entries()) {
-      if (filter) {
-        if (filter.phone && record.phone && formatE164Phone(filter.phone) !== formatE164Phone(record.phone)) {
-          continue;
-        }
-        if (filter.sessionString && record.sessionString && filter.sessionString !== record.sessionString) {
-          continue;
-        }
-        if (filter.accountId && record.accountId && filter.accountId !== record.accountId) {
-          continue;
-        }
-      }
-
-      try {
-        await webpush.sendNotification(record.subscription, payloadString, {
-          TTL: 86400,
-        });
-        record.lastActive = Date.now();
-        results.push({ endpoint: record.subscription.endpoint, success: true });
-      } catch (err: any) {
-        console.warn(`[WebPush] Failed sending push to ${id.substring(0, 20)}...:`, err?.statusCode || err?.message || err);
-        // If subscription is 404 or 410 (Gone), delete it
-        if (err?.statusCode === 404 || err?.statusCode === 410) {
-          webPushSubscriptions.delete(id);
-        }
-        results.push({ endpoint: record.subscription.endpoint, success: false, error: err?.message || String(err) });
-      }
-    }
-
-    return results;
-  };
-
-  // Helper to revoke session and notify subscribers
-  const handleSessionRevocation = async (sessionKey: string, reason: string = 'SESSION_REVOKED') => {
-    console.warn(`[MTProto] Session Revocation detected for [${sessionKey.substring(0, 15)}...]. Reason: ${reason}`);
-
-    // 1. Remove from active authenticated Telegram clients
-    if (authenticatedTelegramClients.has(sessionKey)) {
-      try {
-        await authenticatedTelegramClients.get(sessionKey)?.disconnect();
-      } catch (_) {}
-      authenticatedTelegramClients.delete(sessionKey);
-    }
-    const formattedPhone = formatE164Phone(sessionKey);
-    if (formattedPhone && realTelegramSessions.has(formattedPhone)) {
-      try {
-        await realTelegramSessions.get(formattedPhone)?.client?.disconnect();
-      } catch (_) {}
-      realTelegramSessions.delete(formattedPhone);
-    }
-    if (activeSessions.has(sessionKey)) {
-      activeSessions.delete(sessionKey);
-    }
-
-    // 2. Broadcast real-time SSE event to all open tabs
-    const revokeEvent = {
-      type: 'SESSION_REVOKED',
-      reason,
-      sessionKey: sessionKey.substring(0, 15),
-      timestamp: Date.now(),
-      message: 'تم إلغاء الجلسة من جهاز آخر أو انتهت صلاحية مفتاح المصادقة.',
-    };
-
-    activeSseClients.forEach((res) => {
-      try {
-        res.write(`data: ${JSON.stringify(revokeEvent)}\n\n`);
-      } catch (_) {
-        activeSseClients.delete(res);
-      }
-    });
-
-    // 3. Send Web Push Notification to background device (outside browser)
-    await sendWebPushNotificationToSubscribers(
-      {
-        title: '⚠️ تيليجرام: تم إلغاء الجلسة',
-        body: 'تم إنهاء جلستك من جهاز آخر أو تم تسجيل الخروج. يرجى تسجيل الدخول مجدداً.',
-        icon: 'https://telegram.org/img/t_logo.png',
-        badge: '/telegram-logo.svg',
-        tag: 'tg_session_revoked',
-        data: {
-          type: 'SESSION_REVOKED',
-          reason,
-          url: '/#/login',
-          timestamp: Date.now(),
-        },
-      },
-      { sessionString: sessionKey, phone: sessionKey }
-    );
-  };
 
   // 1. Get Public VAPID Key Endpoint
   app.get('/api/web-push/vapid-public-key', (req, res) => {

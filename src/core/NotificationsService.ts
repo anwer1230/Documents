@@ -129,6 +129,36 @@ export class NotificationsService {
     backgroundSyncService.subscribe(() => {
       this.notifyStateChange();
     });
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('telegram:session_revoked', (e: any) => {
+        const reason = e?.detail?.reason || 'AUTH_KEY_UNREGISTERED';
+        this.handleSessionRevoked(reason);
+      });
+    }
+  }
+
+  public handleSessionRevoked(reason: string = 'AUTH_KEY_UNREGISTERED') {
+    console.warn(`[NotificationsService] Halting background automation tasks due to session revocation (${reason})`);
+    this.isAutoJoiningActive = false;
+
+    // Immediately mark pending/joining tasks as invalid to prevent UI stall
+    this.autoJoinTasks = this.autoJoinTasks.map((t) => {
+      if (t.status === 'joining' || t.status === 'pending') {
+        return { ...t, status: 'invalid', errorReason: 'AUTH_KEY_UNREGISTERED' };
+      }
+      return t;
+    });
+
+    // Mark active sender batches as stopped
+    for (const b of this.activeSenderBatches) {
+      if (b.status === 'running') {
+        b.status = 'stopped';
+      }
+    }
+
+    backgroundSyncService.handleSessionRevoked(reason);
+    this.notifyStateChange();
   }
 
   private async loadInitialStorage() {
@@ -268,6 +298,14 @@ export class NotificationsService {
         target.status = 'sent';
         successCount++;
       } catch (err: any) {
+        const errText = err?.text || err?.message || '';
+        if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || err?.code === 401) {
+          target.status = 'failed';
+          target.error = 'AUTH_KEY_UNREGISTERED';
+          failedCount++;
+          this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
+          break;
+        }
         target.status = 'failed';
         target.error = err?.text || 'SEND_ERROR';
         failedCount++;
@@ -441,6 +479,13 @@ export class NotificationsService {
           });
           task.status = 'joined';
         } catch (e: any) {
+          const errText = e?.text || e?.message || '';
+          if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
+            task.status = 'invalid';
+            task.errorReason = 'AUTH_KEY_UNREGISTERED';
+            this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
+            break;
+          }
           task.status = 'invalid';
           task.errorReason = e?.text || 'INVITE_HASH_EXPIRED';
         }
@@ -453,6 +498,13 @@ export class NotificationsService {
           });
           task.status = 'joined';
         } catch (e: any) {
+          const errText = e?.text || e?.message || '';
+          if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
+            task.status = 'invalid';
+            task.errorReason = 'AUTH_KEY_UNREGISTERED';
+            this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
+            break;
+          }
           task.status = 'invalid';
           task.errorReason = e?.text || 'CHANNEL_PRIVATE';
         }

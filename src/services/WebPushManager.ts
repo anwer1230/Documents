@@ -38,7 +38,35 @@ class WebPushManager {
   private constructor() {
     if (typeof window !== 'undefined') {
       this.initSSEListener();
+
+      // Listen for background push messages forwarded by Service Worker
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data?.type === 'SESSION_REVOKED') {
+            console.warn('[WebPushManager] SESSION_REVOKED received from ServiceWorker:', event.data);
+            this.handleLocalSessionPurge(event.data.reason || 'SESSION_REVOKED');
+          }
+        });
+      }
+
+      // Check auto-subscribe if already authenticated and permission granted
+      setTimeout(() => this.checkAndAutoSubscribe(), 2000);
     }
+  }
+
+  /**
+   * Automatically subscribes current user to Web Push if permission is granted
+   */
+  public async checkAndAutoSubscribe(): Promise<void> {
+    try {
+      if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) return;
+      const sessionString = localStorage.getItem('tg_session_string') || '';
+      if (!sessionString) return;
+
+      if (Notification.permission === 'granted') {
+        await this.subscribeUserToPush({ sessionString });
+      }
+    } catch (_) {}
   }
 
   /**
@@ -276,22 +304,39 @@ class WebPushManager {
    */
   public handleLocalSessionPurge(reason: string = 'SESSION_REVOKED'): void {
     try {
-      // Clear localStorage session items
+      console.warn('[WebPushManager] Purging local session data. Reason:', reason);
+
+      // 1. Clear all session tokens, auth accounts and cached data
       localStorage.removeItem('tg_session_string');
       localStorage.removeItem('telegram_session');
       localStorage.removeItem('tg_auth_user');
       localStorage.removeItem('tg_user_profile');
+      localStorage.removeItem('tg_auth_session_active');
+      localStorage.removeItem('tg_multi_accounts_v3');
+      localStorage.removeItem('tg_active_account_id_v3');
+      localStorage.removeItem('tg_accounts');
+      localStorage.removeItem('tg_active_account_id');
+      localStorage.removeItem('tg_app_settings');
+      localStorage.setItem('tg_explicitly_logged_out', 'true');
       sessionStorage.clear();
 
-      // Notify registered UI callbacks
+      // 2. Notify registered UI callbacks
       this.revocationListeners.forEach((cb) => cb(reason));
 
-      // Post message to Service Worker
+      // 3. Dispatch global window event for components & contexts
+      window.dispatchEvent(new CustomEvent('telegram:session_revoked', { detail: { reason } }));
+
+      // 4. Post message to Service Worker
       if (navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({
           type: 'SESSION_REVOKED',
           reason,
         });
+      }
+
+      // 5. Safely navigate to login hash
+      if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login';
       }
     } catch (e) {
       console.warn('[WebPushManager] Purge local session error:', e);

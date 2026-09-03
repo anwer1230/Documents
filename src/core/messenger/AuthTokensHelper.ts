@@ -25,8 +25,22 @@ export class AuthTokensHelper {
 
   public clearSessionToken(accountNum: number = 0): void {
     SecureSessionStorage.removeItem(`tg_session_${accountNum}`);
-    if (accountNum === 0) {
+    SecureSessionStorage.removeItem(`tg_session_string_${accountNum}`);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(`tg_session_string_${accountNum}`);
+        localStorage.removeItem(`tg_session_${accountNum}`);
+      } catch (_) {}
+    }
+    if (accountNum === 0 || accountNum === undefined) {
       SecureSessionStorage.removeItem('tg_session_string');
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('tg_session_string');
+          localStorage.removeItem('telegram_session');
+          localStorage.removeItem('tg_auth_user');
+        } catch (_) {}
+      }
     }
   }
 

@@ -600,12 +600,77 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [isSessionValidating, setIsSessionValidating] = useState<boolean>(false);
 
+  // Complete cleanup on auth_key revocation to prevent background automation stalls
+  const performSessionPurge = (reason: string = 'AUTH_KEY_UNREGISTERED') => {
+    console.warn(`[TelegramContext] Performing full session purge due to ${reason}`);
+    setIsAuthenticated(false);
+    setActiveModal('none');
+    setActiveChatId(null);
+    setChats([]);
+    setMessages({});
+    setAccounts([]);
+    setCurrentUser({
+      id: '',
+      name: '',
+      phone: '',
+      avatar: '',
+      isOnline: false,
+    });
+
+    // 1. Purge all GramJS session tokens & cache keys from localStorage and storage sync
+    SecureSessionStorage.purgeAllSessions(reason);
+    storageSyncManager.clearAllOnLogout();
+
+    // 2. Halt all background automation services to prevent unhandled loops or stalls
+    try {
+      notificationsService.handleSessionRevoked(reason);
+      backgroundSyncService.handleSessionRevoked(reason);
+      ConnectionsManager.getInstance(0).cleanup(false);
+      UserConfig.getInstance(0).clearConfig(true);
+      MessagesStorage.getInstance(0).cleanUp(true);
+      MessagesController.getInstance(0).cleanup();
+    } catch (svcErr) {
+      console.warn('[TelegramContext] Background services cleanup note:', svcErr);
+    }
+
+    // 3. Dispatch global window event and notification center event
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('telegram:session_revoked', { detail: { reason } }));
+    }
+    CoreNotificationCenter.getGlobalInstance().postNotificationName(
+      CoreNotificationCenter.appDidLogout,
+      0,
+      reason
+    );
+  };
+
   // Proactive Session Validation Mechanism (Checks MTProto server validity before re-auth)
   const validateSessionProactively = async (force: boolean = false): Promise<boolean> => {
     try {
       setIsSessionValidating(true);
-      const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
-      const activePhone = currentUser.phone || '';
+      let activeSessionStr =
+        SecureSessionStorage.getItem<string>('tg_session_string') ||
+        (typeof window !== 'undefined' ? localStorage.getItem('tg_session_string') : '') ||
+        '';
+
+      const currentAcc = accounts.find((a) => a.id === activeAccountId) || accounts[0];
+      if (!activeSessionStr && currentAcc?.sessionString) {
+        activeSessionStr = currentAcc.sessionString;
+      }
+
+      const activePhone =
+        currentUser.phone ||
+        currentAcc?.user?.phone ||
+        SecureSessionStorage.getItem<string>('tg_phone') ||
+        '';
+
+      // If user is supposed to be logged in but has zero credentials, reset to login
+      if (!activeSessionStr && !activePhone) {
+        if (isAuthenticated) {
+          performSessionPurge('NO_CREDENTIALS');
+        }
+        return false;
+      }
 
       const checkResult = await SecureSessionStorage.validateSessionWithServer({
         sessionString: activeSessionStr,
@@ -613,26 +678,77 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         accountId: activeAccountId,
       });
 
-      if (checkResult.revoked) {
-        console.warn('[SessionValidator] MTProto server confirmed session revocation.');
+      // Crucial: If server signals AUTH_KEY_UNREGISTERED or session revocation, purge immediately
+      if (checkResult.revoked || (!checkResult.valid && checkResult.reason === 'AUTH_KEY_UNREGISTERED')) {
+        console.warn('[SessionValidator] MTProto server confirmed session revocation / AUTH_KEY_UNREGISTERED.');
+        performSessionPurge('AUTH_KEY_UNREGISTERED');
         showToast(
           settings.language === 'ar'
-            ? 'انتهت صلاحية الجلسة أو تم تسجيل الخروج من أجهزة أخرى. يرجى تسجيل الدخول مجدداً.'
-            : 'Session was revoked on server. Please log in again.',
+            ? 'انتهت صلاحية الجلسة أو تم إلغاء مفتاح المصادقة (AUTH_KEY_UNREGISTERED). تم إيقاف الخدمات التلقائية وتسجيل الخروج بأمان.'
+            : 'Session was revoked on server (AUTH_KEY_UNREGISTERED). Background services halted safely.',
           '⚠️'
         );
         return false;
       }
 
-      if (checkResult.valid && checkResult.user) {
-        setCurrentUser((prev) => ({
-          ...prev,
-          id: checkResult.user.id || prev.id,
-          name: checkResult.user.name || prev.name,
-          username: checkResult.user.username || prev.username,
-          phone: checkResult.user.phone || prev.phone,
-          isPremium: checkResult.user.isPremium !== undefined ? checkResult.user.isPremium : prev.isPremium,
-        }));
+      if (checkResult.valid) {
+        // Synchronize verified user from MTProto cloud
+        if (checkResult.user) {
+          setCurrentUser((prev) => ({
+            ...prev,
+            id: checkResult.user.id || prev.id,
+            name: checkResult.user.name || prev.name,
+            username: checkResult.user.username || prev.username,
+            phone: checkResult.user.phone || prev.phone,
+            isPremium: checkResult.user.isPremium !== undefined ? checkResult.user.isPremium : prev.isPremium,
+          }));
+
+          setAccounts((prevAccs) => {
+            if (!prevAccs || prevAccs.length === 0) {
+              return [{
+                id: activeAccountId || `acc_${Date.now()}`,
+                settings: DEFAULT_APP_SETTINGS,
+                user: {
+                  id: checkResult.user.id || 'real_user',
+                  name: checkResult.user.name || 'مستخدم تيليجرام',
+                  phone: checkResult.user.phone || activePhone,
+                  username: checkResult.user.username || '',
+                  avatar: '',
+                  isOnline: true,
+                },
+                sessionString: activeSessionStr,
+                chats: [],
+                messages: {},
+              }];
+            }
+            return prevAccs.map((acc) => {
+              if (acc.id === activeAccountId || prevAccs.length === 1) {
+                return {
+                  ...acc,
+                  sessionString: activeSessionStr || acc.sessionString,
+                  user: {
+                    ...acc.user,
+                    id: checkResult.user.id || acc.user.id,
+                    name: checkResult.user.name || acc.user.name,
+                    phone: checkResult.user.phone || acc.user.phone,
+                    username: checkResult.user.username || acc.user.username,
+                  },
+                };
+              }
+              return acc;
+            });
+          });
+        }
+
+        // Lock in synchronized storage state
+        if (activeSessionStr) {
+          SecureSessionStorage.setItem('tg_session_string', activeSessionStr);
+          SecureSessionStorage.setItem('tg_auth_session_active', 'true');
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('tg_session_string', activeSessionStr);
+          }
+        }
+        setIsAuthenticated(true);
       }
 
       return true;
@@ -646,6 +762,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Multi-tier recovery from IndexedDB backup on startup if localStorage was cleared
   useEffect(() => {
+    // Listen to global session revoked events
+    const onSessionRevokedEvent = (e: any) => {
+      const reason = e?.detail?.reason || 'AUTH_KEY_UNREGISTERED';
+      performSessionPurge(reason);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('telegram:session_revoked', onSessionRevokedEvent);
+    }
+
     // Restore drafts into active chats state
     const existingDrafts = storageSyncManager.getAllDrafts();
     if (Object.keys(existingDrafts).length > 0) {
@@ -675,7 +800,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       'tg_session_string',
       'tg_auth_session_active',
       'tg_user_config_0',
-    ]).then((restored) => {
+    ]).then(async (restored) => {
       const explicitLogout = SecureSessionStorage.getItem<string>('tg_explicitly_logged_out') === 'true';
       const restoredAccounts = restored['tg_multi_accounts_v3'];
       if (!explicitLogout && restoredAccounts && Array.isArray(restoredAccounts) && restoredAccounts.length > 0) {
@@ -686,12 +811,22 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (restored['tg_active_account_id_v3']) {
             setActiveAccountId(restored['tg_active_account_id_v3']);
           }
+          if (realRestored[0]?.user) {
+            setCurrentUser(realRestored[0].user);
+          }
         }
       }
-      validateSessionProactively();
-    }).catch(() => {
-      validateSessionProactively();
+      // On every app startup, validate auth_key against MTProto server before background automation
+      await validateSessionProactively();
+    }).catch(async () => {
+      await validateSessionProactively();
     });
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('telegram:session_revoked', onSessionRevokedEvent);
+      }
+    };
   }, []);
 
   // Encrypted Auto-heal and persistent session synchronization (guarantees session is never lost on refresh/updates)
@@ -709,6 +844,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             UserConfig.getInstance(0).setCurrentUser(activeAcc.user);
           }
         }
+        import('../services/WebPushManager').then(({ webPushManager }) => {
+          webPushManager.checkAndAutoSubscribe();
+        }).catch(() => {});
       }
     } catch (e) {
       console.warn('[TelegramContext] Encrypted session auto-heal notice:', e);
@@ -1336,6 +1474,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Auto-trigger full MTProto cloud sync and initialization routine immediately
     MessagesController.getInstance(0).onUserSessionEstablished(true);
     syncInitializationRoutine(newUser.phone, data.sessionString);
+
+    // Register Web Push subscription for background push notifications
+    import('../services/WebPushManager').then(({ webPushManager }) => {
+      webPushManager.subscribeUserToPush({
+        phone: newUser.phone,
+        sessionString: data.sessionString,
+        accountId: newId,
+      }).catch(() => {});
+    }).catch(() => {});
   };
 
   const logout = (targetAccountId?: string) => {
@@ -2914,6 +3061,26 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         oldestId = sorted[0]?.id;
       }
 
+      const isMockOrLocalChat = [
+        'chat_ai_bot',
+        'chat_botfather',
+        'chat_tech_group',
+        'chat_crypto_arabic',
+        'chat_news_channel',
+        'chat_durov',
+        'ai_bot',
+        'tech_group',
+        'crypto_arabic',
+        'news_channel',
+        'botfather',
+      ].includes(chatId) || chatId.startsWith('mock_') || chatId.startsWith('local_');
+
+      if (isMockOrLocalChat) {
+        setIsChatLoadingOlder((prev) => ({ ...prev, [chatId]: false }));
+        setChatHasMoreOlder((prev) => ({ ...prev, [chatId]: false }));
+        return { loadedCount: 0, hasMore: false };
+      }
+
       const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
       const activePhone = currentUser.phone || '';
 
@@ -3023,7 +3190,39 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const handleIncomingUpdate = (update: any) => {
       if (!update) return;
 
-      // Handle remote session revocation or auth updates (TL_updateNewAuthorization)
+      // Handle remote session revocation or auth updates (TL_updateNewAuthorization, SESSION_REVOKED, AUTH_KEY_UNREGISTERED)
+      if (
+        update.type === 'SESSION_REVOKED' ||
+        update.type === 'AUTH_KEY_UNREGISTERED'
+      ) {
+        console.warn('[TelegramContext] Remote session revocation event received from server:', update);
+        performSessionPurge('AUTH_KEY_UNREGISTERED');
+        showToast('تم إلغاء الجلسة من جهاز آخر أو انتهت صلاحية مفتاح المصادقة (AUTH_KEY_UNREGISTERED). تم إيقاف الخدمات التلقائية بأمان.', '⚠️');
+        return;
+      }
+
+      if (update.type === 'SETTINGS_SYNCED' && update.settings) {
+        console.log('[TelegramContext] Remote settings synced:', update.settings);
+        setSettings((prev) => ({ ...prev, ...update.settings }));
+        return;
+      }
+
+      if (update.type === 'updateUser' || update.type === 'updateProfile') {
+        console.log('[TelegramContext] Realtime user update received:', update);
+        const u = update.data?.user || update.data;
+        if (u) {
+          const newName = [u.firstName || u.first_name, u.lastName || u.last_name].filter(Boolean).join(' ');
+          if (newName || u.username) {
+            setCurrentUser((prev) => ({
+              ...prev,
+              name: newName || prev.name,
+              username: u.username || prev.username,
+            }));
+          }
+        }
+        return;
+      }
+
       if (
         update._ === 'TL_updateNewAuthorization' ||
         update._ === 'updateNewAuthorization' ||
@@ -3153,6 +3352,21 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Periodic sync for active chat as safety net
     const activeChatSyncInterval = setInterval(async () => {
       if (!activeChatId) return;
+      const isMockOrLocalChat = [
+        'chat_ai_bot',
+        'chat_botfather',
+        'chat_tech_group',
+        'chat_crypto_arabic',
+        'chat_news_channel',
+        'chat_durov',
+        'ai_bot',
+        'tech_group',
+        'crypto_arabic',
+        'news_channel',
+        'botfather',
+      ].includes(activeChatId) || activeChatId.startsWith('mock_') || activeChatId.startsWith('local_');
+      if (isMockOrLocalChat) return;
+
       const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
       const activePhone = currentUser.phone || '';
       if (!activeSessionStr && !activePhone) return;
@@ -3216,7 +3430,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch (_) {}
     }, 6000);
 
+    const handleForcedLogout = (e: any) => {
+      console.warn('[TelegramContext] Forced logout triggered by Web Push / SSE:', e?.detail?.reason);
+      logout();
+      showToast('تم إلغاء الجلسة من جهاز آخر أو انتهت صلاحية مفتاح المصادقة.', '⚠️');
+    };
+    window.addEventListener('telegram:session_revoked', handleForcedLogout);
+
     return () => {
+      window.removeEventListener('telegram:session_revoked', handleForcedLogout);
       if (eventSource) {
         eventSource.close();
       }

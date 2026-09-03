@@ -19,6 +19,20 @@
     <link rel="icon" type="image/png" href="https://telegram.org/img/t_logo.png" />
     <link rel="apple-touch-icon" href="https://telegram.org/img/t_logo.png" />
     <script>
+      // Suppress benign [vite] websocket connection warnings in sandboxed preview
+      (function() {
+        var origWarn = console.warn;
+        var origError = console.error;
+        console.warn = function() {
+          if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('[vite]')) return;
+          return origWarn.apply(console, arguments);
+        };
+        console.error = function() {
+          if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('[vite]')) return;
+          return origError.apply(console, arguments);
+        };
+      })();
+
       // Anti-Corrupted Cache & Emergency Reset Helper
       (function() {
         try {
