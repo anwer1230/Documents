@@ -289,15 +289,48 @@ let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@telegram-anwer.app';
 
+// Persist auto-generated keys to disk so they survive server restarts if not provided in process.env
+const VAPID_KEYS_FILE = path.join(SESSIONS_DIR, 'vapid_keys.json');
+
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  if (fs.existsSync(VAPID_KEYS_FILE)) {
+    try {
+      const savedKeys = JSON.parse(fs.readFileSync(VAPID_KEYS_FILE, 'utf8'));
+      if (savedKeys.publicKey && savedKeys.privateKey) {
+        VAPID_PUBLIC_KEY = savedKeys.publicKey;
+        VAPID_PRIVATE_KEY = savedKeys.privateKey;
+        console.log('[WebPush] Loaded existing VAPID keys from storage.');
+      }
+    } catch (_) {}
+  }
+}
+
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  try {
+    const generated = webpush.generateVAPIDKeys();
+    VAPID_PUBLIC_KEY = generated.publicKey;
+    VAPID_PRIVATE_KEY = generated.privateKey;
+    try {
+      if (!fs.existsSync(SESSIONS_DIR)) {
+        fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      }
+      fs.writeFileSync(VAPID_KEYS_FILE, JSON.stringify({ publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY }, null, 2), 'utf8');
+    } catch (_) {}
+    console.log('⚠️ [WebPush] VAPID keys not configured in process.env. Automatically generated and stored new key pair:');
+    console.log(`[WebPush] VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}`);
+    console.log(`[WebPush] VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}`);
+  } catch (genErr) {
+    console.error('[WebPush] Failed to auto-generate VAPID keys:', genErr);
+  }
+}
+
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   try {
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-    console.log('[WebPush] VAPID configuration initialized successfully from process.env.');
+    console.log('[WebPush] VAPID configuration initialized successfully.');
   } catch (err) {
     console.warn('[WebPush] setVapidDetails error:', err);
   }
-} else {
-  console.warn('[WebPush] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY missing in process.env');
 }
 
 const DC_CLUSTERS = [
@@ -561,7 +594,40 @@ async function startServer() {
     userAgent?: string;
   }
 
-  const webPushSubscriptions = new Map<string, WebPushSubscriptionRecord>();
+  const SUBSCRIPTIONS_FILE = path.join(SESSIONS_DIR, 'web_push_subscriptions.json');
+
+  const loadSubscriptionsFromDisk = (): Map<string, WebPushSubscriptionRecord> => {
+    const map = new Map<string, WebPushSubscriptionRecord>();
+    try {
+      if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
+        const raw = fs.readFileSync(SUBSCRIPTIONS_FILE, 'utf8');
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          for (const item of list) {
+            if (item && item.id && item.subscription) {
+              map.set(item.id, item);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[WebPush] Failed loading subscriptions from disk:', e);
+    }
+    return map;
+  };
+
+  const saveSubscriptionsToDisk = (map: Map<string, WebPushSubscriptionRecord>) => {
+    try {
+      if (!fs.existsSync(SESSIONS_DIR)) {
+        fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      }
+      fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(Array.from(map.values()), null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[WebPush] Failed saving subscriptions to disk:', e);
+    }
+  };
+
+  const webPushSubscriptions = loadSubscriptionsFromDisk();
 
   // Helper to send Web Push Notification to registered clients (even when closed)
   const sendWebPushNotificationToSubscribers = async (
@@ -577,6 +643,7 @@ async function startServer() {
   ) => {
     const payloadString = JSON.stringify(payload);
     const results: Array<{ endpoint: string; success: boolean; error?: string }> = [];
+    let stateChanged = false;
 
     for (const [id, record] of webPushSubscriptions.entries()) {
       if (filter) {
@@ -598,13 +665,19 @@ async function startServer() {
         record.lastActive = Date.now();
         results.push({ endpoint: record.subscription.endpoint, success: true });
       } catch (err: any) {
-        console.warn(`[WebPush] Failed sending push to ${id.substring(0, 20)}...:`, err?.statusCode || err?.message || err);
-        // If subscription is 404 or 410 (Gone), delete it
+        console.warn(`[WebPush] Push notification delivery status to ${id.substring(0, 15)}...:`, err?.statusCode || err?.message || err);
+        // If subscription is 404 or 410 (unregistered or expired by browser push service), clean it up
         if (err?.statusCode === 404 || err?.statusCode === 410) {
           webPushSubscriptions.delete(id);
+        saveSubscriptionsToDisk(webPushSubscriptions);
+          stateChanged = true;
         }
         results.push({ endpoint: record.subscription.endpoint, success: false, error: err?.message || String(err) });
       }
+    }
+
+    if (stateChanged) {
+      saveSubscriptionsToDisk(webPushSubscriptions);
     }
 
     return results;
@@ -998,26 +1071,27 @@ async function startServer() {
             epoch: Date.now(),
           });
 
-          // Dispatch Web Push notification to subscribers for background delivery
+          // Dispatch Web Push notification to all subscribers for background delivery
           if (!msg.out) {
-            sendWebPushNotificationToSubscribers(
-              {
+            sendWebPushNotificationToSubscribers({
+              title: senderName || 'رسالة جديدة في تيليجرام',
+              body: textSnippet || 'رسالة جديدة',
+              icon: 'https://telegram.org/img/t_logo.png',
+              badge: '/telegram-logo.svg',
+              tag: `tg_chat_${chatId}`,
+              data: {
                 title: senderName || 'رسالة جديدة في تيليجرام',
                 body: textSnippet || 'رسالة جديدة',
-                icon: 'https://telegram.org/img/t_logo.png',
-                badge: '/telegram-logo.svg',
-                tag: `tg_chat_${chatId}`,
-                data: {
-                  dialog_id: chatId,
-                  chatId,
-                  peerId: peerIdStr,
-                  messageId: String(msg.id),
-                  timestamp: Date.now(),
-                  url: `/#/chat/${chatId}`,
-                },
+                dialog_id: chatId,
+                chatId,
+                peerId: peerIdStr,
+                messageId: String(msg.id),
+                timestamp: Date.now(),
+                url: `/?dialog_id=${encodeURIComponent(chatId)}#/chat/${encodeURIComponent(chatId)}`,
               },
-              sessionKey ? { sessionString: sessionKey, phone: sessionKey } : undefined
-            ).catch(() => {});
+            }).catch((err) => {
+              console.warn('[WebPush] Incoming message push dispatch error:', err);
+            });
           }
 
           // ==============================================================
@@ -6313,7 +6387,7 @@ async function startServer() {
   // ==========================================
 
   // 1. Get Public VAPID Key Endpoint
-  app.get('/api/web-push/vapid-public-key', (req, res) => {
+  app.get(['/api/web-push/vapid-public-key', '/api/web-push/public-key'], (req, res) => {
     res.json({
       success: true,
       publicKey: VAPID_PUBLIC_KEY,
@@ -6342,6 +6416,7 @@ async function startServer() {
       };
 
       webPushSubscriptions.set(id, record);
+      saveSubscriptionsToDisk(webPushSubscriptions);
       console.log(`[WebPush] Subscription saved successfully (ID: ${id.substring(0, 10)}..., Total: ${webPushSubscriptions.size})`);
 
       res.json({
@@ -6361,6 +6436,7 @@ async function startServer() {
       if (endpoint) {
         const id = crypto.createHash('sha256').update(endpoint).digest('hex');
         webPushSubscriptions.delete(id);
+        saveSubscriptionsToDisk(webPushSubscriptions);
       }
       res.json({ success: true });
     } catch (e: any) {
