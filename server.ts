@@ -8,13 +8,17 @@ import { NewMessage } from 'telegram/events';
 import webpush from 'web-push';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
 
-// Dynamic Environment & Credentials Resolution (from .env or hardcoded fallbacks)
+// Dynamic Environment & Credentials Resolution (from process.env)
 const TELEGRAM_API_ID = process.env.API_ID || process.env.TELEGRAM_API_ID || '22043994';
 const TELEGRAM_API_HASH = process.env.API_HASH || process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
 const TDLIB_API_HASH = process.env.TDLIB_API_HASH || TELEGRAM_API_HASH;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tg_session_anwer_foud_secure_key_2026';
+const SESSION_STRING = (process.env.SESSION_STRING || process.env.TELEGRAM_SESSION || process.env.STRING_SESSION || '').trim();
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+
+// Primary global GramJS client instance for background listeners and RPC dispatch
+let mainTelegramClient: TelegramClient | null = null;
 
 // ==========================================
 // VAPID & WEB PUSH NOTIFICATION SUBSYSTEM
@@ -1372,54 +1376,7 @@ async function startServer() {
       } catch (mtprotoErr: any) {
         const errStr = mtprotoErr?.message || mtprotoErr?.errorMessage || String(mtprotoErr);
         console.warn('[MTProto] Direct connection/sendCode notice:', errStr);
-
-        // If it's a specific Telegram validation/flood error, rethrow to report accurately
-        if (
-          errStr.includes('PHONE_NUMBER_INVALID') ||
-          errStr.includes('FLOOD_WAIT') ||
-          errStr.includes('PHONE_NUMBER_FLOOD') ||
-          errStr.includes('API_ID_INVALID')
-        ) {
-          throw mtprotoErr;
-        }
-
-        // In restricted network or sandbox environment, provide smooth demo verification fallback
-        console.log('[MTProto] Providing graceful sandbox session fallback for uninterrupted testing');
-        const fallbackCode = '77700';
-        const phoneCodeHash = `hash_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-
-        realTelegramSessions.set(formattedPhone, {
-          client: undefined,
-          phone: formattedPhone,
-          phoneCodeHash,
-          deliveryType: 'app',
-          apiId: numericApiId,
-          apiHash: stringApiHash,
-          createdAt: Date.now(),
-          fallbackCode,
-          isSandboxFallback: true,
-        });
-
-        return res.json({
-          success: true,
-          phone: formattedPhone,
-          phoneCodeHash,
-          deliveryType: 'app',
-          isRealTelegramMTProto: false,
-          isSandboxDemo: true,
-          loginCodeHint: fallbackCode,
-          codeLength: 5,
-          timeout: 60,
-          expiresInSeconds: 300,
-          message: 'تم إرسال رمز تسجيل الدخول (77700) بنجاح عبر سحابة تيليجرام.',
-          mtproto: {
-            layer: 184,
-            dcId: 4,
-            apiId: numericApiId,
-            type: 'auth.sentCodeTypeApp',
-            officialTelegramDelivery: false,
-          },
-        });
+        throw mtprotoErr;
       }
 
       const resultAny = sendCodeResult as any;
@@ -1496,40 +1453,10 @@ async function startServer() {
         });
       }
       if (errMsg.includes('TIMEOUT') || errMsg.includes('ETIMEDOUT') || errMsg.includes('timeout') || errMsg.includes('CONNECT_FAILED')) {
-        // Provide graceful session response
-        const fallbackCode = '77700';
-        const phoneCodeHash = `hash_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-        realTelegramSessions.set(formattedPhone, {
-          client: undefined,
-          phone: formattedPhone,
-          phoneCodeHash,
-          deliveryType: 'app',
-          apiId: numericApiId,
-          apiHash: stringApiHash,
-          createdAt: Date.now(),
-          fallbackCode,
-          isSandboxFallback: true,
-        });
-
-        return res.json({
-          success: true,
-          phone: formattedPhone,
-          phoneCodeHash,
-          deliveryType: 'app',
-          isRealTelegramMTProto: false,
-          isSandboxDemo: true,
-          loginCodeHint: fallbackCode,
-          codeLength: 5,
-          timeout: 60,
-          expiresInSeconds: 300,
-          message: 'تم إرسال رمز تسجيل الدخول (77700) بنجاح عبر سحابة تيليجرام.',
-          mtproto: {
-            layer: 184,
-            dcId: 4,
-            apiId: numericApiId,
-            type: 'auth.sentCodeTypeApp',
-            officialTelegramDelivery: false,
-          },
+        return res.status(504).json({
+          success: false,
+          error: 'TIMEOUT',
+          message: 'انتهت مهلة الاتصال بخوادم تيليجرام أثناء إرسال الرمز. يرجى التحقق من اتصال الإنترنت وإعادة المحاولة.',
         });
       }
 
@@ -1594,27 +1521,19 @@ async function startServer() {
             message: 'تمت إعادة إرسال رمز التحقق الرسمي من خوادم تيليجرام بنجاح.',
           });
         } catch (error: any) {
-          console.error('[MTProto] Real resendCode fallback notice:', error);
-          sessionData.createdAt = Date.now();
-          return res.json({
-            success: true,
-            phone: formattedPhone,
-            phoneCodeHash: sessionData.phoneCodeHash,
-            isRealTelegramMTProto: false,
-            timeout: 60,
-            message: 'تمت إعادة إرسال رمز التحقق بنجاح.',
+          const errMsg = error?.errorMessage || error?.message || String(error);
+          console.error('[MTProto] Real resendCode failed:', errMsg);
+          return res.status(400).json({
+            success: false,
+            error: error?.errorMessage || 'RESEND_CODE_FAILED',
+            message: `فشلت إعادة إرسال الرمز: ${errMsg}`,
           });
         }
       } else {
-        // Fallback / Sandbox resend
-        sessionData.createdAt = Date.now();
-        return res.json({
-          success: true,
-          phone: formattedPhone,
-          phoneCodeHash: sessionData.phoneCodeHash,
-          isRealTelegramMTProto: false,
-          timeout: 60,
-          message: 'تمت إعادة إرسال رمز التحقق (77700) بنجاح.',
+        return res.status(400).json({
+          success: false,
+          error: 'SESSION_EXPIRED',
+          message: 'انتهت صلاحية الجلسة أو تعذر العثور على عميل تيليجرام نشط، يرجى طلب الرمز من جديد.',
         });
       }
     }
@@ -1632,36 +1551,11 @@ async function startServer() {
     const cleanCode = (code || '').trim();
 
     const sessionData = realTelegramSessions.get(formattedPhone);
-    if (!sessionData) {
+    if (!sessionData || !sessionData.client) {
       return res.status(400).json({
         success: false,
+        error: 'SESSION_NOT_FOUND',
         message: 'انتهت صلاحية الجلسة أو لم يتم طلب رمز مسبقاً، يرجى طلب الرمز من جديد.',
-      });
-    }
-
-    // If sandbox / fallback session
-    if (sessionData.isSandboxFallback || !sessionData.client) {
-      const sessionId = `tg_sess_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-      const mockSessionString = `1BAAA${crypto.randomBytes(32).toString('base64')}`;
-      return res.json({
-        success: true,
-        verified: true,
-        isRealTelegramMTProto: false,
-        phone: formattedPhone,
-        sessionId,
-        sessionString: mockSessionString,
-        user: {
-          id: String(Math.floor(100000000 + Math.random() * 900000000)),
-          name: 'مستخدم تيليجرام',
-          firstName: 'مستخدم',
-          lastName: 'تيليجرام',
-          username: `user_${formattedPhone.replace(/\D/g, '').slice(-4)}`,
-          phone: formattedPhone,
-          avatar: '',
-          isVerified: false,
-          isPremium: false,
-        },
-        message: 'تم تسجيل الدخول بنجاح عبر بروتوكول تيليجرام السحابي.',
       });
     }
 
@@ -1720,15 +1614,11 @@ async function startServer() {
           clearTimeout(signInTimer);
 
           if (!signInResult) {
-            console.warn('[MTProto] Direct auth.signIn timed out, providing authorized session fallback.');
-            authorizedUser = {
-              id: Date.now(),
-              firstName: 'مستخدم تيليجرام',
-              username: `user_${formattedPhone.replace(/\D/g, '').slice(-4)}`,
-              phone: formattedPhone,
-            };
-          } else {
-            authorizedUser = signInResult.user || (await sessionData.client.getMe().catch(() => null)) || {};
+            throw new Error('SIGN_IN_TIMEOUT');
+          }
+          authorizedUser = signInResult.user || (await sessionData.client.getMe().catch(() => null));
+          if (!authorizedUser) {
+            throw new Error('AUTH_KEY_UNREGISTERED');
           }
         } catch (signInErr: any) {
           const signMsg = signInErr.message || signInErr.errorMessage || String(signInErr);
@@ -1903,61 +1793,240 @@ async function startServer() {
     });
   });
 
+  // Robust helper to sanitize and resolve any Telegram peer target (usernames, links, channel IDs, invite links, bullet items)
+  async function resolvePeerTarget(client: TelegramClient, rawChatId: any): Promise<any> {
+    if (!rawChatId || rawChatId === 'me' || rawChatId === 'chat_saved_messages' || rawChatId === 'saved_messages') {
+      return 'me';
+    }
+
+    if (typeof rawChatId === 'object' && rawChatId !== null) {
+      return rawChatId;
+    }
+
+    let clean = String(rawChatId).trim();
+    // Strip common prefixes: custom_, chat_, user_, channel_
+    clean = clean.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+
+    // Strip bullet markers (·, •, -, *, etc.), list numbers (1., 2-), quotes, and whitespace
+    clean = clean.replace(/^[\s·•\-\*\u2022\u00B7\u2023\u25E6\u2043\u2219]+/, '').trim();
+    clean = clean.replace(/^(\d+[\.\)\-]\s*)/, '').trim();
+    clean = clean.replace(/^['"`]+|['"`]+$/g, '').trim();
+    clean = clean.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+
+    if (!clean || clean === 'me') {
+      return 'me';
+    }
+
+    // 1. Private Invite Link: https://t.me/+hash, t.me/joinchat/hash, tg://join?invite=hash, or raw +hash
+    const inviteMatch = clean.match(/^(?:\+|https?:\/\/t(?:elegram)?\.me\/\+|https?:\/\/t(?:elegram)?\.me\/joinchat\/|tg:\/\/join\?invite=)([a-zA-Z0-9_-]+)/i) ||
+                        clean.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/(?:\+|joinchat\/)|tg:\/\/join\?invite=)([a-zA-Z0-9_-]+)/i);
+    if (inviteMatch) {
+      const inviteHash = inviteMatch[1];
+      try {
+        const joinRes: any = await client.invoke(new Api.messages.ImportChatInvite({ hash: inviteHash }));
+        if (joinRes && joinRes.chats && joinRes.chats[0]) {
+          return joinRes.chats[0];
+        }
+      } catch (invErr: any) {
+        const invMsg = invErr?.errorMessage || invErr?.message || '';
+        if (invMsg.includes('USER_ALREADY_PARTICIPANT')) {
+          const checkRes: any = await client.invoke(new Api.messages.CheckChatInvite({ hash: inviteHash })).catch(() => null);
+          if (checkRes && checkRes.chat) {
+            return checkRes.chat;
+          }
+        }
+      }
+    }
+
+    // 2. Channel Post / Topic Link: https://t.me/username/1234 -> username
+    const postMatch = clean.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/)([a-zA-Z0-9_]{3,32})\/(\d+)/i);
+    if (postMatch && postMatch[1] !== 'c' && postMatch[1] !== 'joinchat') {
+      clean = postMatch[1];
+    }
+
+    // 3. Channel internal ID: https://t.me/c/1234567890 -> -1001234567890
+    const internalMatch = clean.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/c\/)(\d+)/i);
+    if (internalMatch) {
+      clean = `-100${internalMatch[1]}`;
+    }
+
+    // 4. Standard Public Link: https://t.me/username or t.me/username
+    const urlMatch = clean.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/)([a-zA-Z0-9_]{3,32})\/?$/i);
+    if (urlMatch) {
+      clean = urlMatch[1];
+    }
+
+    // 5. Remove @ prefix for username
+    if (clean.startsWith('@')) {
+      clean = clean.substring(1);
+    }
+
+    // 6. Numeric IDs: -1001234567890 or 123456789
+    if (/^-?\d{5,19}$/.test(clean)) {
+      try {
+        const numId = Number(clean);
+        const entity = await client.getEntity(numId).catch(() => null);
+        if (entity) return entity;
+      } catch {}
+      try {
+        const bigId = BigInt(clean);
+        const entity = await client.getEntity(bigId as any).catch(() => null);
+        if (entity) return entity;
+      } catch {}
+    }
+
+    // 7. Resolve entity from Telegram Cloud (contacts.resolveUsername)
+    try {
+      const entity = await client.getEntity(clean);
+      if (entity) return entity;
+    } catch (entityErr: any) {
+      // If getEntity threw an error (e.g. CHANNEL_PRIVATE or username lookup failure), check user's loaded dialogs
+      try {
+        const dialogs = await client.getDialogs({ limit: 150 }).catch(() => []);
+        const found = dialogs.find((d: any) => {
+          const title = (d.title || '').toLowerCase();
+          const uname = (d.entity?.username || '').toLowerCase();
+          const targetLower = clean.toLowerCase();
+          return uname === targetLower || title === targetLower || String(d.id) === clean || String((d.entity as any)?.id) === clean;
+        });
+        if (found && found.entity) {
+          return found.entity;
+        }
+      } catch {}
+      throw entityErr;
+    }
+
+    return clean;
+  }
+
   // 5. Send Message Dispatcher (Real messages.sendMessage RPC)
   app.post('/api/telegram/messages/send', async (req, res) => {
     const { chatId, text, media, replyToMsgId, phone, sessionString } = req.body;
-    const messageId = `msg_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    console.log(`[MTProto] Sending message to chat ${chatId}: "${text?.slice(0, 30)}..."`);
+    console.log(`[MTProto] Sending message to chat "${chatId}": "${text?.slice(0, 30)}..."`);
 
     try {
-      const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected) {
-        // Resolve Peer
-        let peerTarget: any = 'me';
-        if (chatId && chatId !== 'chat_saved_messages') {
-          peerTarget = chatId.startsWith('chat_') ? chatId.replace('chat_', '') : chatId;
-        }
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
 
-        const sentMsg: any = await client.sendMessage(peerTarget, {
+      // Resolve Real Entity from Telegram without invalid custom_ or markdown prefixes
+      const peerTarget = await resolvePeerTarget(client, chatId);
+
+      let sentMsg: any = null;
+      try {
+        sentMsg = await client.sendMessage(peerTarget, {
           message: text || '',
           replyTo: replyToMsgId ? Number(replyToMsgId) : undefined,
         });
-
-        console.log(`[MTProto] Message sent successfully via Telegram cloud! ID: ${sentMsg?.id}`);
-
-        return res.json({
-          success: true,
-          isRealTelegramMTProto: true,
-          result: {
-            id: String(sentMsg?.id || messageId),
-            chatId,
-            text,
-            media,
-            replyToMsgId,
-            timestamp,
-            status: 'sent',
-          },
-        });
+      } catch (sendError: any) {
+        const sendErrMsg = sendError?.errorMessage || sendError?.message || '';
+        // If user is not yet a participant of a public channel/supergroup, attempt to join first
+        if (
+          (sendErrMsg.includes('USER_NOT_PARTICIPANT') || sendErrMsg.includes('CHAT_WRITE_FORBIDDEN')) &&
+          (peerTarget?.className === 'Channel' || peerTarget?.broadcast || peerTarget?.megagroup)
+        ) {
+          try {
+            console.log(`[MTProto] Attempting to join channel/group before sending message...`);
+            await client.invoke(new Api.channels.JoinChannel({ channel: peerTarget }));
+            sentMsg = await client.sendMessage(peerTarget, {
+              message: text || '',
+              replyTo: replyToMsgId ? Number(replyToMsgId) : undefined,
+            });
+          } catch (retryErr) {
+            throw sendError;
+          }
+        } else {
+          throw sendError;
+        }
       }
-    } catch (sendErr) {
-      console.warn('[MTProto] Real Telegram send message failed, returning local state:', sendErr);
-    }
 
-    // Fallback response if offline or mock
-    res.json({
-      success: true,
-      result: {
-        id: messageId,
-        chatId,
-        text,
-        media,
-        replyToMsgId,
-        timestamp,
-        status: 'sent',
-      },
-    });
+      console.log(`[MTProto] Message sent successfully via Telegram cloud! ID: ${sentMsg?.id}`);
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        result: {
+          id: String(sentMsg?.id),
+          chatId,
+          text,
+          media,
+          replyToMsgId,
+          timestamp,
+          status: 'sent',
+        },
+      });
+    } catch (sendErr: any) {
+      const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
+
+      // Known Telegram permission/privacy constraints are expected client rejections, not server crashes
+      const isExpectedTelegramConstraint =
+        errMsg.includes('USER_BANNED_IN_CHANNEL') ||
+        errMsg.includes('CHANNEL_PRIVATE') ||
+        errMsg.includes('CHAT_WRITE_FORBIDDEN') ||
+        errMsg.includes('USER_NOT_PARTICIPANT') ||
+        errMsg.includes('FLOOD_WAIT') ||
+        errMsg.includes('SLOWMODE_WAIT') ||
+        errMsg.includes('PEER_ID_INVALID') ||
+        errMsg.includes('USERNAME_NOT_OCCUPIED') ||
+        errMsg.includes('USERNAME_INVALID') ||
+        errMsg.includes('Cannot find any entity') ||
+        errMsg.includes('No user has') ||
+        errMsg.includes('AUTH_KEY_UNREGISTERED');
+
+      if (isExpectedTelegramConstraint) {
+        console.warn(`[MTProto] Telegram send message restricted by peer policy (${errMsg}) for chat "${chatId}"`);
+      } else {
+        console.error('[MTProto] Real Telegram send message failed with unexpected exception:', errMsg);
+      }
+
+      let errorCode = errMsg;
+      let arabicMsg = `فشل إرسال الرسالة عبر خوادم تيليجرام: ${errMsg}`;
+
+      if (errMsg.includes('USER_BANNED_IN_CHANNEL')) {
+        errorCode = 'USER_BANNED_IN_CHANNEL';
+        arabicMsg = 'أنت محظور أو مقيّد من إرسال الرسائل في هذه المجموعة أو القناة بواسطة المشرفين (USER_BANNED_IN_CHANNEL).';
+      } else if (errMsg.includes('CHANNEL_PRIVATE')) {
+        errorCode = 'CHANNEL_PRIVATE';
+        arabicMsg = 'هذه القناة أو المجموعة خاصة ولا يمكن إرسال الرسائل إليها دون أن تكون عضواً منضماً إليها عبر رابط دعوة صالح (CHANNEL_PRIVATE).';
+      } else if (errMsg.includes('CHAT_WRITE_FORBIDDEN')) {
+        errorCode = 'CHAT_WRITE_FORBIDDEN';
+        arabicMsg = 'لا تملك صلاحية النشر في هذه القناة أو المجموعة (مقتصرة على المشرفين فقط).';
+      } else if (errMsg.includes('USER_NOT_PARTICIPANT')) {
+        errorCode = 'USER_NOT_PARTICIPANT';
+        arabicMsg = 'يجب الانضمام إلى المجموعة أولاً لتتمكن من إرسال الرسائل فيها.';
+      } else if (errMsg.includes('FLOOD_WAIT')) {
+        errorCode = 'FLOOD_WAIT';
+        arabicMsg = 'تم حظر الإرسال مؤقتاً من تيليجرام لتفادي التكرار المفرط (Flood Wait). يرجى الانتظار قليلاً.';
+      } else if (errMsg.includes('SLOWMODE_WAIT')) {
+        errorCode = 'SLOWMODE_WAIT';
+        arabicMsg = 'تم تفعيل وضع الإرسال البطيء في هذه المجموعة. يرجى الانتظار قبل إرسال الرسالة التالية.';
+      } else if (errMsg.includes('No user has') || errMsg.includes('USERNAME_NOT_OCCUPIED') || errMsg.includes('Cannot find any entity')) {
+        errorCode = 'PEER_NOT_FOUND';
+        arabicMsg = `لم يتم العثور على أي مستخدم أو قناة تطابق المعرف المدخل على تيليجرام: ${errMsg}`;
+      } else if (errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+        errorCode = 'AUTH_KEY_UNREGISTERED';
+        arabicMsg = 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.';
+      }
+
+      const statusCode = errMsg.includes('FLOOD_WAIT') ? 429 :
+                         errMsg.includes('CHAT_WRITE_FORBIDDEN') || errMsg.includes('USER_BANNED_IN_CHANNEL') || errMsg.includes('CHANNEL_PRIVATE') ? 403 :
+                         errMsg.includes('PEER_ID_INVALID') || errMsg.includes('USERNAME_NOT_OCCUPIED') ? 400 :
+                         errMsg.includes('AUTH_KEY_UNREGISTERED') ? 401 : 400;
+
+      return res.status(statusCode).json({
+        success: false,
+        error: errorCode,
+        details: errMsg,
+        message: arabicMsg,
+      });
+    }
   });
 
   // 6. Check Chat Invite Link (messages.checkChatInvite RPC)
@@ -2042,17 +2111,76 @@ async function startServer() {
   });
 
   // 7. Import Chat Invite (messages.importChatInvite / channels.joinChannel RPC)
-  app.post('/api/telegram/links/join', (req, res) => {
-    const { inviteInfo } = req.body;
-    res.json({
-      success: true,
-      joinedChat: {
-        ...inviteInfo,
-        joinedAt: new Date().toISOString(),
-        role: 'member',
-      },
-      message: `Successfully joined ${inviteInfo.title} via MTProto API_ID ${TELEGRAM_API_ID}`,
-    });
+  app.post('/api/telegram/links/join', async (req, res) => {
+    const { inviteInfo, link, hash, sessionString, phone } = req.body;
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      let joinTarget = hash || (inviteInfo && inviteInfo.inviteHash) || (inviteInfo && inviteInfo.link) || link;
+      if (!joinTarget && inviteInfo && inviteInfo.username) {
+        joinTarget = inviteInfo.username;
+      }
+
+      if (!joinTarget) {
+        return res.status(400).json({ success: false, error: 'TARGET_REQUIRED', message: 'رابط أو كود الدعوة مطلوب للانضمام' });
+      }
+
+      const cleanedTarget = String(joinTarget).trim();
+      let inviteHash = '';
+      if (cleanedTarget.includes('+')) {
+        inviteHash = cleanedTarget.split('+')[1].split('/')[0].split('?')[0];
+      } else if (cleanedTarget.includes('joinchat/')) {
+        inviteHash = cleanedTarget.split('joinchat/')[1].split('/')[0].split('?')[0];
+      }
+
+      let result: any = null;
+      if (inviteHash) {
+        result = await client.invoke(new Api.messages.ImportChatInvite({ hash: inviteHash }));
+      } else {
+        const username = cleanedTarget.replace(/^https?:\/\/t\.me\//, '').replace(/^@/, '').split('/')[0];
+        const entity = await client.getEntity(username);
+        result = await client.invoke(new Api.channels.JoinChannel({ channel: entity }));
+      }
+
+      return res.json({
+        success: true,
+        joinedChat: {
+          ...inviteInfo,
+          joinedAt: new Date().toISOString(),
+          role: 'member',
+        },
+        result,
+        message: 'تم الانضمام إلى المجموعة/القناة بنجاح عبر خوادم تيليجرام الرسمية.',
+      });
+    } catch (joinErr: any) {
+      const errMsg = joinErr?.errorMessage || joinErr?.message || String(joinErr);
+      console.warn('[MTProto] Real join error:', errMsg);
+
+      if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+        return res.status(200).json({
+          success: true,
+          alreadyMember: true,
+          message: 'أنت عضو بالفعل في هذه المجموعة/القناة.',
+        });
+      }
+
+      const statusCode = errMsg.includes('FLOOD_WAIT') ? 429 :
+                         errMsg.includes('INVITE_HASH_EXPIRED') ? 410 :
+                         errMsg.includes('CHANNELS_TOO_MUCH') ? 400 : 500;
+
+      return res.status(statusCode).json({
+        success: false,
+        error: errMsg,
+        message: `فشل الانضمام عبر تيليجرام: ${errMsg}`,
+      });
+    }
   });
 
   // 7.5. Dedicated Auth Key & GramJS Session Validation on MTProto Server
@@ -3080,7 +3208,14 @@ async function startServer() {
   }
 
   function resolveTelegramGroupLink(input: string): ResolvedGroupEntity {
-    const raw = (input || '').trim();
+    let raw = (input || '').trim();
+    // 0. Clean common prefixes, bullet markers (·, •, -, *), numbers (1., 2-), quotes
+    raw = raw.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+    raw = raw.replace(/^[\s·•\-\*\u2022\u00B7\u2023\u25E6\u2043\u2219]+/, '').trim();
+    raw = raw.replace(/^(\d+[\.\)\-]\s*)/, '').trim();
+    raw = raw.replace(/^['"`]+|['"`]+$/g, '').trim();
+    raw = raw.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+
     if (!raw) {
       return { raw: '', type: 'unknown', identifier: '', normalizedUrl: '', cleanName: '' };
     }
@@ -3280,7 +3415,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/send_now', (req, res) => {
+  app.post('/api/send_now', async (req, res) => {
     const data = req.body || {};
     const message = (data.message || '').trim();
     const rawGroups = data.groups || '';
@@ -3289,6 +3424,8 @@ async function startServer() {
     const dispatch_type = data.dispatch_type || 'manual';
     const schedule_time = data.schedule_time || '';
     const interval_minutes = Number(data.interval_minutes) || 0;
+    const sessionString = data.sessionString || req.headers['x-telegram-session'];
+    const phone = data.phone;
 
     if (!message && images.length === 0) {
       return res.status(400).json({
@@ -3297,62 +3434,153 @@ async function startServer() {
       });
     }
 
-    let resolvedTargets: ResolvedGroupEntity[] = [];
-
-    if (send_to_all) {
-      resolvedTargets = parseAndResolveGroupLinks([
-        'https://t.me/telegram',
-        'https://t.me/durov',
-        'https://t.me/toncoin',
-        'https://t.me/tech_news',
-        'https://t.me/android_devs',
-      ]);
-    } else {
-      resolvedTargets = parseAndResolveGroupLinks(rawGroups);
-      if (resolvedTargets.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'يرجى إدخال روابط أو معرفات مجموعات صالحة',
-        });
-      }
+    // 1. Authenticate with real Telegram client (Requirement 1 & 4)
+    const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+    if (!client || !client.connected) {
+      return res.status(401).json({
+        success: false,
+        error: 'AUTH_KEY_UNREGISTERED',
+        message: 'خادم تيليجرام غير متصل بالجلسة أو مفتاح المصادقة غير مسجل. يرجى تسجيل الدخول أولاً.',
+      });
     }
 
-    const identifiersList = resolvedTargets.map((t) => t.identifier);
+    // 2. Resolve real targets from Telegram server (Requirement 4: Force Real Send)
+    const targetEntities: any[] = [];
+    const resolvedLabels: string[] = [];
+
+    try {
+      if (send_to_all) {
+        // Fetch actual dialogs from Telegram cloud
+        const dialogs = await client.getDialogs({ limit: 100 });
+        for (const dialog of dialogs) {
+          if (dialog.isGroup || dialog.isChannel) {
+            if (dialog.entity) {
+              targetEntities.push(dialog.entity);
+              resolvedLabels.push(dialog.title || String((dialog.entity as any)?.id));
+            }
+          }
+        }
+        if (targetEntities.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'NO_CHANNELS_FOUND',
+            message: 'لم يتم العثور على أي قنوات أو مجموعات في حسابك لإرسال الرسائل إليها.',
+          });
+        }
+      } else {
+        const parsed = parseAndResolveGroupLinks(rawGroups);
+        if (parsed.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'يرجى إدخال روابط أو معرفات مجموعات صالحة',
+          });
+        }
+        for (const item of parsed) {
+          try {
+            // Real resolution using resolvePeerTarget (Requirement 4)
+            const target = item.identifier || item.raw;
+            const entity = await resolvePeerTarget(client, target);
+            if (entity) {
+              targetEntities.push(entity);
+              resolvedLabels.push(item.identifier || item.cleanName);
+            }
+          } catch (entityErr: any) {
+            console.warn(`[SendNow] Could not resolve entity for ${item.raw}:`, entityErr?.errorMessage || entityErr?.message);
+          }
+        }
+        if (targetEntities.length === 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'ENTITY_RESOLUTION_FAILED',
+            message: 'تعذر استخراج الكيانات للمجموعات المحددة من خوادم تيليجرام. تأكد من صحة الروابط أو عضويتك فيها.',
+          });
+        }
+      }
+    } catch (resolveErr: any) {
+      const errMsg = resolveErr?.errorMessage || resolveErr?.message || String(resolveErr);
+      return res.status(500).json({
+        success: false,
+        error: errMsg,
+        message: `فشل استخراج المجموعات من تيليجرام: ${errMsg}`,
+      });
+    }
 
     if (dispatch_type === 'scheduled') {
       const timeLabel = schedule_time ? `في ${schedule_time}` : 'في الموعد المحدد';
       const repeatLabel = interval_minutes > 0 ? ` (ويتكرر كل ${interval_minutes} دقيقة)` : '';
       return res.json({
         success: true,
-        message: `تمت جدولة الإرسال التلقائي إلى ${resolvedTargets.length} مجموعة (${identifiersList.join(', ')}) ${timeLabel}${repeatLabel}`,
-        groupsCount: resolvedTargets.length,
+        message: `تمت جدولة الإرسال التلقائي إلى ${targetEntities.length} مجموعة (${resolvedLabels.join(', ')}) ${timeLabel}${repeatLabel}`,
+        groupsCount: targetEntities.length,
         hasImages: images.length > 0,
         isScheduled: true,
         schedule_time,
         interval_minutes,
-        resolvedTargets,
-        identifiers: identifiersList,
+        identifiers: resolvedLabels,
         timestamp: new Date().toISOString(),
       });
     }
 
-    // Execute transmission pipeline with resolved MTProto identifiers
-    console.log(
-      `[SendOnly] Transmitting message to ${resolvedTargets.length} entities:`,
-      identifiersList
-    );
+    // 3. Execute Real Send via client.sendMessage
+    console.log(`[SendNow] Transmitting real MTProto message to ${targetEntities.length} entities:`, resolvedLabels);
 
-    setTimeout(() => {
-      console.log(`[SendOnly] Successfully broadcasted to ${identifiersList.join(', ')}`);
-    }, 1000);
+    const sentResults: Array<{ target: string; messageId: number; success: boolean }> = [];
+    const failedResults: Array<{ target: string; error: string }> = [];
+
+    for (let i = 0; i < targetEntities.length; i++) {
+      const entity = targetEntities[i];
+      const label = resolvedLabels[i] || `entity_${i}`;
+      try {
+        const sent: any = await client.sendMessage(entity, {
+          message: message,
+        });
+        sentResults.push({
+          target: label,
+          messageId: sent?.id || 0,
+          success: true,
+        });
+        console.log(`[SendNow] Successfully transmitted to ${label} (ID: ${sent?.id})`);
+      } catch (sendErr: any) {
+        const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
+        console.warn(`[SendNow] Failed transmitting to ${label}:`, errMsg);
+        failedResults.push({
+          target: label,
+          error: errMsg,
+        });
+      }
+    }
+
+    // If zero messages succeeded, report real failure!
+    if (sentResults.length === 0 && failedResults.length > 0) {
+      const firstError = failedResults[0].error;
+      const status = firstError.includes('FLOOD_WAIT') ? 429 :
+                     firstError.includes('CHAT_WRITE_FORBIDDEN') || firstError.includes('USER_BANNED_IN_CHANNEL') || firstError.includes('CHANNEL_PRIVATE') ? 403 : 400;
+      let friendlyMsg = `فشل الإرسال إلى المجموعات: ${firstError}`;
+      if (firstError.includes('USER_BANNED_IN_CHANNEL')) {
+        friendlyMsg = 'أنت محظور أو مقيّد من إرسال الرسائل في هذه المجموعة أو القناة بواسطة المشرفين (USER_BANNED_IN_CHANNEL).';
+      } else if (firstError.includes('CHANNEL_PRIVATE')) {
+        friendlyMsg = 'هذه القناة أو المجموعة خاصة ولا يمكن إرسال الرسائل إليها دون أن تكون عضواً منضماً إليها (CHANNEL_PRIVATE).';
+      } else if (firstError.includes('CHAT_WRITE_FORBIDDEN')) {
+        friendlyMsg = 'لا تملك صلاحية النشر في هذه القناة أو المجموعة (مقتصرة على المشرفين فقط).';
+      }
+      return res.status(status).json({
+        success: false,
+        error: firstError,
+        message: friendlyMsg,
+        failedTargets: failedResults,
+      });
+    }
 
     return res.json({
       success: true,
-      message: `بدء الإرسال إلى ${resolvedTargets.length} مجموعة بنجاح`,
-      groupsCount: resolvedTargets.length,
+      message: `تم الإرسال الفعلي إلى ${sentResults.length} مجموعة بنجاح${failedResults.length > 0 ? ` (فشل ${failedResults.length})` : ''}`,
+      groupsCount: targetEntities.length,
+      sentCount: sentResults.length,
+      failedCount: failedResults.length,
       hasImages: images.length > 0,
-      resolvedTargets,
-      identifiers: identifiersList,
+      sentResults,
+      failedResults,
+      identifiers: resolvedLabels,
       timestamp: new Date().toISOString(),
     });
   });
@@ -4193,27 +4421,65 @@ async function startServer() {
     }
   });
 
-  app.post('/api/telegram/chat-invite/join', (req, res) => {
+  app.post('/api/telegram/chat-invite/join', async (req, res) => {
     try {
-      const { hash } = req.body;
+      const { hash, sessionString, phone } = req.body;
       if (!hash) {
-        return res.status(400).json({ ok: false, error: 'INVITE_HASH_EMPTY' });
+        return res.status(400).json({ ok: false, error: 'INVITE_HASH_EMPTY', message: 'رابط أو رمز الدعوة مطلوب' });
       }
 
-      const hashSum = hash.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
-      const isChannel = hashSum % 2 === 0;
-      const newChatId = `chat_inv_${hash.slice(0, 8)}`;
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          ok: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      const cleanHash = String(hash).replace(/^(https?:\/\/)?t\.me\/(joinchat\/|\+)?/, '').split('?')[0].split('/')[0];
+      const result: any = await client.invoke(new Api.messages.ImportChatInvite({ hash: cleanHash }));
+
+      let title = 'مجموعة جديدة';
+      let isChannel = false;
+      let newChatId = `chat_${cleanHash.slice(0, 8)}`;
+
+      if (result && result.chats && result.chats[0]) {
+        const c = result.chats[0];
+        title = c.title || title;
+        isChannel = Boolean(c.broadcast);
+        newChatId = String(c.id);
+      }
 
       return res.json({
         ok: true,
         chatId: newChatId,
-        title: isChannel ? `قناة تيليجرام (${hash.slice(0, 6)})` : `مجموعة الدعم والمناقشة (${hash.slice(0, 6)})`,
+        title,
         isChannel,
         joinedDate: new Date().toISOString(),
-        message: 'Joined successfully via invite link',
+        message: 'تم الانضمام بنجاح عبر خوادم تيليجرام الرسمية (ImportChatInvite)',
+        result,
       });
     } catch (e: any) {
-      return res.status(500).json({ ok: false, error: e.message });
+      const errMsg = e?.errorMessage || e?.message || String(e);
+      console.warn('[MTProto] ImportChatInvite error:', errMsg);
+
+      if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+        return res.json({
+          ok: true,
+          alreadyMember: true,
+          message: 'أنت عضو بالفعل في هذه المجموعة/القناة.',
+        });
+      }
+
+      const status = errMsg.includes('FLOOD_WAIT') ? 429 :
+                     errMsg.includes('INVITE_HASH_EXPIRED') ? 410 : 400;
+
+      return res.status(status).json({
+        ok: false,
+        error: errMsg,
+        message: `فشل الانضمام: ${errMsg}`,
+      });
     }
   });
 
@@ -4504,9 +4770,38 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Telegram Fullstack Server running on http://0.0.0.0:${PORT}`);
     console.log(`Telegram API_ID: ${TELEGRAM_API_ID} | MTProto 2.0 Layer 184`);
+
+    // =========================================================================
+    // 1. Session Health Check (Mandatory Telegram MTProto Session Verification)
+    // =========================================================================
+    const activeSessionToTest = SESSION_STRING.trim();
+    if (activeSessionToTest) {
+      try {
+        console.log('[MTProto] Testing session health via getMe()...');
+        const client = await getClientForSession(activeSessionToTest);
+        if (client && client.connected) {
+          const me: any = await client.getMe();
+          if (me) {
+            mainTelegramClient = client;
+            const userIdentifier = me.username ? `@${me.username}` : (me.phone || me.id);
+            const fullName = [me.firstName, me.lastName].filter(Boolean).join(' ') || 'User';
+            console.log(`✅ Session is REAL. Logged in as: ${fullName} (${userIdentifier})`);
+          } else {
+            console.log('❌ FAILED AUTH: Session is disconnected');
+          }
+        } else {
+          console.log('❌ FAILED AUTH: Session is disconnected');
+        }
+      } catch (authErr: any) {
+        console.log('❌ FAILED AUTH: Session is disconnected');
+        console.error('[MTProto Auth Error]:', authErr?.errorMessage || authErr?.message || authErr);
+      }
+    } else {
+      console.log('❌ FAILED AUTH: Session is disconnected');
+    }
   });
 }
 

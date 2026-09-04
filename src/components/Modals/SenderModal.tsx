@@ -156,12 +156,35 @@ export const SenderModal: React.FC = () => {
 
     // Map targets to chat IDs or titles
     const targetChatIds: string[] = groupList.map((g) => {
+      // Clean leading bullet points (·, •, -, *), list numbers (1., 2-), quotes, and prefixes
+      let cleaned = g.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+      cleaned = cleaned.replace(/^[\s·•\-\*\u2022\u00B7\u2023\u25E6\u2043\u2219]+/, '').trim();
+      cleaned = cleaned.replace(/^(\d+[\.\)\-]\s*)/, '').trim();
+      cleaned = cleaned.replace(/^['"`]+|['"`]+$/g, '').trim();
+      cleaned = cleaned.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
+
       const matched = chats.find(
         (c) =>
+          c.title.toLowerCase() === cleaned.toLowerCase() ||
           c.title.toLowerCase() === g.toLowerCase() ||
-          (c.username && `@${c.username.toLowerCase()}` === g.toLowerCase())
+          (c.username && `@${c.username.toLowerCase()}` === cleaned.toLowerCase()) ||
+          (c.username && c.username.toLowerCase() === cleaned.toLowerCase()) ||
+          String(c.id) === cleaned
       );
-      return matched ? String(matched.id) : `custom_${g}`;
+      if (matched) return String(matched.id);
+
+      // If it's a URL like https://t.me/username, extract the username or invite hash
+      const inviteMatch = cleaned.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/(?:\+|joinchat\/)|tg:\/\/join\?invite=)([a-zA-Z0-9_-]+)/i);
+      if (inviteMatch) {
+        return `+${inviteMatch[1]}`;
+      }
+
+      const urlMatch = cleaned.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/)([a-zA-Z0-9_]{3,32})\/?$/i);
+      if (urlMatch) {
+        return urlMatch[1];
+      }
+
+      return cleaned;
     });
 
     const batch = await notificationsService.executeSendBatch({
@@ -188,11 +211,40 @@ export const SenderModal: React.FC = () => {
       });
       showToast('⏳ تم تفعيل الجدولة الدورية بنجاح!', '✨');
     } else {
-      setSendStatusMsg({
-        text: `📢 تم إرسال الرسالة إلى ${batch.totalSuccess} وجهة بنجاح! تم توثيق التقرير في الرسائل المحفوظة.`,
-        success: true,
-      });
-      showToast(`📢 تم إرسال الرسالة إلى ${batch.totalSuccess} وجهة بنجاح!`, '✨');
+      if (batch.totalSuccess > 0) {
+        const failedTarget = batch.targetChats.find((t) => t.status === 'failed');
+        let note = '';
+        if (failedTarget) {
+          if (failedTarget.error?.includes('USER_BANNED_IN_CHANNEL')) {
+            note = ` (محظور من النشر في ${failedTarget.title})`;
+          } else if (failedTarget.error?.includes('CHANNEL_PRIVATE')) {
+            note = ` (القناة ${failedTarget.title} خاصة)`;
+          }
+        }
+        setSendStatusMsg({
+          text: `📢 تم إرسال الرسالة إلى ${batch.totalSuccess} وجهة بنجاح!${batch.totalFailed > 0 ? ` (فشل ${batch.totalFailed}${note})` : ''}`,
+          success: true,
+        });
+        showToast(`📢 تم إرسال الرسالة إلى ${batch.totalSuccess} وجهة بنجاح!`, '✨');
+      } else {
+        const failedTarget = batch.targetChats.find((t) => t.status === 'failed');
+        const rawErr = failedTarget?.error || 'تعذر إرسال الرسائل إلى الوجهات المحددة';
+        let friendlyErr = rawErr;
+        if (rawErr.includes('USER_BANNED_IN_CHANNEL')) {
+          friendlyErr = `أنت محظور أو مقيد من إرسال الرسائل في "${failedTarget?.title || 'المجموعة'}" بواسطة المشرفين (USER_BANNED_IN_CHANNEL)`;
+        } else if (rawErr.includes('CHANNEL_PRIVATE')) {
+          friendlyErr = `القناة أو المجموعة "${failedTarget?.title || ''}" خاصة ولا يمكن النشر فيها دون أن تكون عضواً فيها (CHANNEL_PRIVATE)`;
+        } else if (rawErr.includes('CHAT_WRITE_FORBIDDEN')) {
+          friendlyErr = `النشر في "${failedTarget?.title || 'القناة'}" مقتصر على المشرفين فقط (CHAT_WRITE_FORBIDDEN)`;
+        } else if (rawErr.includes('FLOOD_WAIT')) {
+          friendlyErr = `تم حظر الإرسال مؤقتاً لتفادي التكرار المفرط (FLOOD_WAIT). يرجى الانتظار قليلاً`;
+        }
+        setSendStatusMsg({
+          text: `⚠️ لم يتم الإرسال: ${friendlyErr}`,
+          success: false,
+        });
+        showToast(`⚠️ تعذر الإرسال: ${friendlyErr}`, '⚠️');
+      }
     }
   };
 

@@ -278,10 +278,11 @@ export class NotificationsService {
       messageId: string;
       error?: string;
     }[] = params.targetChatIds.map((id) => {
-      const found = params.allChats.find((c) => c.id === id);
+      const cleanId = String(id).replace(/^(?:custom_|chat_)+/i, '').trim();
+      const found = params.allChats.find((c) => c.id === id || c.id === cleanId);
       return {
-        id,
-        title: found?.title || 'مجموعة تيليجرام',
+        id: cleanId,
+        title: found?.title || cleanId || 'مجموعة تيليجرام',
         type: (found?.type || 'group') as any,
         status: 'sent',
         messageId: `msg_${Date.now()}_${Math.random().toString(36).substring(7)}`,
