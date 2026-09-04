@@ -2732,6 +2732,97 @@ async function startServer() {
     return clean;
   }
 
+  // =========================================================================
+  // وظيفة فحص الحماية الذكية (Group Bot Protection Scanner - isGroupProtected)
+  // =========================================================================
+  async function isGroupProtected(client: any, chatId: any): Promise<boolean> {
+    if (!client || !chatId) return false;
+    try {
+      // 1. Resolve peer to valid GramJS target entity
+      const peer = await resolvePeerTarget(client, chatId).catch(() => chatId);
+      const targetPeer = peer || chatId;
+
+      // 2. Fetch up to 200 participants from Telegram
+      let participants: any[] = [];
+      try {
+        participants = await client.getParticipants(targetPeer, { limit: 200 });
+      } catch (partErr: any) {
+        // Fallback: If regular participants list is restricted or hidden by group admins,
+        // inspect administrators where protection bots (Rose, Shieldy, etc.) reside
+        try {
+          participants = await client.getParticipants(targetPeer, {
+            filter: new Api.ChannelParticipantsAdmins(),
+            limit: 100,
+          });
+        } catch {
+          try {
+            participants = await client.getParticipants(chatId, { limit: 200 });
+          } catch {
+            participants = [];
+          }
+        }
+      }
+
+      if (!Array.isArray(participants) || participants.length === 0) {
+        console.log(`[isGroupProtected] No participants accessible for ${chatId}. Treating as unprotected.`);
+        return false;
+      }
+
+      // 3. Comprehensive list of protection and security bot keywords
+      const protectionKeywords = [
+        'rose',
+        'missrose',
+        'shieldy',
+        'guard',
+        'groupguard',
+        'combot',
+        'antispam',
+        'spamwatch',
+        'safety',
+        'cleaner',
+        'police',
+        'defender',
+        'security',
+        'protect',
+        'banhammer',
+        'grouphelp',
+        'botfather',
+        'shield',
+        'anti',
+        'spam',
+        'clean',
+      ];
+
+      // 4. Iterate over members and check bot === true and name/username matches
+      for (const member of participants) {
+        const isBot = Boolean(member?.bot || (member?.className === 'User' && member?.bot));
+        if (isBot) {
+          const username = (member.username || '').toLowerCase();
+          const firstName = (member.firstName || '').toLowerCase();
+          const lastName = (member.lastName || '').toLowerCase();
+          const fullName = `${firstName} ${lastName}`.trim();
+
+          for (const kw of protectionKeywords) {
+            if (
+              username.includes(kw) ||
+              firstName.includes(kw) ||
+              fullName.includes(kw)
+            ) {
+              console.log(`[isGroupProtected] 🛡️ Detected protection bot in group (${chatId}): @${member.username || member.firstName} matching keyword "${kw}"`);
+              return true;
+            }
+          }
+        }
+      }
+
+      console.log(`[isGroupProtected] ✅ Group (${chatId}) is NOT protected (inspected ${participants.length} participants, no protection bots found)`);
+      return false;
+    } catch (err: any) {
+      console.warn(`[isGroupProtected] Could not check protection for ${chatId}:`, err?.message || err);
+      return false;
+    }
+  }
+
   // 5. Send Message Dispatcher (Real messages.sendMessage RPC)
   app.post('/api/telegram/messages/send', async (req, res) => {
     const { chatId, text, media, replyToMsgId, phone, sessionString } = req.body;
@@ -4590,26 +4681,92 @@ async function startServer() {
       });
     }
 
-    // 3. Execute Real Send via client.sendMessage
+    // 3. Execute Real Send via client.sendMessage with Smart Salam & Protection Checking
     console.log(`[SendNow] Transmitting real MTProto message to ${targetEntities.length} entities:`, resolvedLabels);
 
-    const sentResults: Array<{ target: string; messageId: number; success: boolean }> = [];
+    const sentResults: Array<{ target: string; messageId: number; success: boolean; isProtected?: boolean; salamMode?: boolean }> = [];
     const failedResults: Array<{ target: string; error: string }> = [];
+
+    const smart_wait_seconds = Number(data.interval_seconds || data.smart_wait_seconds) || 30;
+    const smart_required_messages = Number(data.smart_required_messages) || 3;
 
     for (let i = 0; i < targetEntities.length; i++) {
       const entity = targetEntities[i];
       const label = resolvedLabels[i] || `entity_${i}`;
       try {
-        const sent: any = await client.sendMessage(entity, {
-          message: message,
-          parseMode: 'md',
-        });
-        sentResults.push({
-          target: label,
-          messageId: sent?.id || 0,
-          success: true,
-        });
-        console.log(`[SendNow] Successfully transmitted to ${label} (ID: ${sent?.id})`);
+        // الخطوة 1: فحص الحماية لكل مجموعة قبل الإرسال
+        const isProtected = await isGroupProtected(client, entity);
+        console.log(`[SendNow] Target "${label}" protection status: ${isProtected ? 'PROTECTED (محمية ببوتات حماية)' : 'UNPROTECTED (غير محمية)'}`);
+
+        // الخطوة 2:
+        if (!isProtected) {
+          // إذا كانت النتيجة false (غير محمية): أرسل الرسالة الأصلية فوراً (ممنوع إرسال السلام عليكم)
+          const sent: any = await client.sendMessage(entity, {
+            message: message,
+            parseMode: 'md',
+          });
+          sentResults.push({
+            target: label,
+            messageId: sent?.id || 0,
+            success: true,
+            isProtected: false,
+            salamMode: false,
+          });
+          console.log(`[SendNow] Direct send to unprotected group ${label} (ID: ${sent?.id})`);
+        } else {
+          // إذا كانت النتيجة true (محمية): نفّذ السيناريو الذكي
+          // 1. أرسل "السلام عليكم"
+          console.log(`[SendNow] [SalamMode] 1. Group ${label} is protected. Sending greeting "السلام عليكم"...`);
+          const greetingMsg: any = await client.sendMessage(entity, {
+            message: 'السلام عليكم',
+          });
+
+          // 2. انتظر فترة زمنية (smart_wait_seconds / 30 ثانية)
+          console.log(`[SendNow] [SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${label}...`);
+          await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
+
+          // 3. راقب الرسائل الجديدة في المجموعة
+          let interactionPassed = false;
+          try {
+            const recentMsgs: any = await client.getMessages(entity, {
+              limit: 20,
+              minId: greetingMsg.id,
+            });
+            const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
+            console.log(`[SendNow] [SalamMode] 3. Monitored ${othersMsgs.length} new messages in ${label} (required: ${smart_required_messages})`);
+            if (othersMsgs.length >= smart_required_messages) {
+              interactionPassed = true;
+            }
+          } catch (chkErr: any) {
+            console.warn(`[SendNow] [SalamMode] Error checking messages in ${label}:`, chkErr?.message || chkErr);
+            interactionPassed = false;
+          }
+
+          if (interactionPassed) {
+            // 4. إذا وصل عدد الرسائل الجديدة >= smart_required_messages: قم بتعديل رسالة "السلام" إلى الرسالة الأصلية
+            console.log(`[SendNow] [SalamMode] 4. Interaction passed (${smart_required_messages}+ msgs). Editing greeting to original message in ${label}...`);
+            await client.editMessage(entity, {
+              message: greetingMsg.id,
+              text: message,
+              parseMode: 'md',
+            });
+            sentResults.push({
+              target: label,
+              messageId: greetingMsg.id || 0,
+              success: true,
+              isProtected: true,
+              salamMode: true,
+            });
+          } else {
+            // 5. إذا لم يصل العدد: قم بحذف رسالة "السلام" عبر client.deleteMessages
+            console.log(`[SendNow] [SalamMode] 5. Low interaction (<${smart_required_messages}). Deleting greeting message from ${label}...`);
+            await client.deleteMessages(entity, [greetingMsg.id], { revoke: true }).catch(() => {});
+            failedResults.push({
+              target: label,
+              error: `سحبت رسالة التمويه الذكية لعدم وجود تفاعل كافٍ من الأعضاء (${smart_required_messages} رسائل جديدة مطلوبة خلال ${smart_wait_seconds}ث)`,
+            });
+          }
+        }
       } catch (sendErr: any) {
         const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
         console.warn(`[SendNow] Failed transmitting to ${label}:`, errMsg);
@@ -5667,18 +5824,27 @@ async function startServer() {
       try {
         const peer = await resolvePeerTarget(client, chatId);
 
-        if (protectionMode === 'salam') {
-          // 1. Send "السلام عليكم" first
-          console.log(`[SalamMode] 1. Sending greeting to ${chatId}...`);
+        // الخطوة 1: فحص الحماية لكل مجموعة قبل الإرسال
+        const isProtected = await isGroupProtected(client, peer);
+        console.log(`[SendBatch] Group "${chatId}" protection status: ${isProtected ? 'PROTECTED (محمية ببوتات حماية)' : 'UNPROTECTED (غير محمية)'}`);
+
+        // الخطوة 2: تطبيق القواعد الصارمة
+        // 1. ممنوع إرسال "السلام عليكم" للمجموعات غير المحمية
+        // 2. إذا كانت غير محمية: أرسل الرسالة الأصلية مباشرة
+        // 3. إذا كانت محمية: نفّذ السيناريو الذكي
+        if (isProtected) {
+          // السيناريو الذكي للمجموعات المحمية
+          // 1. أرسل "السلام عليكم"
+          console.log(`[SalamMode] 1. Group ${chatId} is protected. Sending greeting "السلام عليكم"...`);
           const greetingMsg: any = await client.sendMessage(peer, {
             message: 'السلام عليكم',
           });
 
-          // 2. Wait 30 seconds
-          console.log(`[SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions...`);
+          // 2. انتظر الفترة الزمنية المحددة (smart_wait_seconds ثانية)
+          console.log(`[SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${chatId}...`);
           await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
 
-          // 3. Check for 3 new messages from other participants
+          // 3. راقب الرسائل الجديدة من باقي أعضاء المجموعة
           let interactionPassed = false;
           try {
             const recentMsgs: any = await client.getMessages(peer, {
@@ -5686,18 +5852,18 @@ async function startServer() {
               minId: greetingMsg.id,
             });
             const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            console.log(`[SalamMode] Found ${othersMsgs.length} new messages from participants in ${chatId}`);
+            console.log(`[SalamMode] 3. Monitored ${othersMsgs.length} new messages from participants in ${chatId} (required: ${smart_required_messages})`);
             if (othersMsgs.length >= smart_required_messages) {
               interactionPassed = true;
             }
           } catch (chkErr) {
             console.warn('[SalamMode] Check messages error:', chkErr);
-            interactionPassed = true; // Fallback to proceed if check fails
+            interactionPassed = false;
           }
 
           if (interactionPassed) {
-            // 4. Edit to original text
-            console.log(`[SalamMode] 4. Interaction verified. Editing greeting to original text in ${chatId}...`);
+            // 4. إذا تفاعل الأعضاء، عدّل رسالة "السلام" إلى الرسالة الأصلية
+            console.log(`[SalamMode] 4. Interaction verified (${smart_required_messages}+ msgs). Editing greeting to original text in ${chatId}...`);
             await client.editMessage(peer, {
               message: greetingMsg.id,
               text,
@@ -5710,8 +5876,8 @@ async function startServer() {
               status: 'success',
             });
           } else {
-            // Withdraw greeting if not enough interaction
-            console.log(`[SalamMode] Low interaction in ${chatId}. Withdrawing greeting message...`);
+            // 5. إذا لم يحدث تفاعل كافٍ، احذف رسالة "السلام"
+            console.log(`[SalamMode] 5. Low interaction in ${chatId} (<${smart_required_messages}). Deleting greeting message via deleteMessages...`);
             await client.deleteMessages(peer, [greetingMsg.id], { revoke: true }).catch(() => {});
             targetResults.push({
               chatId,
@@ -5721,7 +5887,8 @@ async function startServer() {
             });
           }
         } else {
-          // Standard direct send
+          // المجموعة غير محمية: أرسل الرسالة الأصلية مباشرة (ممنوع إرسال السلام عليكم هنا)
+          console.log(`[SendBatch] Group ${chatId} is UNPROTECTED. Sending original message directly...`);
           const sent: any = await client.sendMessage(peer, { message: text, parseMode: 'md' });
           targetResults.push({
             chatId,
