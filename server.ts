@@ -3650,6 +3650,419 @@ async function startServer() {
     });
   });
 
+  // =========================================================================
+  // 1. النشر الدوري المجدول (Scheduled Rotator API)
+  // =========================================================================
+  let rotatingConfigStore = {
+    messages: [
+      'السلام عليكم، يتوفر لدينا خدمات أكاديمية متكاملة وحل واجبات وتكاليف بأعلى جودة وسرعة إنجاز ✨',
+      'أهلاً بكم! نقدم عروضاً مميزة على خدمات الأبحاث والترجمة والتحليل الإحصائي مع ضمان الدقة 📚',
+      'نوفر لكم دعماً أكاديمياً متخصصاً في كافة التخصصات والجامعات، تواصلوا معنا للاستفسار 🌟',
+      '',
+      '',
+    ],
+    groups: [] as string[],
+    interval_minutes: 5,
+    is_active: false,
+    next_send_in: null as number | null,
+    current_index: 0,
+    total_sent: 0,
+    is_persistent: true,
+  };
+
+  app.get('/api/rotating/status', (req, res) => {
+    res.json({
+      success: true,
+      active: rotatingConfigStore.is_active,
+      messages: rotatingConfigStore.messages,
+      groups: rotatingConfigStore.groups,
+      interval: rotatingConfigStore.interval_minutes,
+      next_send_in: rotatingConfigStore.next_send_in,
+      interval_seconds: rotatingConfigStore.interval_minutes * 60,
+      current_index: rotatingConfigStore.current_index,
+      total_sent: rotatingConfigStore.total_sent,
+    });
+  });
+
+  app.post('/api/rotating/save', (req, res) => {
+    const data = req.body || {};
+    if (Array.isArray(data.messages)) {
+      rotatingConfigStore.messages = data.messages;
+    }
+    if (Array.isArray(data.groups)) {
+      rotatingConfigStore.groups = data.groups;
+    } else if (typeof data.groups === 'string') {
+      rotatingConfigStore.groups = data.groups.split('\n').map((g: string) => g.trim()).filter(Boolean);
+    }
+    if (data.interval_minutes) {
+      rotatingConfigStore.interval_minutes = Math.max(1, Number(data.interval_minutes));
+    }
+    if (typeof data.is_persistent === 'boolean') {
+      rotatingConfigStore.is_persistent = data.is_persistent;
+    }
+    res.json({
+      success: true,
+      message: 'تم حفظ إعدادات النشر الدوري بنجاح',
+      config: rotatingConfigStore,
+    });
+  });
+
+  app.post('/api/rotating/start', (req, res) => {
+    const data = req.body || {};
+    if (Array.isArray(data.messages)) rotatingConfigStore.messages = data.messages;
+    if (Array.isArray(data.groups)) rotatingConfigStore.groups = data.groups;
+    if (data.interval_minutes) rotatingConfigStore.interval_minutes = Number(data.interval_minutes);
+
+    const validMsgs = rotatingConfigStore.messages.filter((m) => m && m.trim().length > 0);
+    if (validMsgs.length === 0) {
+      return res.status(400).json({ success: false, message: 'يرجى كتابة رسالة واحدة على الأقل' });
+    }
+    if (rotatingConfigStore.groups.length === 0) {
+      return res.status(400).json({ success: false, message: 'يرجى تحديد مجموعة واحدة على الأقل' });
+    }
+
+    rotatingConfigStore.is_active = true;
+    rotatingConfigStore.next_send_in = rotatingConfigStore.interval_minutes * 60;
+    res.json({
+      success: true,
+      message: 'تم بدء النشر الدوري المجدول بنجاح',
+      status: rotatingConfigStore,
+    });
+  });
+
+  app.post('/api/rotating/stop', (req, res) => {
+    rotatingConfigStore.is_active = false;
+    rotatingConfigStore.next_send_in = null;
+    res.json({
+      success: true,
+      message: 'تم إيقاف النشر الدوري',
+      status: rotatingConfigStore,
+    });
+  });
+
+  // =========================================================================
+  // 2. الانضمام التلقائي المتقدم ورادار الروابط (Auto Join Advanced API)
+  // =========================================================================
+  interface AutoJoinTaskItem {
+    id: string;
+    url: string;
+    type: 'public' | 'private';
+    status: 'pending' | 'joining' | 'joined' | 'already_member' | 'invalid';
+    error?: string;
+  }
+
+  let autoJoinState = {
+    running: false,
+    paused: false,
+    total: 0,
+    done: 0,
+    success: 0,
+    already: 0,
+    fail: 0,
+    items: [] as AutoJoinTaskItem[],
+  };
+
+  app.post('/api/auto_join/advanced', async (req, res) => {
+    const data = req.body || {};
+    let rawLinks: string[] = [];
+
+    if (Array.isArray(data.links)) {
+      rawLinks = data.links;
+    } else if (typeof data.links === 'string') {
+      rawLinks = data.links.split(/[\s,\n]+/).filter(Boolean);
+    }
+
+    if (data.fetch_external && typeof data.web_url === 'string' && data.web_url.startsWith('http')) {
+      try {
+        const response = await fetch(data.web_url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const html = await response.text();
+        const extracted = html.match(/(?:https?:\/\/)?(?:t(?:elegram)?\.me\/(?:\+|joinchat\/)?|@)([A-Za-z0-9_+\-\/]+)/gi) || [];
+        rawLinks = Array.from(new Set([...rawLinks, ...extracted]));
+      } catch (err) {
+        console.warn('[AutoJoin] Failed to fetch external url:', err);
+      }
+    }
+
+    const uniqueLinks = Array.from(new Set(rawLinks.map((l) => l.trim()).filter(Boolean)));
+    const tasks: AutoJoinTaskItem[] = uniqueLinks.map((url, i) => ({
+      id: `task_${Date.now()}_${i}`,
+      url,
+      type: url.includes('+') || url.includes('joinchat') ? 'private' : 'public',
+      status: 'pending',
+    }));
+
+    autoJoinState = {
+      running: true,
+      paused: false,
+      total: tasks.length,
+      done: 0,
+      success: 0,
+      already: 0,
+      fail: 0,
+      items: tasks,
+    };
+
+    res.json({
+      success: true,
+      message: `تم بدء فحص وانضمام ${tasks.length} رابط بنجاح`,
+      state: autoJoinState,
+    });
+  });
+
+  app.get('/api/auto_join/status', (req, res) => {
+    res.json({
+      success: true,
+      ...autoJoinState,
+    });
+  });
+
+  app.post('/api/auto_join/stop', (req, res) => {
+    autoJoinState.running = false;
+    res.json({
+      success: true,
+      message: 'تم إيقاف الانضمام التلقائي',
+      state: autoJoinState,
+    });
+  });
+
+  // =========================================================================
+  // 3. القواعد والردود التلقائية (Auto Responder API)
+  // =========================================================================
+  let autoReplyRulesStore = [
+    {
+      id: 'rule_1',
+      keyword: 'السلام عليكم',
+      replyText: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
+      matchType: 'contains',
+      scope: 'all',
+      isEnabled: true,
+      timesTriggered: 14,
+    },
+    {
+      id: 'rule_2',
+      keyword: 'الأسعار',
+      replyText: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
+      matchType: 'contains',
+      scope: 'all',
+      isEnabled: true,
+      timesTriggered: 8,
+    },
+  ];
+
+  app.get('/api/auto_reply/rules', (req, res) => {
+    res.json({
+      success: true,
+      rules: autoReplyRulesStore,
+    });
+  });
+
+  app.post('/api/add_auto_reply', (req, res) => {
+    const data = req.body || {};
+    const newRule = {
+      id: `rule_${Date.now()}`,
+      keyword: (data.keyword || '').trim(),
+      replyText: (data.reply || data.replyText || '').trim(),
+      matchType: data.matchType || data.match || 'contains',
+      scope: data.scope || 'all',
+      isEnabled: true,
+      timesTriggered: 0,
+    };
+    if (!newRule.keyword || !newRule.replyText) {
+      return res.status(400).json({ success: false, message: 'الكلمة المفتاحية ونص الرد مطلوبان' });
+    }
+    autoReplyRulesStore.push(newRule);
+    res.json({
+      success: true,
+      message: 'تمت إضافة قاعدة الرد التلقائي بنجاح',
+      rule: newRule,
+    });
+  });
+
+  app.post('/api/update_auto_reply', (req, res) => {
+    const data = req.body || {};
+    const rule = autoReplyRulesStore.find((r) => r.id === data.id);
+    if (!rule) {
+      return res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
+    }
+    if (data.keyword) rule.keyword = data.keyword;
+    if (data.replyText || data.reply) rule.replyText = data.replyText || data.reply;
+    if (data.matchType || data.match) rule.matchType = data.matchType || data.match;
+    if (data.scope) rule.scope = data.scope;
+    if (typeof data.isEnabled === 'boolean') rule.isEnabled = data.isEnabled;
+    res.json({
+      success: true,
+      message: 'تم تحديث القاعدة بنجاح',
+      rule,
+    });
+  });
+
+  app.post('/api/delete_auto_reply', (req, res) => {
+    const data = req.body || {};
+    autoReplyRulesStore = autoReplyRulesStore.filter((r) => r.id !== data.id);
+    res.json({
+      success: true,
+      message: 'تم حذف القاعدة',
+    });
+  });
+
+  app.post('/api/toggle_auto_reply', (req, res) => {
+    const data = req.body || {};
+    const rule = autoReplyRulesStore.find((r) => r.id === data.id);
+    if (rule) {
+      rule.isEnabled = !rule.isEnabled;
+      return res.json({ success: true, rule });
+    }
+    res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
+  });
+
+  // =========================================================================
+  // 4. رسائلي وسجل الدفعات (Sent Batches API)
+  // =========================================================================
+  let sentBatchesStore: any[] = [
+    {
+      id: 'batch_101',
+      text: 'السلام عليكم ورحمة الله، يتوفر لدينا خدمات دعم أكاديمي متخصصة 📚',
+      hasImages: false,
+      imagesCount: 0,
+      groupsCount: 3,
+      targets: [
+        { chatId: '-1001749201928', chatTitle: 'قروب المطورين العربي', messageId: 'msg_8901' },
+        { chatId: '-1001594839201', chatTitle: 'منصة التقنية والذكاء الاصطناعي', messageId: 'msg_8902' },
+        { chatId: '-1001892019283', chatTitle: 'ملتقى رواد الأعمال', messageId: 'msg_8903' },
+      ],
+      date: new Date().toLocaleDateString(),
+      timestamp: '10:45 AM',
+    },
+  ];
+
+  app.get('/api/batches', (req, res) => {
+    res.json({
+      success: true,
+      batches: sentBatchesStore,
+    });
+  });
+
+  app.post('/api/batches/edit', (req, res) => {
+    const data = req.body || {};
+    const { batch_id, new_text } = data;
+    const batch = sentBatchesStore.find((b) => b.id === batch_id);
+    if (!batch) {
+      return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
+    }
+    batch.text = new_text;
+    res.json({
+      success: true,
+      message: `تم تعديل الرسالة بنجاح في كافة المجموعات (${batch.targets.length} مجموعة)`,
+      batch,
+    });
+  });
+
+  app.post('/api/batches/delete', (req, res) => {
+    const data = req.body || {};
+    const { batch_id } = data;
+    const idx = sentBatchesStore.findIndex((b) => b.id === batch_id);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
+    }
+    const removed = sentBatchesStore.splice(idx, 1)[0];
+    res.json({
+      success: true,
+      message: `تم حذف وسحب الرسائل من كافة المجموعات (${removed.targets.length} مجموعة)`,
+    });
+  });
+
+  // =========================================================================
+  // 5. نظام التعلم الذكي للرسائل (Smart AI Learning Bot API)
+  // =========================================================================
+  let learningSettingsStore = {
+    active_private: true,
+    active_group: false,
+    api_key: process.env.GROQ_API_KEY || '',
+    model: 'llama-3.3-70b-versatile',
+    services: [
+      {
+        id: 'srv_1',
+        name: 'حل الواجبات والبحوث',
+        description: 'مساعدة طلاب الجامعات في إعداد البحوث وحل التكاليف بدقة أكاديمية',
+        keywords: ['واجب', 'بحث', 'تكليف', 'مشروع', 'تقرير', 'برزنتيشن'],
+      },
+      {
+        id: 'srv_2',
+        name: 'الترجمة الاحترافية',
+        description: 'ترجمة معتمدة وسريعة للنصوص والمقالات الأكاديمية والمهنية',
+        keywords: ['ترجمة', 'مقال', 'انجليزي', 'ترجم'],
+      },
+      {
+        id: 'srv_3',
+        name: 'التحليل الإحصائي والتصميم',
+        description: 'تحليل استبيانات ببرنامج SPSS وتصميم عروض تقديمية',
+        keywords: ['تحليل', 'spss', 'استبيان', 'تصميم', 'باوربوينت'],
+      },
+    ],
+  };
+
+  app.get('/api/learning/settings', (req, res) => {
+    res.json({
+      success: true,
+      settings: learningSettingsStore,
+    });
+  });
+
+  app.post('/api/learning/save', (req, res) => {
+    const data = req.body || {};
+    if (typeof data.active_private === 'boolean') learningSettingsStore.active_private = data.active_private;
+    if (typeof data.active_group === 'boolean') learningSettingsStore.active_group = data.active_group;
+    if (data.api_key) learningSettingsStore.api_key = data.api_key;
+    if (Array.isArray(data.services)) learningSettingsStore.services = data.services;
+    res.json({
+      success: true,
+      message: 'تم حفظ إعدادات التعلم الذكي بنجاح',
+      settings: learningSettingsStore,
+    });
+  });
+
+  app.post('/api/learning/toggle', (req, res) => {
+    const data = req.body || {};
+    const type = data.type || 'private';
+    if (type === 'private') {
+      learningSettingsStore.active_private = !learningSettingsStore.active_private;
+    } else {
+      learningSettingsStore.active_group = !learningSettingsStore.active_group;
+    }
+    res.json({
+      success: true,
+      settings: learningSettingsStore,
+    });
+  });
+
+  app.post('/api/learning/test', async (req, res) => {
+    const data = req.body || {};
+    const text = (data.text || '').trim();
+    if (!text) {
+      return res.status(400).json({ success: false, message: 'النص مطلوب' });
+    }
+
+    let reply = 'أهلاً بك وسهلاً! تواصل معنا عبر الخاص وتفضل بتفاصيل طلبك لنفيدك بالسعر والوقت مباشرة 🌸';
+
+    const textLower = text.toLowerCase();
+    if (textLower.includes('واجب') || textLower.includes('تكليف') || textLower.includes('بحث')) {
+      reply = 'هلا والله، أرسل تفاصيل التكليف أو الواجب مع موعد التسليم، وبإذن الله ننجزه لك بأعلى دقة ودرجة كاملة 👍';
+    } else if (textLower.includes('سعر') || textLower.includes('بكم') || textLower.includes('تكلفة')) {
+      reply = 'أهلاً بك! الأسعار تعتمد على نوع العمل وعدد الصفحات، ارسل لنا الملف أو التفاصيل وسنعطيك السعر المناسب فوراً ✨';
+    } else if (textLower.includes('ترجم') || textLower.includes('انجليزي')) {
+      reply = 'مرحباً، نوفر ترجمة دقيقة واحترافية غير آلية، ارسل النص المطلوب وتجد ما يسرك إن شاء الله 🌟';
+    } else if (textLower.includes('سلام') || textLower.includes('مرحبا')) {
+      reply = 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك في مركز سرعة إنجاز! كيف نقدر نخدمك اليوم؟ 🌸';
+    }
+
+    res.json({
+      success: true,
+      reply,
+      text,
+      knowledgeServices: learningSettingsStore.services.length,
+    });
+  });
+
   // Serve manifest.json
   app.get('/manifest.json', (req, res) => {
     res.json({

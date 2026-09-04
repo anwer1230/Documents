@@ -33,6 +33,8 @@ import {
   Layers,
   MessageSquare,
   BrainCircuit,
+  RotateCw,
+  Bot,
   Search,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -573,6 +575,66 @@ export const NavigationDrawer: React.FC = () => {
                       </div>
                       <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 rounded font-mono">
                         REGEX
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 5. نظام التعلم الذكي للرسائل */}
+                {(() => {
+                  const isActive = activeModal === 'smart-ai';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-smart-ai"
+                      onClick={() => handleItemClick(() => setActiveModal('smart-ai'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-fuchsia-500/20 text-fuchsia-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-fuchsia-400'
+                          : 'hover:bg-fuchsia-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <BrainCircuit className={`w-5 h-5 shrink-0 ${isActive ? 'text-fuchsia-300' : 'text-fuchsia-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'نظام التعلم الذكي (AI Bot)' : 'Smart AI Learning Bot'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'تحليل وتدريب وردود ذكية متكيفة' : 'Self-learning responses & context'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-fuchsia-500/25 text-fuchsia-200 border border-fuchsia-400/30 rounded font-mono">
+                        GROQ
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* 6. النشر الدوري المجدول (Rotator) */}
+                {(() => {
+                  const isActive = activeModal === 'scheduled-rotator';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-scheduled-rotator"
+                      onClick={() => handleItemClick(() => setActiveModal('scheduled-rotator'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-amber-500/20 text-amber-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-amber-400'
+                          : 'hover:bg-amber-500/10 text-gray-100 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <RotateCw className={`w-5 h-5 shrink-0 ${isActive ? 'text-amber-300' : 'text-amber-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'النشر الدوري المجدول' : 'Scheduled Rotator'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'تدوير ونشر دوري متكرر بين القوالب' : 'Continuous rotating broadcast'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/25 text-amber-200 border border-amber-400/30 rounded font-mono">
+                        ROTATOR
                       </span>
                     </motion.button>
                   );

@@ -23,6 +23,9 @@ import {
   LiveDiscoveredLink,
   ProtectionMode,
   Message,
+  RotatingSendConfig,
+  RotatingSendStatus,
+  RotatingSendLog,
 } from '../types';
 import { backgroundSyncService } from './BackgroundSyncService';
 
@@ -110,6 +113,25 @@ export class NotificationsService {
   private isLiveLinkDiscoverActive = true;
   private isInstantAutoJoinEnabled = false;
   private discoveredLinks: LiveDiscoveredLink[] = [];
+
+  // 8. Scheduled Rotator (RotatingSendManager)
+  private rotatingMessages: string[] = [
+    'السلام عليكم، يتوفر لدينا خدمات أكاديمية متكاملة وحل واجبات وتكاليف بأعلى جودة وسرعة إنجاز ✨',
+    'أهلاً بكم! نقدم عروضاً مميزة على خدمات الأبحاث والترجمة والتحليل الإحصائي مع ضمان الدقة 📚',
+    'نوفر لكم دعماً أكاديمياً متخصصاً في كافة التخصصات والجامعات، تواصلوا معنا للاستفسار 🌟',
+    '',
+    '',
+  ];
+  private rotatingGroups: string[] = [];
+  private rotatingIntervalMinutes = 5;
+  private isRotatingActive = false;
+  private rotatingNextSendAt: number | null = null;
+  private rotatingCurrentIndex = 0;
+  private rotatingTimer: any = null;
+  private rotatingCountdownTimer: any = null;
+  private rotatingLogs: RotatingSendLog[] = [];
+  private totalRotatingSent = 0;
+  private isRotatingPersistent = true;
 
   // Listeners for UI state reactivity
   private stateSubscribers = new Set<() => void>();
@@ -749,6 +771,167 @@ export class NotificationsService {
         onAutoReply(reply);
       }, 1000);
     }
+  }
+
+  // ==========================================
+  // 8. SCHEDULED ROTATOR (RotatingSendManager)
+  // ==========================================
+  public getRotatingConfig(): RotatingSendConfig {
+    return {
+      messages: [...this.rotatingMessages],
+      groups: [...this.rotatingGroups],
+      intervalMinutes: this.rotatingIntervalMinutes,
+      isPersistent: this.isRotatingPersistent,
+    };
+  }
+
+  public saveRotatingConfig(cfg: Partial<RotatingSendConfig>) {
+    if (cfg.messages) {
+      this.rotatingMessages = [...cfg.messages];
+    }
+    if (cfg.groups) {
+      this.rotatingGroups = [...cfg.groups];
+    }
+    if (cfg.intervalMinutes !== undefined && cfg.intervalMinutes > 0) {
+      this.rotatingIntervalMinutes = cfg.intervalMinutes;
+    }
+    if (cfg.isPersistent !== undefined) {
+      this.isRotatingPersistent = cfg.isPersistent;
+    }
+    this.notifyStateChange();
+  }
+
+  public getRotatingStatus(): RotatingSendStatus {
+    const validMessages = this.rotatingMessages.filter((m) => m && m.trim().length > 0);
+    const now = Date.now();
+    let nextSendIn: number | null = null;
+    if (this.isRotatingActive && this.rotatingNextSendAt) {
+      nextSendIn = Math.max(0, Math.round((this.rotatingNextSendAt - now) / 1000));
+    }
+    return {
+      active: this.isRotatingActive,
+      messages: this.rotatingMessages,
+      groups: this.rotatingGroups,
+      interval: this.rotatingIntervalMinutes,
+      next_send_in: nextSendIn,
+      interval_seconds: this.rotatingIntervalMinutes * 60,
+      current_index: this.rotatingCurrentIndex,
+      total_sent: this.totalRotatingSent,
+    };
+  }
+
+  public getRotatingLogs(): RotatingSendLog[] {
+    return this.rotatingLogs;
+  }
+
+  public clearRotatingLogs() {
+    this.rotatingLogs = [];
+    this.notifyStateChange();
+  }
+
+  public startRotating(messages?: string[], groups?: string[], intervalMinutes?: number) {
+    if (messages) this.rotatingMessages = [...messages];
+    if (groups) this.rotatingGroups = [...groups];
+    if (intervalMinutes && intervalMinutes > 0) this.rotatingIntervalMinutes = intervalMinutes;
+
+    const validMessages = this.rotatingMessages.filter((m) => m && m.trim().length > 0);
+    if (validMessages.length === 0) {
+      throw new Error('يرجى كتابة رسالة واحدة على الأقل في حقول التدوير');
+    }
+    if (this.rotatingGroups.length === 0) {
+      throw new Error('يرجى تحديد أو إدخال مجموعة واحدة على الأقل');
+    }
+
+    this.isRotatingActive = true;
+    this.rotatingCurrentIndex = 0;
+    this.scheduleNextRotatingRound(0); // execute first round immediately or with 1s delay
+    this.notifyStateChange();
+
+    notificationsController.postNotification({
+      category: 'message',
+      title: 'تم بدء النشر الدوري المجدول 🔄',
+      body: `جاري تدوير ${validMessages.length} رسائل كل ${this.rotatingIntervalMinutes} دقائق`,
+    });
+  }
+
+  public stopRotating() {
+    this.isRotatingActive = false;
+    if (this.rotatingTimer) {
+      clearTimeout(this.rotatingTimer);
+      this.rotatingTimer = null;
+    }
+    this.rotatingNextSendAt = null;
+    this.notifyStateChange();
+
+    notificationsController.postNotification({
+      category: 'message',
+      title: 'تم إيقاف النشر الدوري ⏹️',
+      body: 'توقفت دورة التدوير الآلية مؤقتاً',
+    });
+  }
+
+  private scheduleNextRotatingRound(delayMs: number) {
+    if (this.rotatingTimer) {
+      clearTimeout(this.rotatingTimer);
+      this.rotatingTimer = null;
+    }
+
+    this.rotatingNextSendAt = Date.now() + delayMs;
+
+    this.rotatingTimer = setTimeout(async () => {
+      if (!this.isRotatingActive) return;
+      await this.executeRotatingRound();
+      if (this.isRotatingActive) {
+        this.scheduleNextRotatingRound(this.rotatingIntervalMinutes * 60 * 1000);
+      }
+    }, Math.max(500, delayMs));
+  }
+
+  public async executeRotatingRound() {
+    const validMessages = this.rotatingMessages.filter((m) => m && m.trim().length > 0);
+    if (validMessages.length === 0 || this.rotatingGroups.length === 0) return;
+
+    const currentMsg = validMessages[this.rotatingCurrentIndex % validMessages.length];
+    const msgSnippet = currentMsg.length > 30 ? `${currentMsg.slice(0, 30)}...` : currentMsg;
+    const msgNum = (this.rotatingCurrentIndex % validMessages.length) + 1;
+
+    for (const group of this.rotatingGroups) {
+      if (!this.isRotatingActive) break;
+
+      try {
+        await connectionsManager.sendRequest({
+          _: 'TL_messages_sendMessage',
+          peer_id: group,
+          message: currentMsg,
+        });
+
+        this.rotatingLogs.unshift({
+          id: `rot_${Date.now()}_${Math.random().toString(36).slice(5)}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          messageIndex: msgNum,
+          messageSnippet: msgSnippet,
+          group,
+          status: 'success',
+        });
+        this.totalRotatingSent++;
+      } catch (err: any) {
+        this.rotatingLogs.unshift({
+          id: `rot_${Date.now()}_${Math.random().toString(36).slice(5)}`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          messageIndex: msgNum,
+          messageSnippet: msgSnippet,
+          group,
+          status: 'error',
+          info: err?.text || err?.message || 'SEND_ERROR',
+        });
+      }
+
+      // Small delay between sends to prevent flood wait
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    this.rotatingCurrentIndex++;
+    this.notifyStateChange();
   }
 }
 

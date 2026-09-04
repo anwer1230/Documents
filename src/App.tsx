@@ -34,6 +34,7 @@ import { MyMessagesModal } from './components/Modals/MyMessagesModal';
 import { AutoJoinerModal } from './components/Modals/AutoJoinerModal';
 import { AutoResponderModal } from './components/Modals/AutoResponderModal';
 import { SmartAiLearnModal } from './components/Modals/SmartAiLearnModal';
+import { ScheduledRotatorModal } from './components/Modals/ScheduledRotatorModal';
 import { LiveLinkDiscoverModal } from './components/Modals/LiveLinkDiscoverModal';
 import { UserProfileModal } from './components/Modals/UserProfileModal';
 import { ForwardModal } from './components/Interactions/ForwardModal';
@@ -163,6 +164,7 @@ const TelegramAppContent: React.FC = () => {
       <AutoJoinerModal />
       <AutoResponderModal />
       <SmartAiLearnModal />
+      <ScheduledRotatorModal />
       <LiveLinkDiscoverModal />
       <UserProfileModal />
 

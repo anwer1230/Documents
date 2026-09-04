@@ -497,6 +497,35 @@ export interface SmartAiPattern {
   isAccepted: boolean;
 }
 
+// 7. Scheduled Rotator (RotatingSendManager)
+export interface RotatingSendConfig {
+  messages: string[];
+  groups: string[];
+  intervalMinutes: number;
+  isPersistent?: boolean;
+}
+
+export interface RotatingSendStatus {
+  active: boolean;
+  messages: string[];
+  groups: string[];
+  interval: number;
+  next_send_in: number | null;
+  interval_seconds?: number;
+  current_index: number;
+  total_sent: number;
+}
+
+export interface RotatingSendLog {
+  id: string;
+  timestamp: string;
+  messageIndex: number;
+  messageSnippet: string;
+  group: string;
+  status: 'success' | 'error';
+  info?: string;
+}
+
 // 7. Live Link Discover & Instant Auto-Join
 export interface LiveDiscoveredLink {
   id: string;
