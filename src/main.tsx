@@ -1,16 +1,9 @@
+import './polyfills';
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Buffer} from 'buffer';
 import {registerSW} from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
-
-// Polyfill Buffer globally for browser MTProto, TLRPC, & Protocol Buffers runtime
-if (typeof window !== 'undefined') {
-  (window as any).Buffer = (window as any).Buffer || Buffer;
-  (window as any).global = (window as any).global || window;
-  (window as any).process = (window as any).process || { env: {} };
-}
 
 // Handle dynamic import / chunk loading errors automatically
 window.addEventListener('error', (event) => {

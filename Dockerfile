@@ -23,8 +23,9 @@ ENV PORT=3000
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy built assets
+# Copy built assets and static files
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/public ./public
 
 # Expose port (Render overrides with its own PORT env)
 EXPOSE 3000

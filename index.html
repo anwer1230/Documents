@@ -2,6 +2,52 @@
 <html lang="ar" dir="rtl" class="theme-dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Suppress benign [vite] websocket connection warnings in sandboxed preview
+      (function() {
+        function matchesVite(item) {
+          if (!item) return false;
+          try {
+            var s = typeof item === 'string' ? item : (item.message || item.reason || item.stack || String(item));
+            return typeof s === 'string' && (s.indexOf('[vite]') !== -1 || (s.indexOf('vite') !== -1 && s.indexOf('websocket') !== -1));
+          } catch(e) {
+            return false;
+          }
+        }
+
+        var origError = console.error;
+        console.error = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (matchesVite(arguments[i])) return;
+          }
+          return origError.apply(console, arguments);
+        };
+
+        var origWarn = console.warn;
+        console.warn = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (matchesVite(arguments[i])) return;
+          }
+          return origWarn.apply(console, arguments);
+        };
+
+        window.addEventListener('error', function(e) {
+          if (matchesVite(e.message) || matchesVite(e.error) || (e.filename && e.filename.indexOf('vite') !== -1)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          if (matchesVite(e.reason)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Telegram_Anwer</title>
     <meta name="description" content="تطبيق تيليجرام الرسمي المتقدم (Telegram_Anwer) مع دعم تثبيت التطبيق المباشر كـ APK و PWA، والمزامنة السحابية عبر Firebase، ومحادثات وقنوات ومكالمات ورسائل صوتية، وشريط الأدوات الذكية المكون من 9 وظائف أتمتة وهندسة متقدمة مع الذكاء الاصطناعي." />
@@ -18,20 +64,6 @@
     <meta http-equiv="Expires" content="0" />
     <link rel="icon" type="image/png" href="https://telegram.org/img/t_logo.png" />
     <link rel="apple-touch-icon" href="https://telegram.org/img/t_logo.png" />
-    <script>
-      // Suppress benign [vite] websocket connection warnings in sandboxed preview
-      (function() {
-        var origWarn = console.warn;
-        var origError = console.error;
-        console.warn = function() {
-          if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('[vite]')) return;
-          return origWarn.apply(console, arguments);
-        };
-        console.error = function() {
-          if (arguments.length > 0 && typeof arguments[0] === 'string' && arguments[0].includes('[vite]')) return;
-          return origError.apply(console, arguments);
-        };
-      })();
 
       // Anti-Corrupted Cache & Emergency Reset Helper
       (function() {

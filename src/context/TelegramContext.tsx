@@ -369,7 +369,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [chats, setChats] = useState<Chat[]>(() => (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0 ? initialActiveAcc.chats : []));
   const [messages, setMessages] = useState<Record<string, Message[]>>(() => (initialActiveAcc?.messages && Object.keys(initialActiveAcc.messages).length > 0 ? initialActiveAcc.messages : {}));
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [activeChatId, setActiveChatId] = useState<string | null>(() => initialActiveAcc?.chats?.[0]?.id || null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(() => {
+    // Only open a chat if explicitly requested via URL parameter or notification route
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const targetDialog = urlParams.get('dialog_id') || urlParams.get('chatId');
+      if (targetDialog) return targetDialog;
+      const hashMatch = window.location.hash.match(/#\/chat\/([^?&]+)/);
+      if (hashMatch && hashMatch[1]) return decodeURIComponent(hashMatch[1]);
+    }
+    // Default to null so the user always sees the Chat List (Dialogs) screen
+    return null;
+  });
   const [typingChatId, setTypingChatId] = useState<string | null>(null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
@@ -1069,8 +1080,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               )
             );
           }
-        } else if (data.type === 'NAVIGATE_TO_DIALOG') {
-          const targetDialogId = data.dialog_id;
+        } else if (data.type === 'NAVIGATE_TO_DIALOG' || data.type === 'NAVIGATE_TO_CHAT') {
+          const targetDialogId = data.dialog_id || data.chatId;
           if (targetDialogId) {
             setActiveChatId(targetDialogId);
           }
@@ -1299,7 +1310,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSettings(targetAcc.settings || DEFAULT_APP_SETTINGS);
     setChats(targetAcc.chats || []);
     setMessages(targetAcc.messages || {});
-    setActiveChatId(targetAcc.chats?.[0]?.id || 'chat_saved_messages');
+    setActiveChatId(null);
     setIsDrawerOpen(false);
 
     setAccounts(updatedAccounts);
@@ -1448,7 +1459,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setChats(initialAccChats);
     setMessages(initialAccMessages);
     setSettings(defaultAccSettings);
-    setActiveChatId('chat_saved_messages');
+    setActiveChatId(null);
     setIsAuthenticated(true);
 
     // Goal 3: Persist real user in UserConfig and protect session via AuthTokensHelper
@@ -1528,7 +1539,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setSettings(nextAcc.settings || DEFAULT_APP_SETTINGS);
       setChats(nextAcc.chats || []);
       setMessages(nextAcc.messages || {});
-      setActiveChatId(nextAcc.chats[0]?.id || 'chat_saved_messages');
+      setActiveChatId(null);
       try {
         SecureSessionStorage.setItem('tg_active_account_id_v3', nextAcc.id);
       } catch {}
@@ -1617,7 +1628,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setCurrentUser(newUser);
     setChats(initialAccChats);
     setMessages(initialAccMessages);
-    setActiveChatId('chat_saved_messages');
+    setActiveChatId(null);
     setActiveModal('none');
 
     try {
@@ -2185,12 +2196,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         setChats(finalChats);
 
-        // Auto-select active chat if none or invalid
+        // Preserve active chat if user already selected one, otherwise remain on Chat List (null)
         setActiveChatId((prev) => {
           if (prev && finalChats.some((c) => c.id === prev)) {
             return prev;
           }
-          return finalChats[0]?.id || 'chat_saved_messages';
+          return null;
         });
 
         // Map Messages from MTProto

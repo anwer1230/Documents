@@ -19,26 +19,14 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 // ==========================================
 // VAPID & WEB PUSH NOTIFICATION SUBSYSTEM
 // ==========================================
-let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
-let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8';
+let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@telegram-anwer.app';
-
-if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-  // Generate consistent deterministic fallback keys or fresh pair if not in environment
-  try {
-    const generatedVapidKeys = webpush.generateVAPIDKeys();
-    VAPID_PUBLIC_KEY = generatedVapidKeys.publicKey;
-    VAPID_PRIVATE_KEY = generatedVapidKeys.privateKey;
-    console.log('[WebPush] Auto-generated dynamic VAPID keys for this instance.');
-  } catch (err) {
-    console.warn('[WebPush] Failed to generate VAPID keys:', err);
-  }
-}
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   try {
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-    console.log('[WebPush] VAPID configuration initialized successfully.');
+    console.log('[WebPush] VAPID configuration initialized successfully with persistent keys.');
   } catch (err) {
     console.warn('[WebPush] setVapidDetails error:', err);
   }
@@ -116,6 +104,11 @@ async function startServer() {
 
   app.use(express.json({ limit: '20mb' }));
   app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: Date.now() });
+  });
 
   // Environment & Configuration Info Endpoint (Safe masked summary)
   app.get('/api/env/info', (req, res) => {
