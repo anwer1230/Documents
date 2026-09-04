@@ -3521,6 +3521,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       socket.on('new_alert', (alertData: any) => {
         handleIncomingAlert(alertData);
       });
+
+      socket.on('auto_join_progress', (data: any) => {
+        if (data?.task) {
+          showToast(`انضمام: ${data.task.title || data.task.url} (${data.current}/${data.total})`, '🔗');
+        }
+      });
+
+      socket.on('auto_join_result', (data: any) => {
+        if (data?.message) {
+          showToast(data.message, data.success ? '✅' : '⚠️');
+        }
+      });
+
+      socket.on('new_batch_sent', (batchData: any) => {
+        showToast(`تم إرسال دفعة جديدة إلى ${batchData?.groupsCount || 0} مجموعة بنجاح`, '🚀');
+      });
+
+      socket.on('scheduled_sender_status', (schedData: any) => {
+        if (schedData?.active) {
+          console.log('[Scheduler] Active round:', schedData.roundsExecuted);
+        }
+      });
     } catch (sockErr) {
       console.warn('[Socket.IO] Client connection error:', sockErr);
     }

@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { TelegramClient, Api, sessions } from 'telegram';
@@ -542,6 +543,188 @@ async function startServer() {
     });
   };
 
+  // =========================================================================
+  // PERSISTENCE ENGINE: SETTINGS & BATCHES DISK STORAGE
+  // =========================================================================
+  const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
+  const BATCHES_FILE = path.join(process.cwd(), 'batches.json');
+
+  const loadSettingsFromDisk = () => {
+    try {
+      if (fs.existsSync(SETTINGS_FILE)) {
+        const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn('[Settings] Failed to load settings.json:', e);
+    }
+    return { auto_replies: [], auto_replies_enabled: true };
+  };
+
+  const saveSettingsToDisk = (data: any) => {
+    try {
+      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[Settings] Failed to save settings.json:', e);
+    }
+  };
+
+  const loadBatchesFromDisk = (): any[] => {
+    try {
+      if (fs.existsSync(BATCHES_FILE)) {
+        const raw = fs.readFileSync(BATCHES_FILE, 'utf8');
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn('[Batches] Failed to load batches.json:', e);
+    }
+    return [];
+  };
+
+  const saveBatchesToDisk = (batches: any[]) => {
+    try {
+      fs.writeFileSync(BATCHES_FILE, JSON.stringify(batches, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[Batches] Failed to save batches.json:', e);
+    }
+  };
+
+  // Initial state from disk
+  const initialSettings = loadSettingsFromDisk();
+  let autoRepliesEnabled: boolean = initialSettings.auto_replies_enabled !== false;
+  let autoReplyRulesStore: any[] = Array.isArray(initialSettings.auto_replies) && initialSettings.auto_replies.length > 0
+    ? initialSettings.auto_replies
+    : [
+        {
+          id: 'rule_1',
+          keyword: 'السلام عليكم',
+          replyText: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
+          reply: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
+          matchType: 'contains',
+          match: 'contains',
+          scope: 'all',
+          isEnabled: true,
+          timesTriggered: 0,
+          used_count: 0,
+          last_used: 0,
+        },
+        {
+          id: 'rule_2',
+          keyword: 'الأسعار',
+          replyText: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
+          reply: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
+          matchType: 'contains',
+          match: 'contains',
+          scope: 'all',
+          isEnabled: true,
+          timesTriggered: 0,
+          used_count: 0,
+          last_used: 0,
+        },
+      ];
+
+  const persistAutoReplies = () => {
+    const curr = loadSettingsFromDisk();
+    curr.auto_replies = autoReplyRulesStore;
+    curr.auto_replies_enabled = autoRepliesEnabled;
+    saveSettingsToDisk(curr);
+  };
+
+  let sentBatchesStore: any[] = loadBatchesFromDisk();
+  if (!sentBatchesStore || sentBatchesStore.length === 0) {
+    sentBatchesStore = [
+      {
+        id: 'batch_101',
+        text: 'السلام عليكم ورحمة الله، يتوفر لدينا خدمات دعم أكاديمي متخصصة 📚',
+        hasImages: false,
+        imagesCount: 0,
+        groupsCount: 3,
+        targets: [
+          { chatId: '-1001749201928', chatTitle: 'قروب المطورين العربي', messageId: '8901' },
+          { chatId: '-1001594839201', chatTitle: 'منصة التقنية والذكاء الاصطناعي', messageId: '8902' },
+          { chatId: '-1001892019283', chatTitle: 'ملتقى رواد الأعمال', messageId: '8903' },
+        ],
+        date: '2026-09-04',
+        timestamp: '10:45 AM',
+      },
+    ];
+    saveBatchesToDisk(sentBatchesStore);
+  }
+
+  // Real Auto Reply Handler Function
+  async function handleAutoReplyForMessage(
+    client: TelegramClient,
+    msg: any,
+    meta: { chatId: string; peerIdStr: string; senderId: string; senderName: string; text: string }
+  ) {
+    if (!autoRepliesEnabled) return;
+    const rawText = (meta.text || '').trim();
+    if (!rawText) return;
+    const normalizedText = normalizeArabicText(rawText);
+
+    // Determine chat scope
+    const isPrivate = !meta.chatId.startsWith('chat_-') && !meta.peerIdStr.startsWith('-') && !msg.isGroup && !msg.isChannel;
+    const isGroup = !isPrivate;
+
+    for (const rule of autoReplyRulesStore) {
+      if (!rule.isEnabled) continue;
+
+      // Scope check
+      if (rule.scope === 'private' && !isPrivate) continue;
+      if (rule.scope === 'groups' && !isGroup) continue;
+
+      let isMatch = false;
+      const ruleKw = (rule.keyword || '').trim();
+      const normalizedKw = normalizeArabicText(ruleKw);
+
+      if (rule.matchType === 'exact' || rule.match === 'exact') {
+        isMatch = normalizedText === normalizedKw || rawText.toLowerCase() === ruleKw.toLowerCase();
+      } else if (rule.matchType === 'regex' || rule.match === 'regex') {
+        try {
+          const re = new RegExp(ruleKw, 'i');
+          isMatch = re.test(rawText);
+        } catch (_) {
+          isMatch = false;
+        }
+      } else {
+        // contains
+        isMatch = normalizedText.includes(normalizedKw) || rawText.toLowerCase().includes(ruleKw.toLowerCase());
+      }
+
+      if (isMatch) {
+        console.log(`[AutoReply] 🤖 Triggered rule "${rule.keyword}" for chat "${meta.chatId}"`);
+        try {
+          const replyContent = rule.replyText || rule.reply || '';
+          if (!replyContent) continue;
+
+          const peer = await resolvePeerTarget(client, meta.chatId);
+          await client.sendMessage(peer, {
+            message: replyContent,
+            replyTo: msg.id,
+          });
+
+          // Update usage statistics
+          rule.timesTriggered = (rule.timesTriggered || 0) + 1;
+          rule.used_count = (rule.used_count || 0) + 1;
+          rule.last_used = Date.now();
+          persistAutoReplies();
+
+          io.emit('auto_reply_triggered', {
+            ruleId: rule.id,
+            chatId: meta.chatId,
+            messageId: msg.id,
+            replyText: replyContent,
+            chatTitle: meta.senderName,
+            timestamp: Date.now(),
+          });
+          break; // One auto-reply per incoming message
+        } catch (replyErr: any) {
+          console.warn(`[AutoReply] Failed to send auto-reply to ${meta.chatId}:`, replyErr?.message || replyErr);
+        }
+      }
+    }
+  }
+
   // Helper to safely configure TelegramClient with log level, error boundary, and updates listeners
   const configureTelegramClient = (client: TelegramClient, sessionKey?: string): TelegramClient => {
     try {
@@ -819,6 +1002,21 @@ async function startServer() {
                 }
               }
             }
+          }
+
+          // ==============================================================
+          // AUTO REPLIES ENGINE (AUTOMATIC, REAL GRAMJS RESPONSE)
+          // ==============================================================
+          if (!isOut && !msg.out && autoRepliesEnabled && textSnippet) {
+            handleAutoReplyForMessage(client, msg, {
+              chatId,
+              peerIdStr,
+              senderId,
+              senderName,
+              text: textSnippet,
+            }).catch((err) => {
+              console.warn('[AutoReply] Handler error:', err);
+            });
           }
         } catch (eventErr) {
           console.warn('[TelegramClient] Event handler error:', eventErr);
@@ -1139,13 +1337,22 @@ async function startServer() {
       sessionFailureCooldowns.set(sessionKey, Date.now());
     }
 
-    // 3. Fallback to any active authenticated client in memory if only 1 exists
-    if (authenticatedTelegramClients.size === 1) {
-      const singleClient = authenticatedTelegramClients.values().next().value;
-      if (singleClient && singleClient.connected) {
-        const isAuth = await singleClient.checkAuthorization().catch(() => false);
-        if (isAuth) return singleClient;
+    // 3. Fallback to any active authenticated client in memory
+    for (const client of authenticatedTelegramClients.values()) {
+      if (client && client.connected) {
+        const isAuth = await client.checkAuthorization().catch(() => false);
+        if (isAuth) return client;
       }
+    }
+    for (const sess of realTelegramSessions.values()) {
+      if (sess.client && sess.client.connected) {
+        const isAuth = await sess.client.checkAuthorization().catch(() => false);
+        if (isAuth) return sess.client;
+      }
+    }
+    if (mainTelegramClient && mainTelegramClient.connected) {
+      const isAuth = await mainTelegramClient.checkAuthorization().catch(() => false);
+      if (isAuth) return mainTelegramClient;
     }
 
     return null;
@@ -4294,15 +4501,20 @@ async function startServer() {
   });
 
   // =========================================================================
-  // 2. الانضمام التلقائي المتقدم ورادار الروابط (Auto Join Advanced API)
+  // 2. الانضمام التلقائي المتقدم ورادار الروابط (Auto Join Advanced API - Real GramJS)
   // =========================================================================
   interface AutoJoinTaskItem {
     id: string;
     url: string;
     type: 'public' | 'private';
     status: 'pending' | 'joining' | 'joined' | 'already_member' | 'invalid';
+    title?: string;
     error?: string;
   }
+
+  let autoJoinHistory: number[] = []; // Timestamps of joins in the last 3 hours (rate limiting: max 25 / 3h)
+  let isAutoJoinActive = false;
+  let autoJoinCancelRequested = false;
 
   let autoJoinState = {
     running: false,
@@ -4313,6 +4525,7 @@ async function startServer() {
     already: 0,
     fail: 0,
     items: [] as AutoJoinTaskItem[],
+    recentJoinsCount: 0,
   };
 
   app.post('/api/auto_join/advanced', async (req, res) => {
@@ -4325,6 +4538,7 @@ async function startServer() {
       rawLinks = data.links.split(/[\s,\n]+/).filter(Boolean);
     }
 
+    // Extract links from external web page if requested
     if (data.fetch_external && typeof data.web_url === 'string' && data.web_url.startsWith('http')) {
       try {
         const response = await fetch(data.web_url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -4344,6 +4558,10 @@ async function startServer() {
       status: 'pending',
     }));
 
+    // Clean up join history older than 3 hours
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    autoJoinHistory = autoJoinHistory.filter((t) => t > threeHoursAgo);
+
     autoJoinState = {
       running: true,
       paused: false,
@@ -4353,16 +4571,155 @@ async function startServer() {
       already: 0,
       fail: 0,
       items: tasks,
+      recentJoinsCount: autoJoinHistory.length,
     };
 
+    autoJoinCancelRequested = false;
+    isAutoJoinActive = true;
+
+    // Send immediate HTTP response so the UI does not block
     res.json({
       success: true,
       message: `تم بدء فحص وانضمام ${tasks.length} رابط بنجاح`,
       state: autoJoinState,
     });
+
+    // Execute real GramJS joining in background asynchronously
+    (async () => {
+      const client = await getClientForSession(data.sessionString, data.phone);
+      if (!client) {
+        console.warn('[AutoJoin] No authenticated Telegram client found');
+        autoJoinState.running = false;
+        io.emit('auto_join_result', { success: false, message: 'لا يوجد حساب تيليجرام نشط', state: autoJoinState });
+        return;
+      }
+
+      // Fetch user's existing dialogs to skip already joined chats
+      const existingPeerIds = new Set<string>();
+      try {
+        const dialogs = await client.getDialogs({ limit: 150 }).catch(() => []);
+        for (const d of dialogs) {
+          if (d.id) existingPeerIds.add(String(d.id).replace(/^-100/, '').replace(/^-/, ''));
+        }
+      } catch (_) {}
+
+      const delayMs = Math.max(3000, Number(data.delay_seconds || 6) * 1000);
+
+      for (let i = 0; i < tasks.length; i++) {
+        if (autoJoinCancelRequested) {
+          console.log('[AutoJoin] Cancellation requested. Stopping join queue.');
+          break;
+        }
+
+        const task = tasks[i];
+        task.status = 'joining';
+        autoJoinState.items = [...tasks];
+        io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
+
+        // Check 3-hour rate limit
+        const currentThreeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+        autoJoinHistory = autoJoinHistory.filter((t) => t > currentThreeHoursAgo);
+        if (autoJoinHistory.length >= 25) {
+          task.status = 'invalid';
+          task.error = 'توقف تلقائي لحماية الحساب: تم الوصول للحد الأقصى (25 انضمام خلال 3 ساعات)';
+          autoJoinState.fail++;
+          autoJoinState.done++;
+          continue;
+        }
+
+        try {
+          if (task.type === 'private') {
+            // Private invite link
+            const hashMatch = task.url.match(/(?:\+|joinchat\/|invite=)([a-zA-Z0-9_-]+)/);
+            const hash = hashMatch ? hashMatch[1] : task.url.replace(/^.*[+/]/, '');
+
+            try {
+              const resJoin: any = await client.invoke(new Api.messages.ImportChatInvite({ hash }));
+              task.status = 'joined';
+              task.title = resJoin?.chats?.[0]?.title || 'مجموعة خاصة';
+              autoJoinState.success++;
+              autoJoinHistory.push(Date.now());
+            } catch (invErr: any) {
+              const errMsg = invErr?.errorMessage || invErr?.message || '';
+              if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+                task.status = 'already_member';
+                autoJoinState.already++;
+              } else if (errMsg.includes('INVITE_HASH_EXPIRED')) {
+                task.status = 'invalid';
+                task.error = 'رابط الدعوة منتهي الصلاحية';
+                autoJoinState.fail++;
+              } else if (errMsg.includes('FLOOD_WAIT')) {
+                task.status = 'invalid';
+                task.error = `قيود تيليجرام (FloodWait): ${errMsg}`;
+                autoJoinState.fail++;
+                break; // Stop immediately on flood wait
+              } else {
+                task.status = 'invalid';
+                task.error = errMsg || 'فشل الانضمام';
+                autoJoinState.fail++;
+              }
+            }
+          } else {
+            // Public username or link
+            const cleanTarget = task.url.replace(/^(?:https?:\/\/)?(?:t\.me\/|telegram\.me\/)?@?/, '').split('/')[0];
+            const peer = await resolvePeerTarget(client, cleanTarget);
+            try {
+              const resJoin: any = await client.invoke(new Api.channels.JoinChannel({ channel: peer }));
+              task.status = 'joined';
+              task.title = resJoin?.chats?.[0]?.title || cleanTarget;
+              autoJoinState.success++;
+              autoJoinHistory.push(Date.now());
+            } catch (pubErr: any) {
+              const pubErrMsg = pubErr?.errorMessage || pubErr?.message || '';
+              if (pubErrMsg.includes('USER_ALREADY_PARTICIPANT')) {
+                task.status = 'already_member';
+                autoJoinState.already++;
+              } else if (pubErrMsg.includes('FLOOD_WAIT')) {
+                task.status = 'invalid';
+                task.error = `قيود تيليجرام (FloodWait): ${pubErrMsg}`;
+                autoJoinState.fail++;
+                break;
+              } else {
+                task.status = 'invalid';
+                task.error = pubErrMsg || 'فشل الانضمام للقناة أو المجموعة';
+                autoJoinState.fail++;
+              }
+            }
+          }
+        } catch (execErr: any) {
+          task.status = 'invalid';
+          task.error = execErr?.message || 'خطأ غير متوقع';
+          autoJoinState.fail++;
+        }
+
+        autoJoinState.done++;
+        autoJoinState.recentJoinsCount = autoJoinHistory.length;
+        io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
+
+        // Delay between joins
+        if (i < tasks.length - 1 && !autoJoinCancelRequested) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+
+      autoJoinState.running = false;
+      isAutoJoinActive = false;
+      io.emit('auto_join_result', {
+        success: true,
+        message: `اكتمل فحص الروابط. انضمام ناجح: ${autoJoinState.success}، عضو مسبقاً: ${autoJoinState.already}، إخفاق: ${autoJoinState.fail}`,
+        state: autoJoinState,
+      });
+    })().catch((err) => {
+      console.warn('[AutoJoin] Background loop error:', err);
+      autoJoinState.running = false;
+      isAutoJoinActive = false;
+    });
   });
 
   app.get('/api/auto_join/status', (req, res) => {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    autoJoinHistory = autoJoinHistory.filter((t) => t > threeHoursAgo);
+    autoJoinState.recentJoinsCount = autoJoinHistory.length;
     res.json({
       success: true,
       ...autoJoinState,
@@ -4370,63 +4727,56 @@ async function startServer() {
   });
 
   app.post('/api/auto_join/stop', (req, res) => {
+    autoJoinCancelRequested = true;
     autoJoinState.running = false;
+    isAutoJoinActive = false;
     res.json({
       success: true,
-      message: 'تم إيقاف الانضمام التلقائي',
+      message: 'تم طلب إيقاف الانضمام التلقائي بنجاح',
       state: autoJoinState,
     });
   });
 
   // =========================================================================
-  // 3. القواعد والردود التلقائية (Auto Responder API)
+  // 3. القواعد والردود التلقائية (Auto Responder API - Real GramJS)
   // =========================================================================
-  let autoReplyRulesStore = [
-    {
-      id: 'rule_1',
-      keyword: 'السلام عليكم',
-      replyText: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
-      matchType: 'contains',
-      scope: 'all',
-      isEnabled: true,
-      timesTriggered: 14,
-    },
-    {
-      id: 'rule_2',
-      keyword: 'الأسعار',
-      replyText: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
-      matchType: 'contains',
-      scope: 'all',
-      isEnabled: true,
-      timesTriggered: 8,
-    },
-  ];
-
   app.get('/api/auto_reply/rules', (req, res) => {
     res.json({
       success: true,
+      enabled: autoRepliesEnabled,
       rules: autoReplyRulesStore,
     });
   });
 
   app.post('/api/add_auto_reply', (req, res) => {
     const data = req.body || {};
+    const replyContent = (data.replyText || data.reply || '').trim();
+    const keyword = (data.keyword || '').trim();
+
+    if (!keyword || !replyContent) {
+      return res.status(400).json({ success: false, message: 'الكلمة المفتاحية ونص الرد مطلوبان' });
+    }
+
     const newRule = {
       id: `rule_${Date.now()}`,
-      keyword: (data.keyword || '').trim(),
-      replyText: (data.reply || data.replyText || '').trim(),
+      keyword,
+      replyText: replyContent,
+      reply: replyContent,
       matchType: data.matchType || data.match || 'contains',
+      match: data.matchType || data.match || 'contains',
       scope: data.scope || 'all',
       isEnabled: true,
       timesTriggered: 0,
+      used_count: 0,
+      last_used: 0,
     };
-    if (!newRule.keyword || !newRule.replyText) {
-      return res.status(400).json({ success: false, message: 'الكلمة المفتاحية ونص الرد مطلوبان' });
-    }
+
     autoReplyRulesStore.push(newRule);
+    persistAutoReplies();
+
     res.json({
       success: true,
-      message: 'تمت إضافة قاعدة الرد التلقائي بنجاح',
+      message: 'تمت إضافة قاعدة الرد التلقائي وحفظها في settings.json بنجاح',
       rule: newRule,
     });
   });
@@ -4437,14 +4787,25 @@ async function startServer() {
     if (!rule) {
       return res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
     }
+
     if (data.keyword) rule.keyword = data.keyword;
-    if (data.replyText || data.reply) rule.replyText = data.replyText || data.reply;
-    if (data.matchType || data.match) rule.matchType = data.matchType || data.match;
+    const rep = data.replyText || data.reply;
+    if (rep) {
+      rule.replyText = rep;
+      rule.reply = rep;
+    }
+    if (data.matchType || data.match) {
+      rule.matchType = data.matchType || data.match;
+      rule.match = data.matchType || data.match;
+    }
     if (data.scope) rule.scope = data.scope;
     if (typeof data.isEnabled === 'boolean') rule.isEnabled = data.isEnabled;
+
+    persistAutoReplies();
+
     res.json({
       success: true,
-      message: 'تم تحديث القاعدة بنجاح',
+      message: 'تم تحديث القاعدة وحفظها في settings.json بنجاح',
       rule,
     });
   });
@@ -4452,9 +4813,10 @@ async function startServer() {
   app.post('/api/delete_auto_reply', (req, res) => {
     const data = req.body || {};
     autoReplyRulesStore = autoReplyRulesStore.filter((r) => r.id !== data.id);
+    persistAutoReplies();
     res.json({
       success: true,
-      message: 'تم حذف القاعدة',
+      message: 'تم حذف القاعدة بنجاح',
     });
   });
 
@@ -4463,31 +4825,29 @@ async function startServer() {
     const rule = autoReplyRulesStore.find((r) => r.id === data.id);
     if (rule) {
       rule.isEnabled = !rule.isEnabled;
+      persistAutoReplies();
       return res.json({ success: true, rule });
     }
     res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
   });
 
-  // =========================================================================
-  // 4. رسائلي وسجل الدفعات (Sent Batches API)
-  // =========================================================================
-  let sentBatchesStore: any[] = [
-    {
-      id: 'batch_101',
-      text: 'السلام عليكم ورحمة الله، يتوفر لدينا خدمات دعم أكاديمي متخصصة 📚',
-      hasImages: false,
-      imagesCount: 0,
-      groupsCount: 3,
-      targets: [
-        { chatId: '-1001749201928', chatTitle: 'قروب المطورين العربي', messageId: 'msg_8901' },
-        { chatId: '-1001594839201', chatTitle: 'منصة التقنية والذكاء الاصطناعي', messageId: 'msg_8902' },
-        { chatId: '-1001892019283', chatTitle: 'ملتقى رواد الأعمال', messageId: 'msg_8903' },
-      ],
-      date: new Date().toLocaleDateString(),
-      timestamp: '10:45 AM',
-    },
-  ];
+  app.post('/api/auto_reply/toggle_global', (req, res) => {
+    const { enabled } = req.body || {};
+    if (typeof enabled === 'boolean') {
+      autoRepliesEnabled = enabled;
+    } else {
+      autoRepliesEnabled = !autoRepliesEnabled;
+    }
+    persistAutoReplies();
+    res.json({
+      success: true,
+      autoRepliesEnabled,
+    });
+  });
 
+  // =========================================================================
+  // 4. رسائلي وسجل الدفعات (Sent Batches API - Real GramJS editMessage & deleteMessages)
+  // =========================================================================
   app.get('/api/batches', (req, res) => {
     res.json({
       success: true,
@@ -4495,32 +4855,399 @@ async function startServer() {
     });
   });
 
-  app.post('/api/batches/edit', (req, res) => {
+  app.post('/api/batches/edit', async (req, res) => {
     const data = req.body || {};
-    const { batch_id, new_text } = data;
+    const { batch_id, new_text, sessionString, phone } = data;
+
     const batch = sentBatchesStore.find((b) => b.id === batch_id);
     if (!batch) {
       return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
     }
+
+    const client = await getClientForSession(sessionString, phone);
+    let successCount = 0;
+    let failCount = 0;
+
+    if (client) {
+      for (const target of batch.targets || []) {
+        try {
+          const peer = await resolvePeerTarget(client, target.chatId);
+          await client.editMessage(peer, {
+            message: Number(target.messageId),
+            text: new_text,
+          });
+          successCount++;
+        } catch (editErr: any) {
+          console.warn(`[BatchEdit] Failed to edit message ${target.messageId} in ${target.chatId}:`, editErr?.message || editErr);
+          failCount++;
+        }
+      }
+    }
+
     batch.text = new_text;
+    saveBatchesToDisk(sentBatchesStore);
+
     res.json({
       success: true,
-      message: `تم تعديل الرسالة بنجاح في كافة المجموعات (${batch.targets.length} مجموعة)`,
+      message: `تم تعديل الرسالة بنجاح (نجح: ${successCount}، تعذر: ${failCount})`,
       batch,
     });
   });
 
-  app.post('/api/batches/delete', (req, res) => {
+  app.post('/api/batches/delete', async (req, res) => {
     const data = req.body || {};
-    const { batch_id } = data;
+    const { batch_id, sessionString, phone } = data;
+
     const idx = sentBatchesStore.findIndex((b) => b.id === batch_id);
     if (idx === -1) {
       return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
     }
+
     const removed = sentBatchesStore.splice(idx, 1)[0];
+    saveBatchesToDisk(sentBatchesStore);
+
+    const client = await getClientForSession(sessionString, phone);
+    let deletedCount = 0;
+
+    if (client) {
+      for (const target of removed.targets || []) {
+        try {
+          const peer = await resolvePeerTarget(client, target.chatId);
+          await client.deleteMessages(peer, [Number(target.messageId)], { revoke: true });
+          deletedCount++;
+        } catch (delErr: any) {
+          console.warn(`[BatchDelete] Failed to delete message ${target.messageId} in ${target.chatId}:`, delErr?.message || delErr);
+        }
+      }
+    }
+
     res.json({
       success: true,
-      message: `تم حذف وسحب الرسائل من كافة المجموعات (${removed.targets.length} مجموعة)`,
+      message: `تم سحب وحذف الرسائل من تيليجرام (${deletedCount}/${removed.targets.length} مجموعة)`,
+    });
+  });
+
+  // =========================================================================
+  // CORE SEND BATCH & SMART (SALAM) ENGINE & REPORT TO 'me'
+  // =========================================================================
+  async function executeServerSendBatch(params: {
+    text: string;
+    targetChatIds: string[];
+    protectionMode?: string;
+    smart_required_messages?: number;
+    smart_wait_seconds?: number;
+    sessionString?: string;
+    phone?: string;
+  }): Promise<{
+    batchId: string;
+    totalSuccess: number;
+    totalFailed: number;
+    targets: Array<{ chatId: string; messageId: string; chatTitle: string; status: string }>;
+  }> {
+    const {
+      text,
+      targetChatIds,
+      protectionMode = 'salam',
+      smart_required_messages = 3,
+      smart_wait_seconds = 30,
+      sessionString,
+      phone,
+    } = params;
+
+    const client = await getClientForSession(sessionString, phone);
+    if (!client) {
+      throw new Error('لا يوجد حساب تيليجرام مصادق عليه لإرسال الدفعة');
+    }
+
+    const batchId = `batch_${Date.now()}`;
+    const targetResults: Array<{ chatId: string; messageId: string; chatTitle: string; status: string }> = [];
+
+    for (const chatId of targetChatIds) {
+      try {
+        const peer = await resolvePeerTarget(client, chatId);
+
+        if (protectionMode === 'salam') {
+          // 1. Send "السلام عليكم" first
+          console.log(`[SalamMode] 1. Sending greeting to ${chatId}...`);
+          const greetingMsg: any = await client.sendMessage(peer, {
+            message: 'السلام عليكم',
+          });
+
+          // 2. Wait 30 seconds
+          console.log(`[SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions...`);
+          await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
+
+          // 3. Check for 3 new messages from other participants
+          let interactionPassed = false;
+          try {
+            const recentMsgs: any = await client.getMessages(peer, {
+              limit: 20,
+              minId: greetingMsg.id,
+            });
+            const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
+            console.log(`[SalamMode] Found ${othersMsgs.length} new messages from participants in ${chatId}`);
+            if (othersMsgs.length >= smart_required_messages) {
+              interactionPassed = true;
+            }
+          } catch (chkErr) {
+            console.warn('[SalamMode] Check messages error:', chkErr);
+            interactionPassed = true; // Fallback to proceed if check fails
+          }
+
+          if (interactionPassed) {
+            // 4. Edit to original text
+            console.log(`[SalamMode] 4. Interaction verified. Editing greeting to original text in ${chatId}...`);
+            await client.editMessage(peer, {
+              message: greetingMsg.id,
+              text,
+            });
+            targetResults.push({
+              chatId,
+              messageId: String(greetingMsg.id),
+              chatTitle: chatId,
+              status: 'success',
+            });
+          } else {
+            // Withdraw greeting if not enough interaction
+            console.log(`[SalamMode] Low interaction in ${chatId}. Withdrawing greeting message...`);
+            await client.deleteMessages(peer, [greetingMsg.id], { revoke: true }).catch(() => {});
+            targetResults.push({
+              chatId,
+              messageId: String(greetingMsg.id),
+              chatTitle: chatId,
+              status: 'withdrawn_low_interaction',
+            });
+          }
+        } else {
+          // Standard direct send
+          const sent: any = await client.sendMessage(peer, { message: text });
+          targetResults.push({
+            chatId,
+            messageId: String(sent.id),
+            chatTitle: chatId,
+            status: 'success',
+          });
+        }
+      } catch (sendErr: any) {
+        console.warn(`[SendBatch] Error sending to ${chatId}:`, sendErr?.message || sendErr);
+        targetResults.push({
+          chatId,
+          messageId: '0',
+          chatTitle: chatId,
+          status: 'failed',
+        });
+      }
+    }
+
+    const successTargets = targetResults.filter((t) => t.status === 'success');
+    const failTargets = targetResults.filter((t) => t.status !== 'success');
+
+    // Create batch and save to disk
+    const newBatch = {
+      id: batchId,
+      text,
+      hasImages: false,
+      imagesCount: 0,
+      groupsCount: successTargets.length,
+      targets: successTargets,
+      date: new Date().toISOString().split('T')[0],
+      timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+    };
+
+    if (successTargets.length > 0) {
+      sentBatchesStore.unshift(newBatch);
+      saveBatchesToDisk(sentBatchesStore);
+    }
+
+    // Send final report to 'me' (الرسائل المحفوظة)
+    try {
+      const modeLabel =
+        protectionMode === 'salam'
+          ? 'الوضع الذكي (السلام عليكم + انتظار 30ث ورصد 3 رسائل)'
+          : 'إرسال مباشر';
+
+      const reportContent =
+        `📊 *تقرير إرسال الدفعة الحقيقي* 📊\n\n` +
+        `🆔 *معرف الدفعة:* \`${batchId}\`\n` +
+        `🛡️ *الوضع:* ${modeLabel}\n` +
+        `✅ *المجموعات الناجحة:* ${successTargets.length}\n` +
+        `❌ *المجموعات المخفقة/المسحوبة:* ${failTargets.length}\n` +
+        `🕒 *الوقت:* ${new Date().toLocaleTimeString('ar-EG')}\n\n` +
+        `💬 *نص الإعلان:*\n${text.substring(0, 180)}${text.length > 180 ? '...' : ''}`;
+
+      await client.sendMessage('me', { message: reportContent });
+    } catch (repErr) {
+      console.warn('[SendBatch] Report to me error:', repErr);
+    }
+
+    io.emit('new_batch_sent', newBatch);
+
+    return {
+      batchId,
+      totalSuccess: successTargets.length,
+      totalFailed: failTargets.length,
+      targets: targetResults,
+    };
+  }
+
+  // Sender batch endpoint
+  app.post('/api/sender/batch', async (req, res) => {
+    try {
+      const data = req.body || {};
+      const {
+        text,
+        targetChatIds,
+        protectionMode = 'salam',
+        smart_required_messages = 3,
+        smart_wait_seconds = 30,
+        sessionString,
+        phone,
+      } = data;
+
+      if (!text || !Array.isArray(targetChatIds) || targetChatIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'النص وقائمة المجموعات مطلوبة' });
+      }
+
+      const result = await executeServerSendBatch({
+        text,
+        targetChatIds,
+        protectionMode,
+        smart_required_messages,
+        smart_wait_seconds,
+        sessionString,
+        phone,
+      });
+
+      res.json({
+        success: true,
+        message: `تم إرسال الدفعة بنجاح (ناجح: ${result.totalSuccess}، مخفق/مسحوب: ${result.totalFailed})`,
+        ...result,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل إرسال الدفعة' });
+    }
+  });
+
+  // =========================================================================
+  // REAL SERVER-SIDE SCHEDULED SENDER
+  // =========================================================================
+  let scheduledTimer: NodeJS.Timeout | null = null;
+  let scheduledState = {
+    active: false,
+    text: '',
+    targetChatIds: [] as string[],
+    intervalMinutes: 15,
+    protectionMode: 'salam',
+    smart_required_messages: 3,
+    smart_wait_seconds: 30,
+    roundsExecuted: 0,
+    lastRunTime: 0,
+    nextRunTime: 0,
+    sessionString: '',
+    phone: '',
+  };
+
+  app.post('/api/sender/schedule/start', async (req, res) => {
+    const data = req.body || {};
+    const {
+      text,
+      targetChatIds,
+      intervalMinutes = 15,
+      protectionMode = 'salam',
+      smart_required_messages = 3,
+      smart_wait_seconds = 30,
+      sessionString,
+      phone,
+    } = data;
+
+    if (!text || !Array.isArray(targetChatIds) || targetChatIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'النص وقائمة المجموعات مطلوبة للجدولة' });
+    }
+
+    if (scheduledTimer) {
+      clearInterval(scheduledTimer);
+      scheduledTimer = null;
+    }
+
+    const intervalVal = Math.max(1, Number(intervalMinutes));
+    scheduledState = {
+      active: true,
+      text,
+      targetChatIds,
+      intervalMinutes: intervalVal,
+      protectionMode,
+      smart_required_messages: Number(smart_required_messages) || 3,
+      smart_wait_seconds: Number(smart_wait_seconds) || 30,
+      roundsExecuted: 0,
+      lastRunTime: 0,
+      nextRunTime: Date.now() + intervalVal * 60 * 1000,
+      sessionString: sessionString || '',
+      phone: phone || '',
+    };
+
+    // Trigger first execution in background
+    executeServerSendBatch({
+      text,
+      targetChatIds,
+      protectionMode,
+      smart_required_messages: scheduledState.smart_required_messages,
+      smart_wait_seconds: scheduledState.smart_wait_seconds,
+      sessionString,
+      phone,
+    })
+      .then(() => {
+        scheduledState.roundsExecuted++;
+        scheduledState.lastRunTime = Date.now();
+        io.emit('scheduled_sender_status', scheduledState);
+      })
+      .catch((e) => console.warn('[Scheduler] First run error:', e));
+
+    // Start persistent server interval
+    scheduledTimer = setInterval(async () => {
+      console.log(`[Scheduler] ⏰ Executing scheduled round #${scheduledState.roundsExecuted + 1}...`);
+      scheduledState.roundsExecuted++;
+      scheduledState.lastRunTime = Date.now();
+      scheduledState.nextRunTime = Date.now() + intervalVal * 60 * 1000;
+      io.emit('scheduled_sender_status', scheduledState);
+
+      await executeServerSendBatch({
+        text: scheduledState.text,
+        targetChatIds: scheduledState.targetChatIds,
+        protectionMode: scheduledState.protectionMode,
+        smart_required_messages: scheduledState.smart_required_messages,
+        smart_wait_seconds: scheduledState.smart_wait_seconds,
+        sessionString: scheduledState.sessionString,
+        phone: scheduledState.phone,
+      }).catch((e) => console.warn('[Scheduler] Scheduled round error:', e));
+    }, intervalVal * 60 * 1000);
+
+    res.json({
+      success: true,
+      message: `تم تفعيل الجدولة الحقيقية في الخادم كل ${intervalVal} دقيقة بنجاح`,
+      scheduledState,
+    });
+  });
+
+  app.post('/api/sender/schedule/stop', (req, res) => {
+    if (scheduledTimer) {
+      clearInterval(scheduledTimer);
+      scheduledTimer = null;
+    }
+    scheduledState.active = false;
+    scheduledState.nextRunTime = 0;
+    io.emit('scheduled_sender_status', scheduledState);
+
+    res.json({
+      success: true,
+      message: 'تم إيقاف الجدولة بنجاح',
+      scheduledState,
+    });
+  });
+
+  app.get('/api/sender/schedule/status', (req, res) => {
+    res.json({
+      success: true,
+      scheduledState,
     });
   });
 

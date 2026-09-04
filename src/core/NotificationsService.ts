@@ -28,6 +28,7 @@ import {
   RotatingSendLog,
 } from '../types';
 import { backgroundSyncService } from './BackgroundSyncService';
+import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 
 export class NotificationsService {
   private static instance: NotificationsService;
@@ -292,46 +293,91 @@ export class NotificationsService {
     let successCount = 0;
     let failedCount = 0;
 
-    for (const target of targetObjs) {
-      // 1. Check protection & clean text
-      let preparedText = params.text;
-      if (params.protectionMode === 'smart_clean' || params.protectionMode === 'permanent_clean') {
-        preparedText = preparedText
-          .replace(/(?:https?:\/\/|t\.me\/)[^\s]+/gi, '')
-          .replace(/\b\d{8,14}\b/g, '')
-          .trim();
-      }
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
 
-      if (params.protectionMode === 'salam') {
-        // Salam mechanism: simulate first greeting then editing
-        preparedText = 'السلام عليكم ورحمة الله وبركاته';
-      }
+    // If scheduled sending is enabled, start the real server-side scheduler
+    if (params.isScheduled) {
+      fetch('/api/sender/schedule/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: params.text,
+          targetChatIds: targetObjs.map((t) => t.id),
+          intervalMinutes: params.intervalMinutes || 15,
+          protectionMode: params.protectionMode,
+          smart_required_messages: 3,
+          smart_wait_seconds: 30,
+          sessionString,
+          phone,
+        }),
+      }).catch((schErr) => console.warn('[NotificationsService] Schedule API error:', schErr));
+    }
 
-      try {
-        await connectionsManager.sendRequest({
-          _: 'TL_messages_sendMessage',
-          peer_id: target.id,
-          message: preparedText,
-          random_id: Math.floor(Math.random() * 1000000),
-        });
-
-        if (params.onMessageCreated) {
-          params.onMessageCreated(target.id, preparedText, params.images[0]);
+    // Call real backend batch sender endpoint with full Salam mode execution & report to 'me'
+    try {
+      const res = await fetch('/api/sender/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: params.text,
+          targetChatIds: targetObjs.map((t) => t.id),
+          protectionMode: params.protectionMode,
+          smart_required_messages: 3,
+          smart_wait_seconds: 30,
+          sessionString,
+          phone,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data && data.success) {
+        successCount = data.totalSuccess || 0;
+        failedCount = data.totalFailed || 0;
+        if (Array.isArray(data.targets)) {
+          for (const resTarget of data.targets) {
+            const foundObj = targetObjs.find((t) => t.id === resTarget.chatId);
+            if (foundObj) {
+              foundObj.status = resTarget.status === 'success' ? 'sent' : 'failed';
+              if (resTarget.messageId && resTarget.messageId !== '0') {
+                foundObj.messageId = resTarget.messageId;
+              }
+            }
+          }
         }
-        target.status = 'sent';
-        successCount++;
-      } catch (err: any) {
-        const errText = err?.text || err?.message || '';
-        if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || err?.code === 401) {
+      } else {
+        // Fallback to connectionsManager direct request
+        for (const target of targetObjs) {
+          try {
+            await connectionsManager.sendRequest({
+              _: 'TL_messages_sendMessage',
+              peer_id: target.id,
+              message: params.text,
+              random_id: Math.floor(Math.random() * 1000000),
+            });
+            target.status = 'sent';
+            successCount++;
+          } catch (e: any) {
+            target.status = 'failed';
+            failedCount++;
+          }
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[NotificationsService] Batch API error, fallback:', apiErr);
+      for (const target of targetObjs) {
+        try {
+          await connectionsManager.sendRequest({
+            _: 'TL_messages_sendMessage',
+            peer_id: target.id,
+            message: params.text,
+            random_id: Math.floor(Math.random() * 1000000),
+          });
+          target.status = 'sent';
+          successCount++;
+        } catch (e: any) {
           target.status = 'failed';
-          target.error = 'AUTH_KEY_UNREGISTERED';
           failedCount++;
-          this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
-          break;
         }
-        target.status = 'failed';
-        target.error = err?.text || 'SEND_ERROR';
-        failedCount++;
       }
     }
 
@@ -431,13 +477,28 @@ export class NotificationsService {
     batch.text = newText;
     await telegramDb.myMessageBatches.update(batchId, { text: newText }).catch(() => {});
 
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
+
+    // Invoke real GramJS edit endpoint on the server
+    fetch('/api/batches/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        batch_id: batchId,
+        new_text: newText,
+        sessionString,
+        phone,
+      }),
+    }).catch((e) => console.warn('[NotificationsService] Server batch edit warning:', e));
+
     for (const target of batch.targets) {
       await connectionsManager.sendRequest({
         _: 'TL_messages_editMessage',
         peer_id: target.chatId,
         id: target.messageId,
         message: newText,
-      });
+      }).catch(() => {});
     }
 
     notificationsController.postNotification({
@@ -457,13 +518,27 @@ export class NotificationsService {
     const batch = this.batchLogs[idx];
     await telegramDb.myMessageBatches.delete(batchId).catch(() => {});
 
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
+
+    // Invoke real GramJS delete endpoint on the server
+    fetch('/api/batches/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        batch_id: batchId,
+        sessionString,
+        phone,
+      }),
+    }).catch((e) => console.warn('[NotificationsService] Server batch delete warning:', e));
+
     for (const target of batch.targets) {
       await connectionsManager.sendRequest({
         _: 'TL_messages_deleteMessages',
         peer_id: target.chatId,
         id: target.messageId,
         revoke: true,
-      });
+      }).catch(() => {});
     }
 
     this.batchLogs.splice(idx, 1);
@@ -497,6 +572,21 @@ export class NotificationsService {
 
     this.autoJoinTasks = tasks;
     this.notifyStateChange();
+
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
+
+    // Invoke backend real GramJS auto join with 25/3h rate limiting
+    fetch('/api/auto_join/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        links,
+        delay_seconds: 5,
+        sessionString,
+        phone,
+      }),
+    }).catch((e) => console.warn('[AutoJoin] Backend API call warning:', e));
 
     let processed = 0;
     for (const task of tasks) {
@@ -568,6 +658,7 @@ export class NotificationsService {
 
   public stopAutoJoin() {
     this.isAutoJoiningActive = false;
+    fetch('/api/auto_join/stop', { method: 'POST' }).catch(() => {});
     this.notifyStateChange();
   }
 
