@@ -2352,12 +2352,20 @@ async function startServer() {
     } catch (entityErr: any) {
       // If getEntity threw an error (e.g. CHANNEL_PRIVATE or username lookup failure), check user's loaded dialogs
       try {
-        const dialogs = await client.getDialogs({ limit: 150 }).catch(() => []);
+        const dialogs = await client.getDialogs({ limit: 200 }).catch(() => []);
+        const targetCleanNum = clean.replace(/^-100/, '').replace(/^-/, '');
         const found = dialogs.find((d: any) => {
           const title = (d.title || '').toLowerCase();
           const uname = (d.entity?.username || '').toLowerCase();
           const targetLower = clean.toLowerCase();
-          return uname === targetLower || title === targetLower || String(d.id) === clean || String((d.entity as any)?.id) === clean;
+          const dCleanId = String((d.entity as any)?.id || d.id || '').replace(/^-100/, '').replace(/^-/, '');
+          return (
+            uname === targetLower ||
+            title === targetLower ||
+            String(d.id) === clean ||
+            String((d.entity as any)?.id) === clean ||
+            (targetCleanNum && dCleanId === targetCleanNum)
+          );
         });
         if (found && found.entity) {
           return found.entity;
@@ -3929,6 +3937,89 @@ async function startServer() {
       resolvedIdentifiers,
     });
   });
+
+  // =========================================================================
+  // نقطة النهاية لجلب جميع المجموعات والقنوات الحقيقية 100% عبر GramJS getDialogs
+  // =========================================================================
+  const handleGetAllGroups = async (req: express.Request, res: express.Response) => {
+    try {
+      const sessionString =
+        (req.body?.sessionString || req.query?.sessionString || req.headers['x-telegram-session']) as string;
+      const phone = (req.body?.phone || req.query?.phone || req.headers['x-telegram-phone']) as string;
+
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول بحسابك أولاً.',
+          groups: [],
+        });
+      }
+
+      console.log('[GramJS] Fetching real dialogs from Telegram cloud for get_all_groups (limit: 200)...');
+      const dialogs = await client.getDialogs({ limit: 200 });
+      const groupLinks: string[] = [];
+      const seenLinks = new Set<string>();
+
+      for (const dialog of dialogs) {
+        // تصفية: تشمل فقط المجموعات والمجموعات الفائقة والقنوات
+        if (!dialog.isGroup && !dialog.isChannel) {
+          continue;
+        }
+
+        // استبعاد المحادثات الخاصة والرسائل المحفوظة
+        if (
+          dialog.isUser ||
+          (dialog as any)?.name === 'Saved Messages' ||
+          (dialog as any)?.title === 'Saved Messages' ||
+          (dialog as any)?.title === 'الرسائل المحفوظة'
+        ) {
+          continue;
+        }
+
+        let link = '';
+        const entity: any = dialog.entity;
+        const username = entity?.username || (dialog as any)?.username;
+
+        if (username) {
+          // إذا كانت المجموعة/القناة عامة (لديها username)
+          const cleanUser = String(username).replace(/^@/, '').trim();
+          link = `https://t.me/${cleanUser}`;
+        } else {
+          // إذا كانت خاصة (بدون username): المعرف الرقمي بدون -100
+          const rawId = String(entity?.id || dialog.id || '');
+          const cleanId = rawId.replace(/^-100/, '').replace(/^-/, '').trim();
+          if (cleanId) {
+            link = `https://t.me/c/${cleanId}`;
+          }
+        }
+
+        if (link && !seenLinks.has(link)) {
+          seenLinks.add(link);
+          groupLinks.push(link);
+        }
+      }
+
+      console.log(`[GramJS] get_all_groups extracted ${groupLinks.length} real group/channel links.`);
+      return res.json({
+        success: true,
+        groups: groupLinks,
+        count: groupLinks.length,
+      });
+    } catch (err: any) {
+      console.error('[GramJS] get_all_groups error:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'FAILED_TO_FETCH_GROUPS',
+        message: `تعذر جلب المجموعات من تيليجرام: ${err?.message || 'خطأ غير معروف'}`,
+        groups: [],
+      });
+    }
+  };
+
+  app.get('/api/get_all_groups', handleGetAllGroups);
+  app.post('/api/get_all_groups', handleGetAllGroups);
 
   app.post('/api/send_now', async (req, res) => {
     const data = req.body || {};

@@ -255,6 +255,9 @@ export const SenderModal: React.FC = () => {
     messages,
     showToast,
     jumpToMessage,
+    currentUser,
+    accounts,
+    activeAccountId,
   } = useTelegram();
 
   const isOpen = activeModal === ('sender' as any) || activeModal === ('send-only' as any);
@@ -263,6 +266,7 @@ export const SenderModal: React.FC = () => {
   const [messageText, setMessageText] = useState<string>(() => localStorage.getItem('draft_message') || MESSAGE_DRAFTS[0].text);
   const [selectedDraftIndex, setSelectedDraftIndex] = useState<number>(0);
   const [groupsText, setGroupsText] = useState<string>(() => localStorage.getItem('draft_groups') || '');
+  const [isFetchingGroups, setIsFetchingGroups] = useState<boolean>(false);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [sendType, setSendType] = useState<'manual' | 'scheduled'>('manual');
   const [intervalMinutes, setIntervalMinutes] = useState<number>(60);
@@ -307,19 +311,68 @@ export const SenderModal: React.FC = () => {
     }
   };
 
-  const handleFetchDialogs = () => {
-    const groupLines = chats
-      .filter((c) => c.type === 'group' || c.type === 'channel')
-      .map((c) => (c.username ? `@${c.username}` : c.title));
+  // استدعاء فعلي وحقيقي 100% لجلب جميع المجموعات والقنوات عبر خادم GramJS
+  const handleFetchDialogs = async () => {
+    try {
+      setIsFetchingGroups(true);
+      showToast('⏳ جاري جلب جميع المجموعات والقنوات من حسابك الفعلي...', '🔄');
 
-    if (groupLines.length === 0) {
-      // If no specific groups, use titles of existing dialogs
-      const allLines = chats.map((c) => (c.username ? `@${c.username}` : c.title));
-      setGroupsText(allLines.join('\n'));
-    } else {
-      setGroupsText(groupLines.join('\n'));
+      const activeAcc = accounts?.find((a) => a.id === activeAccountId) || accounts?.[0];
+      const sessionString =
+        currentUser?.sessionString ||
+        activeAcc?.sessionString ||
+        localStorage.getItem('tg_session_string') ||
+        localStorage.getItem('telegram_session') ||
+        '';
+      const phone = currentUser?.phone || activeAcc?.user?.phone || '';
+
+      const res = await fetch('/api/get_all_groups', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-telegram-session': sessionString,
+          'x-telegram-phone': phone,
+        },
+        body: JSON.stringify({
+          sessionString,
+          phone,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && Array.isArray(data.groups) && data.groups.length > 0) {
+        // وضع الروابط الحقيقية مباشرة في خانة الروابط دون تعديل
+        const directLinks = data.groups.join('\n');
+        setGroupsText(directLinks);
+        localStorage.setItem('draft_groups', directLinks);
+        showToast(`✅ تم جلب ${data.groups.length} رابط حقيقي للمجموعات والقنوات بنجاح`, '🎯');
+      } else if (data.groups && data.groups.length === 0) {
+        showToast('ℹ️ لم يتم العثور على أي مجموعات أو قنوات في الحساب', '⚠️');
+      } else {
+        throw new Error(data.message || 'تعذر جلب المجموعات من تيليجرام');
+      }
+    } catch (err: any) {
+      console.error('[SenderModal] Error fetching all groups:', err);
+      // استخدام مجموعات الحساب المحلية إذا تعذر الاتصال بالخادم
+      const fallbackGroups = chats
+        .filter((c) => c.type === 'group' || c.type === 'channel')
+        .map((c) =>
+          c.username
+            ? `https://t.me/${c.username}`
+            : `https://t.me/c/${String(c.id).replace(/^-100/, '').replace(/^-/, '')}`
+        );
+
+      if (fallbackGroups.length > 0) {
+        const directLinks = fallbackGroups.join('\n');
+        setGroupsText(directLinks);
+        localStorage.setItem('draft_groups', directLinks);
+        showToast(`⚠️ تم جلب ${fallbackGroups.length} رابط مجموعة: ${err?.message || ''}`, 'ℹ️');
+      } else {
+        showToast(`❌ تعذر جلب المجموعات: ${err?.message || 'خطأ في الاتصال'}`, '⚠️');
+      }
+    } finally {
+      setIsFetchingGroups(false);
     }
-    showToast(`✅ تم جلب ${chats.length} محادثة ومجموعة من حسابك في تيليجرام`, '✨');
   };
 
   // Image Upload handler
@@ -720,11 +773,12 @@ export const SenderModal: React.FC = () => {
                         type="button"
                         id="fetchDialogsBtn"
                         onClick={handleFetchDialogs}
-                        className="btn btn-outline-info text-[0.7rem] py-0.5 px-2 rounded border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 transition-all flex items-center gap-1"
-                        title="جلب جميع المجموعات والقنوات التي اشتركت بها من حسابك في تيليجرام"
+                        disabled={isFetchingGroups}
+                        className="btn btn-outline-info text-[0.7rem] py-0.5 px-2 rounded border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 transition-all flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="جلب جميع المجموعات والقنوات الحقيقية التي اشتركت بها من حسابك في تيليجرام"
                       >
-                        <RotateCw className="w-3 h-3" />
-                        <span>جلب مجموعاتي من تيليجرام</span>
+                        <RotateCw className={`w-3 h-3 ${isFetchingGroups ? 'animate-spin' : ''}`} />
+                        <span>{isFetchingGroups ? 'جاري جلب المجموعات...' : 'جلب كل المجموعات'}</span>
                       </button>
                     </div>
                     <textarea
