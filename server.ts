@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 import path from 'path';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
@@ -84,6 +86,14 @@ const avatarCache = new Map<string, string>();
 
 async function startServer() {
   const app = express();
+  const server = http.createServer(app);
+  const io = new SocketIOServer(server, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST'],
+    },
+    transports: ['websocket', 'polling'],
+  });
   const PORT = Number(process.env.PORT) || 3000;
 
   // CORS & Preflight Handling
@@ -398,10 +408,29 @@ async function startServer() {
     );
   };
 
+  io.on('connection', (socket) => {
+    console.log(`[Socket.IO] Client connected: ${socket.id}`);
+    socket.emit('connected', { timestamp: Date.now() });
+    socket.on('disconnect', () => {
+      console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
+    });
+  });
+
   const broadcastTelegramUpdate = (update: any) => {
     serverRecentUpdates.push(update);
     if (serverRecentUpdates.length > 100) serverRecentUpdates.shift();
 
+    // 1. Real-time WebSocket Broadcast via Socket.IO
+    try {
+      io.emit('telegram_update', update);
+      if (update.type) {
+        io.emit(update.type, update);
+      }
+    } catch (ioErr) {
+      console.warn('[Socket.IO] Broadcast error:', ioErr);
+    }
+
+    // 2. Real-time Server-Sent Events (SSE) Stream
     const dataPayload = `data: ${JSON.stringify(update)}\n\n`;
     activeSseClients.forEach((res) => {
       try {
@@ -488,18 +517,20 @@ async function startServer() {
 
           const msgTimestampSec = msg.date || Math.floor(Date.now() / 1000);
           const msgDate = new Date(msgTimestampSec * 1000);
+          const isOut = Boolean(msg.out);
           const formattedMsg = {
             id: String(msg.id),
             chatId,
             peerId: peerIdStr,
             senderId,
-            senderName,
+            senderName: isOut ? 'أنت' : senderName,
             text: textSnippet,
-            timestamp: msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: msgDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
             date: msgDate.toISOString().split('T')[0],
             epoch: msgDate.getTime(),
             rawDate: msgTimestampSec,
-            isOutgoing: Boolean(msg.out),
+            out: isOut,
+            isOutgoing: isOut,
             status: 'read',
             mediaType,
           };
@@ -508,6 +539,7 @@ async function startServer() {
             type: 'new_message',
             chatId,
             peerId: peerIdStr,
+            out: isOut,
             message: formattedMsg,
             epoch: Date.now(),
           });
@@ -1025,7 +1057,7 @@ async function startServer() {
         const msg = dialog.message;
         const msgTimestampSec = msg.date || Math.floor(Date.now() / 1000);
         const msgDate = new Date(msgTimestampSec * 1000);
-        const timeStr = msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const timeStr = msgDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
         const dateStr = msgDate.toISOString().split('T')[0];
 
         let msgSnippet = msg.message || '';
@@ -1084,7 +1116,7 @@ async function startServer() {
         memberCount: entity?.participantsCount || entity?.participants_count || (isChatGroup || isBroadcast ? 120 : undefined),
         description: entity?.about || '',
         draft: dialog.draft?.text || undefined,
-        draftTimestamp: dialog.draft?.date ? new Date(dialog.draft.date * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
+        draftTimestamp: dialog.draft?.date ? new Date(dialog.draft.date * 1000).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }) : undefined,
         lastMessage: lastMsgFormatted,
         isChannel: isBroadcast,
         isGroup: isChatGroup,
@@ -1228,7 +1260,7 @@ async function startServer() {
         for (const m of (rawMessages || []).reverse()) {
           const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
           const mDate = new Date(msgTimestampSec * 1000);
-          const timeStr = mDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
           const dateStr = mDate.toISOString().split('T')[0];
 
           let mediaData: any = undefined;
@@ -1902,7 +1934,6 @@ async function startServer() {
   // 5. Send Message Dispatcher (Real messages.sendMessage RPC)
   app.post('/api/telegram/messages/send', async (req, res) => {
     const { chatId, text, media, replyToMsgId, phone, sessionString } = req.body;
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     console.log(`[MTProto] Sending message to chat "${chatId}": "${text?.slice(0, 30)}..."`);
 
@@ -1949,16 +1980,60 @@ async function startServer() {
 
       console.log(`[MTProto] Message sent successfully via Telegram cloud! ID: ${sentMsg?.id}`);
 
+      // Extract accurate peerId and message timestamps
+      const msgTimestampSec = sentMsg?.date || Math.floor(Date.now() / 1000);
+      const msgDate = new Date(msgTimestampSec * 1000);
+      const peerIdClean = String(
+        peerTarget?.id ||
+        peerTarget?.userId ||
+        peerTarget?.channelId ||
+        peerTarget?.chatId ||
+        chatId.replace(/^chat_/, '')
+      );
+      const fullChatId = chatId.startsWith('chat_') ? chatId : `chat_${peerIdClean}`;
+
+      const outgoingMessageObj = {
+        id: String(sentMsg?.id || Date.now()),
+        chatId: fullChatId,
+        peerId: peerIdClean,
+        senderId: 'me',
+        senderName: 'أنت',
+        text: text || sentMsg?.message || '',
+        timestamp: msgDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        date: msgDate.toISOString().split('T')[0],
+        epoch: msgDate.getTime(),
+        rawDate: msgTimestampSec,
+        out: true,
+        isOutgoing: true,
+        status: 'sent',
+        media,
+      };
+
+      // Broadcast outgoing message to all WebSocket / Socket.IO & SSE clients
+      broadcastTelegramUpdate({
+        type: 'new_message',
+        chatId: fullChatId,
+        peerId: peerIdClean,
+        out: true,
+        message: outgoingMessageObj,
+        epoch: Date.now(),
+      });
+
       return res.json({
         success: true,
         isRealTelegramMTProto: true,
         result: {
-          id: String(sentMsg?.id),
-          chatId,
-          text,
+          id: outgoingMessageObj.id,
+          chatId: fullChatId,
+          peerId: peerIdClean,
+          text: outgoingMessageObj.text,
           media,
           replyToMsgId,
-          timestamp,
+          timestamp: outgoingMessageObj.timestamp,
+          date: outgoingMessageObj.date,
+          epoch: outgoingMessageObj.epoch,
+          rawDate: outgoingMessageObj.rawDate,
+          out: true,
           status: 'sent',
         },
       });
@@ -2501,7 +2576,7 @@ async function startServer() {
         const list = (raw || []).map((m: any) => {
           const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
           const mDate = new Date(msgTimestampSec * 1000);
-          const timeStr = mDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
           const dateStr = mDate.toISOString().split('T')[0];
 
           let mediaData: any = undefined;
@@ -4770,7 +4845,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', async () => {
+  server.listen(PORT, '0.0.0.0', async () => {
     console.log(`Telegram Fullstack Server running on http://0.0.0.0:${PORT}`);
     console.log(`Telegram API_ID: ${TELEGRAM_API_ID} | MTProto 2.0 Layer 184`);
 

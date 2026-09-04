@@ -131,6 +131,8 @@ export interface Message {
   scheduledDate?: string;
   rawDate?: number;
   epoch?: number;
+  out?: boolean;
+  peerId?: string;
 }
 
 export interface Chat {
