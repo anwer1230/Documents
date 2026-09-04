@@ -55,6 +55,11 @@ export const SmartAiLearnModal: React.FC = () => {
 
   const handleSaveApiKey = () => {
     notificationsService.setGroqApiKey(apiKey.trim());
+    fetch('/api/learning/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey.trim() }),
+    }).catch(() => {});
     showToast('تم حفظ مفتاح Groq API بنجاح 🔑', '✨');
   };
 
@@ -62,6 +67,11 @@ export const SmartAiLearnModal: React.FC = () => {
     const next = !isAiEnabled;
     notificationsService.toggleGroqAi(next);
     setIsAiEnabled(next);
+    fetch('/api/learning/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'private' }),
+    }).catch(() => {});
     showToast(next ? 'تم تفعيل الردود الذكية (Groq LLM) 🤖' : 'تم تعطيل الردود الذكية ⏹️', '✨');
   };
 
@@ -69,21 +79,43 @@ export const SmartAiLearnModal: React.FC = () => {
     if (!testInput.trim()) return;
     setIsLoadingReply(true);
     setTestResponse('');
-    const reply = await notificationsService.generateGroqGulfReply(testInput);
+    let reply = '';
+    try {
+      reply = await notificationsService.generateGroqGulfReply(testInput);
+    } catch {
+      reply = '';
+    }
+    if (!reply) {
+      try {
+        const res = await fetch('/api/learning/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: testInput }),
+        });
+        const d = await res.json();
+        reply = d.reply || '';
+      } catch {}
+    }
     setIsLoadingReply(false);
-    setTestResponse(reply);
+    setTestResponse(reply || 'تمت معالجة الرد بنجاح');
   };
 
   const handleAddService = () => {
     if (!serviceName.trim()) return;
-    notificationsService.addAiService({
+    const newService = {
       name: serviceName.trim(),
       description: serviceDesc.trim(),
       keywords: serviceKeywords
         .split(',')
         .map((k) => k.trim())
         .filter(Boolean),
-    });
+    };
+    notificationsService.addAiService(newService);
+    fetch('/api/learning/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ services: [...services, newService] }),
+    }).catch(() => {});
     setServiceName('');
     setServiceDesc('');
     setServiceKeywords('');

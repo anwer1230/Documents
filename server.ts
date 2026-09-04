@@ -19,17 +19,19 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 // ==========================================
 // VAPID & WEB PUSH NOTIFICATION SUBSYSTEM
 // ==========================================
-let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8';
-let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4';
+let VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@telegram-anwer.app';
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   try {
     webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-    console.log('[WebPush] VAPID configuration initialized successfully with persistent keys.');
+    console.log('[WebPush] VAPID configuration initialized successfully from process.env.');
   } catch (err) {
     console.warn('[WebPush] setVapidDetails error:', err);
   }
+} else {
+  console.warn('[WebPush] VAPID_PUBLIC_KEY or VAPID_PRIVATE_KEY missing in process.env');
 }
 
 const DC_CLUSTERS = [

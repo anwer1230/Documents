@@ -257,12 +257,13 @@ export const SendOnlyModal: React.FC = () => {
           schedule_time: scheduleTime,
           interval_minutes: intervalMinutes,
           auto_repeat: autoRepeat,
+          sessionString: localStorage.getItem('tg_session_string') || undefined,
         }),
       });
 
-      const data = await resp.json();
-      if (data.success) {
-        const totalCount = data.groupsCount || 1;
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success) {
+        const totalCount = data.sentCount || data.groupsCount || 1;
         if (dispatchType === 'scheduled') {
           const timeFormatted = scheduleTime ? new Date(scheduleTime).toLocaleString('ar-EG', { dateStyle: 'short', timeStyle: 'short' }) : 'الموعد المحدد';
           const repeatInfo = intervalMinutes > 0 ? ` (يتكرر كل ${intervalMinutes} دقيقة)` : '';

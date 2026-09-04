@@ -26,7 +26,19 @@ export const MyMessagesModal: React.FC = () => {
     const unsub = notificationsService.subscribe(() => {
       setBatches([...notificationsService.getBatchLogs()]);
     });
-    setBatches([...notificationsService.getBatchLogs()]);
+    const localBatches = notificationsService.getBatchLogs();
+    if (localBatches.length > 0) {
+      setBatches([...localBatches]);
+    } else {
+      fetch('/api/batches')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && Array.isArray(data.batches)) {
+            setBatches(data.batches);
+          }
+        })
+        .catch(() => {});
+    }
     return () => unsub();
   }, []);
 
@@ -41,6 +53,11 @@ export const MyMessagesModal: React.FC = () => {
     if (!editText.trim()) return;
     setIsProcessing(true);
     await notificationsService.editBatch(batchId, editText);
+    fetch('/api/batches/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_id: batchId, new_text: editText }),
+    }).catch(() => {});
     setIsProcessing(false);
     setEditingBatchId(null);
     showToast('تم تعديل الدفعة في جميع المجموعات بنجاح ✏️', '✨');
@@ -50,6 +67,11 @@ export const MyMessagesModal: React.FC = () => {
     if (window.confirm('هل أنت متأكد من حذف هذه الدفعة نهائياً من كافة المجموعات؟')) {
       setIsProcessing(true);
       await notificationsService.deleteBatch(batchId);
+      fetch('/api/batches/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batchId }),
+      }).catch(() => {});
       setIsProcessing(false);
       showToast('تم سحب وحذف الرسائل من كافة المجموعات 🗑️', '✨');
     }

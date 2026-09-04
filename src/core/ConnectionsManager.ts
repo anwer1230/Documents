@@ -308,7 +308,7 @@ export class ConnectionsManager {
           return;
         }
 
-        // 2. Process Send Message Request
+        // 2. Process Send Message Request (Real Telegram MTProto Dispatch)
         if (reqType === 'TL_messages_sendMessage') {
           if (request.is_restricted) {
             const err: TLRPC.TL_error = { code: 403, text: 'CHAT_WRITE_FORBIDDEN' };
@@ -316,17 +316,47 @@ export class ConnectionsManager {
             reject(err);
             return;
           }
-          const result: any = {
-            _: 'TL_updateShortSentMessage',
-            id: request.random_id || Number(msgId & BigInt(0x7fffffff)),
-            date: Math.floor(Date.now() / 1000),
-            out: true,
-            pts: 1000 + this.session.seqNo,
-            pts_count: 1,
-            seq: this.session.seqNo,
-          };
-          notifySuccess(result);
-          resolve(result as T);
+          const activeSession = typeof window !== 'undefined' ? localStorage.getItem('tg_session_string') : '';
+          fetch('/api/telegram/messages/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chatId: request.peer_id || request.peerId,
+              text: request.message,
+              sessionString: activeSession || undefined,
+            }),
+          })
+            .then(async (resp) => {
+              const data = await resp.json().catch(() => ({}));
+              if (!resp.ok || !data.success) {
+                const err: TLRPC.TL_error = {
+                  code: resp.status || 400,
+                  text: data.error || data.message || 'SEND_MESSAGE_FAILED',
+                };
+                notifyError(err);
+                reject(err);
+                return;
+              }
+              const result: any = {
+                _: 'TL_updateShortSentMessage',
+                id: data.result?.id ? Number(data.result.id.replace(/\D/g, '')) || request.random_id : request.random_id,
+                date: Math.floor(Date.now() / 1000),
+                out: true,
+                pts: 1000 + this.session.seqNo,
+                pts_count: 1,
+                seq: this.session.seqNo,
+              };
+              notifySuccess(result);
+              resolve(result as T);
+            })
+            .catch((networkErr) => {
+              const err: TLRPC.TL_error = {
+                code: 500,
+                text: networkErr?.message || 'NETWORK_ERROR',
+              };
+              notifyError(err);
+              reject(err);
+            });
           return;
         }
 

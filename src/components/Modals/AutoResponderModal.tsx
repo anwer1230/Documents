@@ -48,18 +48,44 @@ export const AutoResponderModal: React.FC = () => {
       return;
     }
 
-    backgroundSyncService.addAutoReplyRule({
+    const newRule = {
       keyword: keyword.trim(),
       replyText: replyText.trim(),
       matchType,
       scope,
       isEnabled: true,
-    });
+    };
+
+    backgroundSyncService.addAutoReplyRule(newRule);
+
+    fetch('/api/add_auto_reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newRule),
+    }).catch(() => {});
 
     setKeyword('');
     setReplyText('');
     setShowAddForm(false);
     showToast('تمت إضافة قاعدة الرد التلقائي بنجاح ✨', '🎉');
+  };
+
+  const handleToggleRule = (id: string) => {
+    backgroundSyncService.toggleRule(id);
+    fetch('/api/toggle_auto_reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  };
+
+  const handleDeleteRule = (id: string) => {
+    backgroundSyncService.deleteRule(id);
+    fetch('/api/delete_auto_reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
   };
 
   const handleToggleGlobal = () => {
@@ -251,7 +277,7 @@ export const AutoResponderModal: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] text-gray-400">تم الرد: {rule.timesTriggered} مرة</span>
                       <button
-                        onClick={() => backgroundSyncService.toggleRule(rule.id)}
+                        onClick={() => handleToggleRule(rule.id)}
                         className="text-gray-400 hover:text-cyan-300"
                       >
                         {rule.isEnabled ? (
@@ -261,7 +287,7 @@ export const AutoResponderModal: React.FC = () => {
                         )}
                       </button>
                       <button
-                        onClick={() => backgroundSyncService.deleteRule(rule.id)}
+                        onClick={() => handleDeleteRule(rule.id)}
                         className="text-gray-400 hover:text-rose-400 p-1"
                       >
                         <Trash2 className="w-3.5 h-3.5" />

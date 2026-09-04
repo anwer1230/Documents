@@ -91,6 +91,16 @@ export const ScheduledRotatorModal: React.FC = () => {
       intervalMinutes,
       isPersistent,
     });
+    fetch('/api/rotating/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages,
+        groups,
+        interval_minutes: intervalMinutes,
+        is_persistent: isPersistent,
+      }),
+    }).catch(() => {});
     showToast('تم حفظ إعدادات النشر الدوري بنجاح 💾', '✨');
   };
 
@@ -102,6 +112,11 @@ export const ScheduledRotatorModal: React.FC = () => {
 
     try {
       notificationsService.startRotating(messages, groups, intervalMinutes);
+      fetch('/api/rotating/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, groups, interval_minutes: intervalMinutes }),
+      }).catch(() => {});
       showToast('تم بدء النشر الدوري المجدول بنجاح 🔄', '🚀');
     } catch (err: any) {
       showToast(err?.message || 'حدث خطأ أثناء بدء النشر الدوري', '⚠️');
@@ -110,6 +125,7 @@ export const ScheduledRotatorModal: React.FC = () => {
 
   const handleStop = () => {
     notificationsService.stopRotating();
+    fetch('/api/rotating/stop', { method: 'POST' }).catch(() => {});
     showToast('تم إيقاف النشر الدوري ⏹️', 'ℹ️');
   };
 

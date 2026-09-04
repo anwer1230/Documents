@@ -49,6 +49,12 @@ export const AutoJoinerModal: React.FC = () => {
     setIsProcessing(true);
     setProgress({ processed: 0, total: links.length });
 
+    fetch('/api/auto_join/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ links, fetch_external: fetchWebLinks }),
+    }).catch(() => {});
+
     await notificationsService.startAutoJoinTasks(links, (processed, total) => {
       setProgress({ processed, total });
     });
@@ -59,6 +65,7 @@ export const AutoJoinerModal: React.FC = () => {
 
   const handleStopJoin = () => {
     notificationsService.stopAutoJoin();
+    fetch('/api/auto_join/stop', { method: 'POST' }).catch(() => {});
     setIsProcessing(false);
     showToast('تم إيقاف عملية الانضمام ⏹️', '⚠️');
   };
