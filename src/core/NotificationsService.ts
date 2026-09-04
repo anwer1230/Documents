@@ -11,6 +11,7 @@ import { notificationsController } from './NotificationsController';
 import { TLRPC } from './TLRPC';
 import { telegramDB } from '../utils/sqliteStorage';
 import { telegramDb, initTelegramDexieDb } from './telegramDexieDb';
+import { MESSAGE_DRAFTS } from '../components/Modals/SenderModal';
 import {
   SenderBatch,
   MonitorConfig,
@@ -159,13 +160,7 @@ export class NotificationsService {
   private discoveredLinks: LiveDiscoveredLink[] = [];
 
   // 8. Scheduled Rotator (RotatingSendManager)
-  private rotatingMessages: string[] = [
-    'السلام عليكم، يتوفر لدينا خدمات أكاديمية متكاملة وحل واجبات وتكاليف بأعلى جودة وسرعة إنجاز ✨',
-    'أهلاً بكم! نقدم عروضاً مميزة على خدمات الأبحاث والترجمة والتحليل الإحصائي مع ضمان الدقة 📚',
-    'نوفر لكم دعماً أكاديمياً متخصصاً في كافة التخصصات والجامعات، تواصلوا معنا للاستفسار 🌟',
-    '',
-    '',
-  ];
+  private rotatingMessages: string[] = MESSAGE_DRAFTS.map((d) => d.text);
   private rotatingGroups: string[] = [];
   private rotatingIntervalMinutes = 5;
   private isRotatingActive = false;

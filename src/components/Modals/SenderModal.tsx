@@ -19,12 +19,233 @@ import {
   ExternalLink,
   Layers,
   UploadCloud,
+  FileText,
+  Sparkles,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
 import { notificationsController } from '../../core/NotificationsController';
 import { MonitorAlert, ProtectionMode } from '../../types';
+
+export interface MessageDraftItem {
+  id: number;
+  shortTitle: string;
+  title: string;
+  badge: string;
+  icon: string;
+  category: string;
+  text: string;
+}
+
+export const MESSAGE_DRAFTS: MessageDraftItem[] = [
+  {
+    id: 1,
+    shortTitle: 'سكليف وأعذار',
+    title: 'المسودة 1: (سكليف/أعذار طبية)',
+    badge: '🚨 سكليف',
+    icon: '🩺',
+    category: 'medical',
+    text: `🚨 **#ســـكـــالــــيـــــــف رسمية** 🚨
+
+عليك غياب تبي عذر طبي في صحتي بدون حضور كلمني 📌📌
+
+**اجازه مرضيه معتمده في تطبيق صحتي** ♻️
+نستقبل عسكري مدني جامعي موضف
+
+━━━━━━━━━━━━━━
+🟢 تاريخ **#جديد** ↘️🟢↙️ **#قديم** 🔴
+
+🔰 **#عــــذر #طـــبـي** 🔰  
+🟣 **#اجازه ورقيه مختوم**  
+🔵 **#شعار مرافقه مريض**  
+🟡 **#مشهـد مراجـــعــــــة**  
+🔴 **#شـــعــــار تـــــنويـــم**  
+🟢 **#تــــقـــريـــر طـــبــــي**  
+
+━━━━━━━━━━━━━━
+📲 **للتواصل وتساب** 🆗⬇️  
+📲 https://wa.me/+966510349663`,
+  },
+  {
+    id: 2,
+    shortTitle: 'خدمات طلابية',
+    title: 'المسودة 2: (خدمات طلابية عامة)',
+    badge: '📚 طلابية',
+    icon: '📚',
+    category: 'students',
+    text: `📚 **السلام عليكم**  
+للخدمات الطلابيه المتكامله
+
+💞 **من خدمتنا** 💞  
+✅ **بحوث جامعية** (عربي + إنجليزي)  
+🔥 **رسائل ماجستير**  
+🟢 **اعذار طبيه صحتي ورقي PDF**  
+📝 **واجبات وأنشطة**  
+📊 **عروض باوربوينت Power Point**  
+📄 **تقارير وتكاليف**  
+📝 **حل كويزات / ميد / فاينل**  
+💰 **محاسبة + ادارة أعمال**  
+💻 **حاسوب + برمجة**  
+🎓 **مشاريع تخرج Project**  
+📖 **تلخيص محاضرات**  
+📄 **تصميم سيره ذاتيه احترافيه**  
+🎨 **تصاميم بوستر وبروشور**  
+📋 **كتابه تقارير تدريب**
+
+━━━━━━━━━━━━━━
+⭐ **اسعار مناسبه للجميع**  
+↩️ **للتواصل واتس اب**  
+📲 https://wa.me/+966562570935`,
+  },
+  {
+    id: 3,
+    shortTitle: 'ثقة وسرعة إنجاز',
+    title: 'المسودة 3: (ثقة وسرعة في الإنجاز)',
+    badge: '⚡ سرعة إنجاز',
+    icon: '⚡',
+    category: 'academic',
+    text: `⚡ **ثقة وسرعة في الإنجاز** ⚡
+
+🟢 **بحـــوثات** (عربي أو انقلش)  
+🟡 **حل الواجبات والتكاليف**  
+📚 **تلخيص الكتب والمحاضرات**  
+🎓 **مشاريع تخــــرج**  
+💻 **حل تكاليف وانشطة البرمجه**  
+🎨 **إعداد عـــــروض بوربـــــوينت** - كانفا  
+📄 **صياغة ســــيرة ذاتـــية CV**  
+🖼️ **تصاميم (بوستر - انفوجرافيك)**  
+📝 **حــــل (كويز - ميد - فاينل)**  
+📋 **اسايمنت - لابات - دراسة حالة**  
+📊 **تحليل احصائي SPSS**  
+🧠 **إعداد (تقارير - خرائط ذهنيه)**  
+🩺 **اعذار طبية ورقية PDF مختومة**  
+📱 **اعذار طبيه من منصة صحتي**
+
+━━━━━━━━━━━━━━
+🔵 **للتواصل واتساب**  
+📲 https://wa.me/+966562570935`,
+  },
+  {
+    id: 4,
+    shortTitle: 'مركز سرعة إنجاز',
+    title: 'المسودة 4: (قائمة الخدمات الشاملة - مركز سرعة إنجاز)',
+    badge: '🎯 المركز الشامل',
+    icon: '🎯',
+    category: 'full_services',
+    text: `🎯 **مَرْكَز سُرْعَة إِنْجَاز** ✨  
+كل ما تحتاجه في دراستك الجامعية، التقنية، وحتى خدماتك الطبية… في مكان واحد
+
+━━━━━━━━━━━━━━
+🔥 **الخدمات المقدمة:** 🔥
+
+📝✏️ **حل الواجبات والاختبارات** (كويز – ميد – فاينل)  
+📚📋 **تلخيص المقررات والمحاضرات**  
+🎨💫 **تصميم عروض PowerPoint احترافية وجذابة**  
+📂🎓 **إعداد مشاريع التخرج الشاملة**  
+📊 **إعداد المشاريع الهندسية** (أوتوكاد - ريفيت - لوميون)  
+📱 **تصميم مشاريع المحاكاة المختلفة**  
+📚✨ **إعداد رسائل الماجستير والدكتوراه باحترافية**  
+💡🎯 **اقتراح عناوين وخطط بحث متميزة**  
+🔍📖 **توفير المراجع والدراسات السابقة**  
+📄🔥 **إعداد أبحاث النشر والترقية**  
+📊📈 **التحليل الإحصائي والتدقيق اللغوي**  
+🌟 **إعداد البحوث الجامعية باللغتين (عربي - إنجليزي) بمنهجية متكاملة**  
+📋 **إعداد التقارير والتكاليف الأكاديمية**  
+🎪 **تصميم البوسترات الأكاديمية (بروجكت)**  
+🗺️ **إعداد الخرائط المفاهيمية**  
+📝 **إعداد دراسة الحالات والمقالات العلمية**  
+📚 **تلخيص الكتب باللغتين العربية والإنجليزية**  
+🌐💻 **تصميم وبرمجة المواقع والمتاجر الإلكترونية**  
+📱 **تطوير التطبيقات والبرمجيات**  
+🛠️📊 **تطوير أنظمة إدارة المهام والهيكل التنظيمي**  
+🚀📈 **تحسين محركات البحث (SEO) والدعم الفني**  
+💾 **إعداد مشاريع برمجة الحاسب** (Python - Java - C++ - PHP)  
+🤖 **إعداد مشاريع الذكاء الاصطناعي وتعلم الآلة**  
+🌐 **إعداد مشاريع إنترنت الأشياء (IoT)**  
+🔧 **برمجة أنظمة التحكم المدمجة (Embedded Systems)**  
+📊 **محاكاة المشاريع الهندسية (MATLAB, Simulink)**  
+📀 **تحليل البيانات الضخمة (Big Data)**  
+🗃️ **تصميم وتحليل قواعد البيانات** (MySQL - Oracle - MongoDB)  
+🌺 **ملف الإنجاز والأداء الوظيفي** (إلكتروني وورقي) وفق النظام الجديد  
+📄 **كتابة التقارير والسجلات التعليمية**  
+📊 **تحليل النتائج وإعداد الخطط العلاجية والإثرائية**  
+🏆 **تصميم شهادات الشكر والتقدير**  
+📝 **كتابة أسئلة الاختبارات**  
+✨ **وكافة الأعمال الإدارية والتعليمية الأخرى**  
+🎨 **تصميم الشعارات والهويات البصرية المتكاملة**  
+📄✨ **تصميم السيرة الذاتية الاحترافية، البروشورات، والمجلات**  
+📢 **تصميم المنشورات والفيديوهات الإعلانية**  
+🎬 **تصميم الرسوم المتحركة والتقنيات ثلاثية الأبعاد**  
+📩 **تصميم الدعوات الإلكترونية**  
+📊 **تصميم الإنفوجرافيك الاحترافي**  
+🌐🔄 **ترجمة معتمدة** (كتب - روايات - قصص - مقالات)  
+🔢 **دورات الرياضيات** (الرياضيات العامة، شروحات متقدمة، تدريبات شاملة)  
+🌐 **دورات اللغة الإنجليزية** (تأسيس، محادثة، تحضير للمقابلات والاختبارات)  
+🎯 **دورات المهارات الجامعية** (إدارة الوقت، مهارات البحث العلمي، كتابة الأوراق)  
+🏥 **دورات المصطلحات الطبية** (التمريض، الصيدلة، الطب البشري)  
+💼 **الدورات المحاسبية المتكاملة** (المحاسبة المالية، محاسبة التكاليف، البرامج المحاسبية)  
+📘🎯 **حلول منهج Evolve 1, 2, 3, 4**  
+📗💡 **حلول منهج Cambridge**  
+🔑✨ **أكواد Evolve جديدة مضمونة وأسعار مناسبة**  
+🩺🎖️ **خدمة استخراج "سكليف صحتي" بكل احترافية وفي وقت قياسي** (للعسكريين والمدنيين والطلاب)
+
+━━━━━━━━━━━━━━
+✨ **مميزات خدمتنا:**  
+⚡🚀 **سرعة إنجاز غير مسبوقة**  
+🎯✅ **دقة ومطابقة للمواصفات المطلوبة**  
+🔒🛡️ **تعامل سري وآمن 100%**  
+📍🇸🇦 **خدمة في جميع مناطق المملكة**
+
+📞 **للتواصل والاستفسار:**  
+📲💚 **واتساب:** https://wa.me/+966510349663  
+🌐✨ **الموقع الإلكتروني:** https://surraenjazblog.wordpress.com/`,
+  },
+  {
+    id: 5,
+    shortTitle: 'عرض خاص 15%',
+    title: 'المسودة 5: (عرض خاص - توقف عن المعاناة الدراسية)',
+    badge: '🎁 عرض خاص',
+    icon: '🎁',
+    category: 'special_offer',
+    text: `توقف عن المعاناة الدراسية! 🚫  
+🎯 **مركز سرعة إنجاز - حلك النهائي لكل التحديات الأكاديمية!** 🎯
+
+━━━━━━━━━━━━━━
+🔥 **خدماتنا تشمل:** 🔥
+
+✅ **مشاريع تخرج** - بجودة استثنائية  
+✅ **أبحاث جامعية وعلمية** - 100% أصلية  
+✅ **رسائل ماجستير ودكتوراه** - بإشراف متخصصين  
+✅ **حل واجبات واختبارات** - بدقة فائقة  
+✅ **تحليل إحصائي (SPSS)** - نتائج مضمونة
+
+🔵 **للمعلمين والمؤسسات:**  
+✅ **ملفات إنجاز وإعداد مهني**  
+✅ **خطط تربوية وإدارية متكاملة**
+
+━━━━━━━━━━━━━━
+✨ **مميزاتنا:** ✨
+
+🟢 **خبراء متخصصون** - في جميع المجالات  
+🟢 **جودة مضمونة** - أعمال أصلية 100%  
+🟢 **سرعة في التنفيذ** - نسلم في الموعد  
+🟢 **أسعار مناسبة** - تناسب جميع الطلاب  
+🟢 **سرية تامة** - خصوصيتك محفوظة
+
+━━━━━━━━━━━━━━
+🎁 **عرض خاص:**  
+**خصم 15% على أول طلب** + تعديلات مجانية حتى الرضا التام!
+
+📞 **تواصل معنا الآن:**  
+📱 **واتساب مباشر:** https://wa.me/+966510349663  
+🌐 **الموقع الإلكتروني:** https://surraenjazblog.wordpress.com/
+
+━━━━━━━━━━━━━━
+⚡ **سرعة إنجاز - رفيق دربك نحو التميز الأكاديمي!** 🌟  
+**نجاحك يبدأ بقرار... اتخذ قرارك الآن!** 📚✨`,
+  },
+];
 
 export const SenderModal: React.FC = () => {
   const {
@@ -39,7 +260,8 @@ export const SenderModal: React.FC = () => {
   const isOpen = activeModal === ('sender' as any) || activeModal === ('send-only' as any);
 
   // Form State - Sender
-  const [messageText, setMessageText] = useState<string>(() => localStorage.getItem('draft_message') || '');
+  const [messageText, setMessageText] = useState<string>(() => localStorage.getItem('draft_message') || MESSAGE_DRAFTS[0].text);
+  const [selectedDraftIndex, setSelectedDraftIndex] = useState<number>(0);
   const [groupsText, setGroupsText] = useState<string>(() => localStorage.getItem('draft_groups') || '');
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [sendType, setSendType] = useState<'manual' | 'scheduled'>('manual');
@@ -75,6 +297,16 @@ export const SenderModal: React.FC = () => {
   }, []);
 
   // Fetch dialogs from Telegram
+  const handleSelectDraft = (index: number) => {
+    const draft = MESSAGE_DRAFTS[index];
+    if (draft) {
+      setSelectedDraftIndex(index);
+      setMessageText(draft.text);
+      localStorage.setItem('draft_message', draft.text);
+      showToast(`✨ تم اختيار ${draft.shortTitle}`, '📝');
+    }
+  };
+
   const handleFetchDialogs = () => {
     const groupLines = chats
       .filter((c) => c.type === 'group' || c.type === 'channel')
@@ -380,16 +612,52 @@ export const SenderModal: React.FC = () => {
                   </h6>
                 </div>
                 <div className="p-3 space-y-3 flex-1">
-                  {/* الرسالة */}
+                  {/* مسودات ونماذج الرسائل الجاهزة */}
                   <div>
-                    <label className="block text-[0.75rem] font-medium text-gray-300 mb-1">الرسالة</label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[0.75rem] font-medium text-gray-300 flex items-center gap-1.5 m-0">
+                        <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>مسودات الرسائل الجاهزة ({MESSAGE_DRAFTS.length})</span>
+                      </label>
+                      <span className="text-[0.62rem] text-cyan-400/80 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
+                        تنسيق ماركداون ملون وعريض ✨
+                      </span>
+                    </div>
+
+                    {/* أزرار اختيار المسودات */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
+                      {MESSAGE_DRAFTS.map((draft, idx) => {
+                        const isSelected = selectedDraftIndex === idx || messageText === draft.text;
+                        return (
+                          <button
+                            key={draft.id}
+                            type="button"
+                            onClick={() => handleSelectDraft(idx)}
+                            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-right text-[0.7rem] transition-all border ${
+                              isSelected
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm shadow-cyan-500/10 font-bold'
+                                : 'bg-white/[0.03] border-white/10 text-gray-300 hover:bg-white/[0.07] hover:border-white/20'
+                            }`}
+                            title={draft.title}
+                          >
+                            <span className="shrink-0">{draft.icon}</span>
+                            <span className="truncate">{draft.shortTitle}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* حقل نص الرسالة */}
                     <textarea
                       id="message"
-                      rows={3}
+                      rows={4}
                       value={messageText}
-                      onChange={(e) => setMessageText(e.target.value)}
-                      placeholder="اكتب الرسالة المراد إرسالها"
-                      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-[0.82rem] text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none transition-all"
+                      onChange={(e) => {
+                        setMessageText(e.target.value);
+                        localStorage.setItem('draft_message', e.target.value);
+                      }}
+                      placeholder="اكتب الرسالة المراد إرسالها أو اختر إحدى المسودات الجاهزة أعلاه"
+                      className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-[0.8rem] text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none transition-all font-mono leading-relaxed"
                     />
                   </div>
 
