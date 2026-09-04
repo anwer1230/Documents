@@ -30,6 +30,49 @@ import {
 import { backgroundSyncService } from './BackgroundSyncService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 
+// Hardcoded monitor keywords
+export const MONITOR_KEYWORDS: string[] = [
+  'اريد مساعدة',
+  'ابي مساعدة',
+  'من يسوي تكليف',
+  'من يحل',
+  'عندي بحث',
+  'معي واجب',
+  'عندي اسايمنت',
+  'من يسوي اسايمنت',
+  'ابي سكليف',
+  'ابي عذر',
+  'من يسوي سكليف',
+  'ابي شخص مضمون',
+  'ابي مختص',
+  'هيليب',
+  'من يستطيع',
+  'تعرفون احد',
+  'تعرفون شخص',
+  'من يساعدني',
+  'من يعرف مختص',
+  'ابي مختص',
+  'مين يعرف يحل واجب',
+  'من يحل واجبات الجامعه',
+  'أحتاج مساعدتكم',
+  'ابي احد يسوي بحث',
+  'عندي بحث',
+  'مين يعرف مختص',
+  'من يعرف احد كويس',
+];
+
+export function normalizeArabicText(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class NotificationsService {
   private static instance: NotificationsService;
 
@@ -38,10 +81,10 @@ export class NotificationsService {
   private schedulerTimer: number | null = null;
   private currentProtectionMode: ProtectionMode = 'salam';
 
-  // 2. Monitor state
+  // 2. Monitor state - Hardcoded Default Active
   private monitorConfig: MonitorConfig = {
     isEnabled: true,
-    keywords: [],
+    keywords: [...MONITOR_KEYWORDS],
     sendAlertsToSavedMessages: true,
     browserPushAlerts: true,
   };
@@ -428,7 +471,7 @@ export class NotificationsService {
   // 2. LIVE MONITOR & KEYWORD RADAR
   // ==========================================
   public setMonitorConfig(config: Partial<MonitorConfig>) {
-    this.monitorConfig = { ...this.monitorConfig, ...config };
+    this.monitorConfig = { ...this.monitorConfig, ...config, isEnabled: true };
     this.notifyStateChange();
   }
 
@@ -830,12 +873,19 @@ export class NotificationsService {
     const text = message.text || '';
 
     // 1. Keyword Monitor Engine (Replicating DrKLO Live Message Scanner)
-    if (this.monitorConfig.isEnabled && this.monitorConfig.keywords.length > 0) {
-      for (const kw of this.monitorConfig.keywords) {
-        if (kw.trim() && text.toLowerCase().includes(kw.toLowerCase())) {
+    if (this.monitorConfig.isEnabled) {
+      const activeKeywords = this.monitorConfig.keywords.length > 0 ? this.monitorConfig.keywords : MONITOR_KEYWORDS;
+      const rawText = text.trim();
+      const normalizedMsg = normalizeArabicText(rawText);
+      for (const kw of activeKeywords) {
+        const trimmedKw = kw.trim();
+        if (!trimmedKw) continue;
+        const normalizedKw = normalizeArabicText(trimmedKw);
+        // Match the full phrase (complete sentence as-is)
+        if (rawText.toLowerCase().includes(trimmedKw.toLowerCase()) || normalizedMsg.includes(normalizedKw)) {
           const alert: MonitorAlert = {
             id: `alert_${Date.now()}`,
-            keyword: kw,
+            keyword: trimmedKw,
             sourceChatId: message.chatId,
             sourceChatTitle: chatTitle,
             senderName: message.senderName || 'مستخدم',
@@ -851,7 +901,7 @@ export class NotificationsService {
           // 4. chatUsername & senderUsername for deep links
           notificationsController.postNotification({
             category: 'keyword_alert',
-            title: `🚨 كلمة مراقبة: [${kw}]`,
+            title: `🚨 كلمة مراقبة: [${trimmedKw}]`,
             body: `💬 الرسالة: ${text}\n📍 المصدر: ${chatTitle}`,
             avatar: message.senderAvatar,
             chatId: message.chatId,
@@ -860,7 +910,7 @@ export class NotificationsService {
             senderId: message.senderId || (message.senderName ? `user_${message.senderName.replace(/\s+/g, '_')}` : undefined),
             senderName: message.senderName || 'مستخدم',
             senderUsername: message.senderUsername,
-            keyword: kw,
+            keyword: trimmedKw,
             messageText: text,
             replyAction: true,
             isSilent: !this.monitorConfig.browserPushAlerts,

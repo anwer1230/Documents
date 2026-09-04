@@ -48,32 +48,8 @@ export const MONITOR_KEYWORDS: string[] = [
   'من يحل واجبات الجامعه',
   'أحتاج مساعدتكم',
   'ابي احد يسوي بحث',
-  'اريد مساعدة',
-  'ابي مساعدة',
-  'من يسوي تكليف',
-  'من يحل',
   'عندي بحث',
-  'معي واجب',
-  'عندي اسايمنت',
-  'من يسوي اسايمنت',
-  'ابي سكليف',
-  'ابي عذر',
-  'من يسوي سكليف',
-  'ابي شخص مضمون',
-  'ابي مختص',
-  'هيليب',
-  'من يستطيع',
-  'تعرفون احد',
-  'تعرفون شخص',
-  'من يساعدني',
-  'من يعرف مختص',
-  'ابي مختص',
-  'مين يعرف يحل واجب',
-  'من يحل واجبات الجامعه',
-  'أحتاج مساعدتكم',
-  'ابي احد يسوي بحث',
-  'عندي بحث ',
-  'مين يعرف مختص ',
+  'مين يعرف مختص',
   'من يعرف احد كويس',
 ];
 
@@ -5822,15 +5798,12 @@ async function startServer() {
   });
 
   app.post('/api/alerts/toggle', (req, res) => {
-    const { enabled } = req.body;
-    if (typeof enabled === 'boolean') {
-      monitoringEnabled = enabled;
-    } else {
-      monitoringEnabled = !monitoringEnabled;
-    }
+    // Monitoring is permanently and automatically active (Hardcoded Default)
+    monitoringEnabled = true;
     res.json({
       success: true,
-      monitoringEnabled,
+      monitoringEnabled: true,
+      message: 'المراقبة تعمل دائماً وبشكل افتراضي',
     });
   });
 
