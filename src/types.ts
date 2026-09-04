@@ -172,6 +172,9 @@ export interface Chat {
     isOutgoing: boolean;
     status?: 'sending' | 'sent' | 'delivered' | 'read' | 'error';
     mediaType?: string;
+    rawDate?: number;
+    epoch?: number;
+    date?: string;
   };
   memberCount?: number;
   onlineCount?: number;
@@ -446,6 +449,10 @@ export interface MonitorAlert {
   senderName: string;
   messageText: string;
   timestamp: string;
+  groupUrl?: string;
+  senderUrl?: string;
+  messageId?: string;
+  peerId?: string;
 }
 
 // 3. My Messages (Batch Log)

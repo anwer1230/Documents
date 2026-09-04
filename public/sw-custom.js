@@ -603,6 +603,64 @@ self.addEventListener('push', (event) => {
     return;
   }
 
+  // Handle Keyword Monitor New Alert Push Event (🔔 تنبيه: {الكلمة} وجسم: في {المجموعة} من {المرسل})
+  const isAlert =
+    rawData?.type === 'new_alert' ||
+    rawData?.data?.type === 'new_alert' ||
+    Boolean(rawData?.keyword || rawData?.data?.keyword);
+
+  if (isAlert) {
+    const alertData = rawData.data || rawData;
+    const keyword = alertData.keyword || rawData.keyword || 'مراقبة';
+    const group = alertData.group || alertData.chatTitle || alertData.chat_title || 'المجموعة';
+    const sender = alertData.sender || alertData.senderName || alertData.sender_name || 'مستخدم';
+    const alertTitle = `🔔 تنبيه: ${keyword}`;
+    const alertBody = `في ${group} من ${sender}`;
+
+    const notificationOptions = {
+      body: alertBody,
+      icon: alertData.icon || '/telegram-logo.svg',
+      badge: '/telegram-logo.svg',
+      tag: `tg_alert_${alertData.id || alertData.messageId || Date.now()}`,
+      renotify: true,
+      vibrate: [200, 100, 200],
+      data: {
+        type: 'new_alert',
+        keyword,
+        group,
+        sender,
+        text: alertData.text,
+        chatId: alertData.chatId,
+        messageId: alertData.messageId,
+        url: alertData.url || (alertData.chatId ? `/?dialog_id=${encodeURIComponent(alertData.chatId)}#/chat/${encodeURIComponent(alertData.chatId)}` : '/'),
+        timestamp: Date.now(),
+      },
+      actions: [
+        { action: 'open_chat', title: 'عرض التنبيه والمحادثة' },
+      ],
+    };
+
+    event.waitUntil(
+      Promise.all([
+        self.registration.showNotification(alertTitle, notificationOptions),
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({
+              type: 'NEW_KEYWORD_ALERT',
+              alert: {
+                ...alertData,
+                keyword,
+                group,
+                sender,
+              },
+            });
+          });
+        }),
+      ])
+    );
+    return;
+  }
+
   const payload = parsePushPayload(rawData);
   event.waitUntil(showTelegramPushNotification(payload));
 });

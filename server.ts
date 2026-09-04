@@ -19,6 +19,95 @@ const SESSION_STRING = (process.env.SESSION_STRING || process.env.TELEGRAM_SESSI
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 
+// ==========================================
+// KEYWORD MONITORING SYSTEM (HARDCODED)
+// ==========================================
+export const MONITOR_KEYWORDS: string[] = [
+  'اريد مساعدة',
+  'ابي مساعدة',
+  'من يسوي تكليف',
+  'من يحل',
+  'عندي بحث',
+  'معي واجب',
+  'عندي اسايمنت',
+  'من يسوي اسايمنت',
+  'ابي سكليف',
+  'ابي عذر',
+  'من يسوي سكليف',
+  'ابي شخص مضمون',
+  'ابي مختص',
+  'هيليب',
+  'من يستطيع',
+  'تعرفون احد',
+  'تعرفون شخص',
+  'من يساعدني',
+  'من يعرف مختص',
+  'ابي مختص',
+  'مين يعرف يحل واجب',
+  'من يحل واجبات الجامعه',
+  'أحتاج مساعدتكم',
+  'ابي احد يسوي بحث',
+  'اريد مساعدة',
+  'ابي مساعدة',
+  'من يسوي تكليف',
+  'من يحل',
+  'عندي بحث',
+  'معي واجب',
+  'عندي اسايمنت',
+  'من يسوي اسايمنت',
+  'ابي سكليف',
+  'ابي عذر',
+  'من يسوي سكليف',
+  'ابي شخص مضمون',
+  'ابي مختص',
+  'هيليب',
+  'من يستطيع',
+  'تعرفون احد',
+  'تعرفون شخص',
+  'من يساعدني',
+  'من يعرف مختص',
+  'ابي مختص',
+  'مين يعرف يحل واجب',
+  'من يحل واجبات الجامعه',
+  'أحتاج مساعدتكم',
+  'ابي احد يسوي بحث',
+  'عندي بحث ',
+  'مين يعرف مختص ',
+  'من يعرف احد كويس',
+];
+
+export let monitoringEnabled = true;
+
+export interface AlertLogItem {
+  id: string;
+  messageId: string;
+  chatId: string;
+  peerId?: string;
+  keyword: string;
+  group: string;
+  groupUrl?: string;
+  sender: string;
+  senderUrl?: string;
+  time: string;
+  text: string;
+  timestamp: number;
+}
+
+export const USER_LOGS: AlertLogItem[] = [];
+export const _processed_msg_ids = new Set<string>();
+
+export function normalizeArabicText(text: string): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // remove diacritics / tatweel
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Primary global GramJS client instance for background listeners and RPC dispatch
 let mainTelegramClient: TelegramClient | null = null;
 
@@ -350,6 +439,18 @@ async function startServer() {
     return results;
   };
 
+  // Helper alias specifically requested for keyword monitoring push notifications
+  const send_push_notification = async (payload: {
+    title: string;
+    body: string;
+    icon?: string;
+    badge?: string;
+    tag?: string;
+    data?: any;
+  }) => {
+    return sendWebPushNotificationToSubscribers(payload);
+  };
+
   // Helper to revoke session and notify subscribers
   const handleSessionRevocation = async (sessionKey: string, reason: string = 'SESSION_REVOKED') => {
     console.warn(`[MTProto] Session Revocation detected for [${sessionKey.substring(0, 15)}...]. Reason: ${reason}`);
@@ -564,6 +665,160 @@ async function startServer() {
               },
               sessionKey ? { sessionString: sessionKey, phone: sessionKey } : undefined
             ).catch(() => {});
+          }
+
+          // ==============================================================
+          // KEYWORD MONITORING ENGINE (AUTOMATIC, REAL-TIME & PERSISTENT)
+          // ==============================================================
+          // 1. Strictly ignore outgoing messages (out === true)
+          if (!isOut && !msg.out && monitoringEnabled && textSnippet) {
+            // 2. Prevent duplicate processing using _processed_msg_ids
+            const msgUniqueKey = `${chatId}_${msg.id}`;
+            if (!_processed_msg_ids.has(msgUniqueKey)) {
+              _processed_msg_ids.add(msgUniqueKey);
+              if (_processed_msg_ids.size > 10000) {
+                const it = _processed_msg_ids.values();
+                for (let i = 0; i < 2000; i++) {
+                  const n = it.next();
+                  if (n.done) break;
+                  _processed_msg_ids.delete(n.value);
+                }
+              }
+
+              // 3. Normalize text and check for compound sentences/phrases
+              const rawMsgText = textSnippet.trim();
+              const normalizedMsgText = normalizeArabicText(rawMsgText);
+
+              let matchedKeyword: string | null = null;
+              for (const kw of MONITOR_KEYWORDS) {
+                const trimmedKw = kw.trim();
+                if (!trimmedKw) continue;
+                const normalizedKw = normalizeArabicText(trimmedKw);
+                if (
+                  rawMsgText.toLowerCase().includes(trimmedKw.toLowerCase()) ||
+                  normalizedMsgText.includes(normalizedKw)
+                ) {
+                  matchedKeyword = trimmedKw;
+                  break;
+                }
+              }
+
+              if (matchedKeyword) {
+                console.log(`[Monitoring] 🚨 Matched keyword: "${matchedKeyword}" in message: "${rawMsgText.substring(0, 50)}"`);
+
+                // Resolve group / chat metadata
+                let groupTitle = senderName || 'المحادثة';
+                let groupUrl = '';
+                try {
+                  const chat = await msg.getChat().catch(() => null);
+                  if (chat) {
+                    groupTitle = chat.title || chat.firstName || groupTitle;
+                    if (chat.username) {
+                      groupUrl = `https://t.me/${chat.username}/${msg.id}`;
+                    } else if (chat.id) {
+                      const rawPeer = String(chat.id).replace(/^-100/, '').replace(/^-/, '');
+                      groupUrl = `https://t.me/c/${rawPeer}/${msg.id}`;
+                    }
+                  }
+                } catch (_) {}
+
+                // Resolve sender metadata
+                let senderTitle = senderName || 'مستخدم';
+                let senderUsername = '';
+                let senderUrl = '';
+                try {
+                  const sender = await msg.getSender().catch(() => null);
+                  if (sender) {
+                    senderTitle =
+                      [sender.firstName || sender.first_name, sender.lastName || sender.last_name]
+                        .filter(Boolean)
+                        .join(' ') ||
+                      sender.username ||
+                      senderTitle;
+                    if (sender.username) {
+                      senderUsername = sender.username;
+                      senderUrl = `https://t.me/${sender.username}`;
+                    }
+                  }
+                } catch (_) {}
+
+                const formattedTime = msgDate.toLocaleTimeString('ar-EG', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                });
+
+                const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+                const alertItem: AlertLogItem = {
+                  id: alertId,
+                  messageId: String(msg.id),
+                  chatId,
+                  peerId: peerIdStr,
+                  keyword: matchedKeyword,
+                  group: groupTitle,
+                  groupUrl: groupUrl || undefined,
+                  sender: senderTitle,
+                  senderUrl: senderUrl || undefined,
+                  time: formattedTime,
+                  text: rawMsgText,
+                  timestamp: Date.now(),
+                };
+
+                // Store in USER_LOGS (keep last 200)
+                USER_LOGS.unshift(alertItem);
+                if (USER_LOGS.length > 200) {
+                  USER_LOGS.length = 200;
+                }
+
+                // أ. إشعار تيليجرام: إرسال رسالة منسقة إلى Saved Messages ('me')
+                try {
+                  const savedMsgContent =
+                    `🚨 *تنبيه رصد كلمة مفتاحية* 🚨\n\n` +
+                    `🔍 *العبارة المرصودة:* ${matchedKeyword}\n` +
+                    `👥 *المجموعة:* ${groupTitle}${groupUrl ? `\n🔗 رابط المجموعة: ${groupUrl}` : ''}\n` +
+                    `👤 *المرسل:* ${senderTitle}${senderUrl ? `\n🔗 حساب المرسل: ${senderUrl}` : (senderUsername ? ` (@${senderUsername})` : '')}\n` +
+                    `🕒 *الوقت:* ${formattedTime}\n` +
+                    `💬 *نص الرسالة:*\n${rawMsgText}\n`;
+
+                  client.sendMessage('me', {
+                    message: savedMsgContent,
+                  }).catch((err: any) => {
+                    console.warn('[Monitoring] Saved Messages dispatch error:', err?.message || err);
+                  });
+                } catch (savedErr) {
+                  console.warn('[Monitoring] Saved Messages error:', savedErr);
+                }
+
+                // ب. إشعار ويب (Socket.IO): بث حدث new_alert مع كائن JSON كامل
+                try {
+                  io.emit('new_alert', alertItem);
+                  broadcastTelegramUpdate({
+                    type: 'new_alert',
+                    alert: alertItem,
+                  });
+                } catch (sockErr) {
+                  console.warn('[Monitoring] Socket.IO broadcast error:', sockErr);
+                }
+
+                // ج. إشعار Web Push: استدعاء send_push_notification
+                try {
+                  await send_push_notification({
+                    title: `🔔 تنبيه: ${matchedKeyword}`,
+                    body: `في ${groupTitle} من ${senderTitle}`,
+                    icon: 'https://telegram.org/img/t_logo.png',
+                    badge: '/telegram-logo.svg',
+                    tag: `tg_alert_${alertId}`,
+                    data: {
+                      type: 'new_alert',
+                      ...alertItem,
+                      url: `/#/chat/${chatId}`,
+                    },
+                  });
+                } catch (pushErr) {
+                  console.warn('[Monitoring] Web Push alert error:', pushErr);
+                }
+              }
+            }
           }
         } catch (eventErr) {
           console.warn('[TelegramClient] Event handler error:', eventErr);
@@ -4805,6 +5060,51 @@ async function startServer() {
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message });
     }
+  });
+
+  // ==========================================
+  // KEYWORD MONITORING ENDPOINTS
+  // ==========================================
+  app.get('/api/alerts/history', (req, res) => {
+    res.json({
+      success: true,
+      monitoringEnabled,
+      count: USER_LOGS.length,
+      keywordsCount: MONITOR_KEYWORDS.length,
+      alerts: USER_LOGS,
+    });
+  });
+
+  app.post('/api/alerts/clear', (req, res) => {
+    USER_LOGS.length = 0;
+    res.json({
+      success: true,
+      message: 'تم مسح سجل التنبيهات بنجاح',
+      alerts: [],
+    });
+  });
+
+  app.get('/api/alerts/status', (req, res) => {
+    res.json({
+      success: true,
+      monitoringEnabled,
+      keywordsCount: MONITOR_KEYWORDS.length,
+      alertsCount: USER_LOGS.length,
+      keywords: MONITOR_KEYWORDS,
+    });
+  });
+
+  app.post('/api/alerts/toggle', (req, res) => {
+    const { enabled } = req.body;
+    if (typeof enabled === 'boolean') {
+      monitoringEnabled = enabled;
+    } else {
+      monitoringEnabled = !monitoringEnabled;
+    }
+    res.json({
+      success: true,
+      monitoringEnabled,
+    });
   });
 
   // ==========================================

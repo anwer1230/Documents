@@ -39,7 +39,7 @@ export class NotificationsService {
 
   // 2. Monitor state
   private monitorConfig: MonitorConfig = {
-    isEnabled: false,
+    isEnabled: true,
     keywords: [],
     sendAlertsToSavedMessages: true,
     browserPushAlerts: true,
@@ -392,6 +392,20 @@ export class NotificationsService {
 
   public getMonitorAlerts(): MonitorAlert[] {
     return this.monitorAlerts;
+  }
+
+  public addMonitorAlert(alert: MonitorAlert) {
+    if (!alert || !alert.id) return;
+    const existingIndex = this.monitorAlerts.findIndex((a) => a.id === alert.id);
+    if (existingIndex >= 0) {
+      this.monitorAlerts[existingIndex] = alert;
+    } else {
+      this.monitorAlerts.unshift(alert);
+      if (this.monitorAlerts.length > 200) {
+        this.monitorAlerts.length = 200;
+      }
+    }
+    this.notifyStateChange();
   }
 
   public clearMonitorAlerts() {

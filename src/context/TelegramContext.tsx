@@ -20,6 +20,7 @@ import {
   ProfileUserInfo,
   FcmDiagnosticInfo,
   FcmPushPacket,
+  MonitorAlert,
 } from '../types';
 import {
   CURRENT_USER,
@@ -3195,6 +3196,36 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setActiveChatId(data.chatId);
         } else if (data.type === 'MARK_CHAT_AS_READ' && data.chatId) {
           markChatReadUnread(data.chatId);
+        } else if (data.type === 'NEW_KEYWORD_ALERT' && data.alert) {
+          const alert = data.alert;
+          notificationsService.addMonitorAlert({
+            id: alert.id || `alert_${Date.now()}`,
+            keyword: alert.keyword || 'مراقبة',
+            sourceChatId: alert.chatId || '',
+            sourceChatTitle: alert.group || 'المجموعة',
+            senderName: alert.sender || 'مستخدم',
+            messageText: alert.text || '',
+            timestamp: alert.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            groupUrl: alert.groupUrl,
+            senderUrl: alert.senderUrl,
+            messageId: alert.messageId,
+            peerId: alert.peerId,
+          });
+          if (settings.soundEffects) {
+            telegramAudio.playMessageChime();
+          }
+          triggerNotification({
+            category: 'keyword_alert',
+            title: `🔔 تنبيه: ${alert.keyword || 'مراقبة'}`,
+            body: `في ${alert.group || 'المجموعة'} من ${alert.sender || 'مستخدم'}`,
+            chatId: alert.chatId,
+            chatTitle: alert.group,
+            messageId: alert.messageId,
+            senderName: alert.sender,
+            keyword: alert.keyword,
+            messageText: alert.text,
+            replyAction: true,
+          });
         } else if (data.type === 'BACKGROUND_PUSH_RECEIVED' && data.remoteMessage) {
           const remoteData = data.remoteMessage.data || {};
           const chatId = remoteData.chat_id || remoteData.chatId || 'chat_general';
@@ -3387,6 +3418,86 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     };
 
+    // ==========================================
+    // KEYWORD MONITORING REAL-TIME ALERT HANDLER
+    // ==========================================
+    const handleIncomingAlert = (alertData: any) => {
+      if (!alertData) return;
+      const alertItem: MonitorAlert = {
+        id: alertData.id || `alert_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        keyword: alertData.keyword || 'مراقبة',
+        sourceChatId: alertData.chatId || alertData.sourceChatId || '',
+        sourceChatTitle: alertData.group || alertData.sourceChatTitle || 'المجموعة',
+        senderName: alertData.sender || alertData.senderName || 'مستخدم',
+        messageText: alertData.text || alertData.messageText || '',
+        timestamp: alertData.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        groupUrl: alertData.groupUrl,
+        senderUrl: alertData.senderUrl,
+        messageId: alertData.messageId,
+        peerId: alertData.peerId,
+      };
+
+      // 1. Immediately update NotificationsService store for the Monitor UI
+      notificationsService.addMonitorAlert(alertItem);
+
+      // 2. Play alert chime
+      if (settings.soundEffects) {
+        telegramAudio.playMessageChime();
+      }
+
+      // 3. Show In-App Notification Banner
+      triggerNotification({
+        category: 'keyword_alert',
+        title: `🔔 تنبيه: ${alertItem.keyword}`,
+        body: `في ${alertItem.sourceChatTitle} من ${alertItem.senderName}\n${alertItem.messageText}`,
+        chatId: alertItem.sourceChatId,
+        chatTitle: alertItem.sourceChatTitle,
+        messageId: alertItem.messageId,
+        senderName: alertItem.senderName,
+        keyword: alertItem.keyword,
+        messageText: alertItem.messageText,
+        replyAction: true,
+      });
+
+      // 4. In-App Toast
+      showToast(`🚨 رصد "${alertItem.keyword}" في ${alertItem.sourceChatTitle}`, '🔔');
+
+      // 5. Browser Native Notification if page is hidden
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification(`🔔 تنبيه: ${alertItem.keyword}`, {
+            body: `في ${alertItem.sourceChatTitle} من ${alertItem.senderName}\n${alertItem.messageText}`,
+            icon: '/telegram-logo.svg',
+            tag: `tg_alert_${alertItem.id}`,
+          });
+        } catch (_) {}
+      }
+    };
+
+    // Initial fetch of historical alerts from backend to populate UI instantly
+    fetch('/api/alerts/history')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.success && Array.isArray(res.alerts)) {
+          res.alerts.forEach((a: any) => {
+            notificationsService.addMonitorAlert({
+              id: a.id,
+              keyword: a.keyword,
+              sourceChatId: a.chatId,
+              sourceChatTitle: a.group,
+              senderName: a.sender,
+              messageText: a.text,
+              timestamp: a.time,
+              groupUrl: a.groupUrl,
+              senderUrl: a.senderUrl,
+              messageId: a.messageId,
+              peerId: a.peerId,
+            });
+          });
+        }
+      })
+      .catch(() => {});
+
     // 1. Establish Socket.IO Connection for Instant Full-Duplex Real-Time Updates
     let socket: Socket | null = null;
     try {
@@ -3396,11 +3507,19 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
 
       socket.on('telegram_update', (update: any) => {
-        handleIncomingUpdate(update);
+        if (update?.type === 'new_alert' && update.alert) {
+          handleIncomingAlert(update.alert);
+        } else {
+          handleIncomingUpdate(update);
+        }
       });
 
       socket.on('new_message', (update: any) => {
         handleIncomingUpdate(update);
+      });
+
+      socket.on('new_alert', (alertData: any) => {
+        handleIncomingAlert(alertData);
       });
     } catch (sockErr) {
       console.warn('[Socket.IO] Client connection error:', sockErr);
@@ -3413,7 +3532,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       eventSource.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          handleIncomingUpdate(parsed);
+          if (parsed?.type === 'new_alert' && parsed.alert) {
+            handleIncomingAlert(parsed.alert);
+          } else {
+            handleIncomingUpdate(parsed);
+          }
         } catch (_) {}
       };
 
