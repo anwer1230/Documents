@@ -16,7 +16,7 @@ const TELEGRAM_API_ID = process.env.API_ID || process.env.TELEGRAM_API_ID || '22
 const TELEGRAM_API_HASH = process.env.API_HASH || process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
 const TDLIB_API_HASH = process.env.TDLIB_API_HASH || TELEGRAM_API_HASH;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tg_session_anwer_foud_secure_key_2026';
-const SESSION_STRING = (process.env.SESSION_STRING || process.env.TELEGRAM_SESSION || process.env.STRING_SESSION || '').trim();
+// NOTE: Telegram sessions are strictly isolated in sessions/account_{index}.json and NEVER stored in .env or global variables.
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 
@@ -87,6 +87,200 @@ export function normalizeArabicText(text: string): string {
 
 // Primary global GramJS client instance for background listeners and RPC dispatch
 let mainTelegramClient: TelegramClient | null = null;
+
+// =========================================================================
+// ISOLATED MULTI-ACCOUNT SESSION STORAGE ENGINE (GramJS + Node.js fs)
+// Replicates official Telegram isolated session structure (sessions/account_{index}.json)
+// Strictly isolated: NO sessions in .env or hardcoded variables.
+// =========================================================================
+export const SESSIONS_DIR = path.resolve(process.cwd(), 'sessions');
+
+// Ensure sessions directory exists on startup
+if (!fs.existsSync(SESSIONS_DIR)) {
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    console.log(`[SessionEngine] Created isolated sessions directory at: ${SESSIONS_DIR}`);
+  } catch (err) {
+    console.error(`[SessionEngine] Failed to create sessions directory:`, err);
+  }
+}
+
+export interface StoredAccountSession {
+  session: string;
+  userId: string;
+  phone: string;
+  index?: number;
+  name?: string;
+  username?: string;
+  avatar?: string;
+  isPremium?: boolean;
+  updatedAt?: string;
+}
+
+/**
+ * Returns the exact file path for an account's isolated session file
+ * e.g. sessions/account_0.json, sessions/account_1.json, etc.
+ */
+export function getSessionFilePath(accountIndex: number): string {
+  return path.join(SESSIONS_DIR, `account_${accountIndex}.json`);
+}
+
+/**
+ * Writes an account session to its isolated JSON file (sessions/account_{index}.json)
+ * Format inside file: { "session": "...", "userId": "...", "phone": "..." }
+ */
+export function saveAccountSession(
+  index: number,
+  data: {
+    session: string;
+    userId: string;
+    phone: string;
+    name?: string;
+    username?: string;
+    avatar?: string;
+    isPremium?: boolean;
+  }
+): boolean {
+  try {
+    if (!fs.existsSync(SESSIONS_DIR)) {
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    }
+    const filePath = getSessionFilePath(index);
+    const payload: StoredAccountSession = {
+      session: data.session,
+      userId: String(data.userId || ''),
+      phone: String(data.phone || ''),
+      index,
+      name: data.name || '',
+      username: data.username || '',
+      avatar: data.avatar || '',
+      isPremium: Boolean(data.isPremium),
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+    console.log(`[SessionEngine] Successfully saved isolated session for account ${index} -> ${filePath}`);
+    return true;
+  } catch (error) {
+    console.error(`[SessionEngine] Error saving session file for account ${index}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Reads an isolated session file for a given account index (0..3)
+ */
+export function readAccountSession(index: number): StoredAccountSession | null {
+  try {
+    const filePath = getSessionFilePath(index);
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(raw) as StoredAccountSession;
+    if (parsed && parsed.session) {
+      return parsed;
+    }
+    return null;
+  } catch (error) {
+    console.error(`[SessionEngine] Error reading session file for account ${index}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Scans the sessions/ directory and loads all account session files (account_X.json)
+ */
+export function loadAllAccountSessionsFromDisk(): Map<number, StoredAccountSession> {
+  const result = new Map<number, StoredAccountSession>();
+  try {
+    if (!fs.existsSync(SESSIONS_DIR)) {
+      return result;
+    }
+    const files = fs.readdirSync(SESSIONS_DIR);
+    for (const file of files) {
+      const match = file.match(/^account_(\d+)\.json$/);
+      if (match) {
+        const index = parseInt(match[1], 10);
+        const data = readAccountSession(index);
+        if (data && data.session) {
+          result.set(index, data);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[SessionEngine] Error loading sessions from directory:`, err);
+  }
+  return result;
+}
+
+/**
+ * Deletes an account session file from disk upon logout
+ */
+export function deleteAccountSessionFromDisk(index: number): boolean {
+  try {
+    const filePath = getSessionFilePath(index);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`[SessionEngine] Removed isolated session file for account ${index}`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error(`[SessionEngine] Error deleting session file for account ${index}:`, err);
+    return false;
+  }
+}
+
+// =========================================================================
+// MULTI-ACCOUNT & ACCOUNT INSTANCE RUNTIME STATE
+// Replicates DrKLO/Telegram Android AccountInstance & USERS architecture
+// =========================================================================
+export let currentAccount: number = 0;
+
+export interface AccountInstanceData {
+  currentAccount: number;
+  userId: string;
+  phone: string;
+  sessionString: string;
+  client: TelegramClient | null;
+  user: any;
+  lastActive: string;
+}
+
+export const USERS: Map<number, any> = new Map();
+export const accountInstances: Map<number, AccountInstanceData> = new Map();
+
+export class AccountInstance {
+  private static instances = new Map<number, AccountInstance>();
+  public currentAccount: number;
+
+  private constructor(accountNum: number) {
+    this.currentAccount = accountNum;
+  }
+
+  public static getInstance(accountNum: number = currentAccount): AccountInstance {
+    if (!AccountInstance.instances.has(accountNum)) {
+      AccountInstance.instances.set(accountNum, new AccountInstance(accountNum));
+    }
+    return AccountInstance.instances.get(accountNum)!;
+  }
+
+  public getAccountData(): AccountInstanceData | undefined {
+    return accountInstances.get(this.currentAccount);
+  }
+
+  public getClient(): TelegramClient | null {
+    return accountInstances.get(this.currentAccount)?.client || null;
+  }
+
+  public getUser(): any {
+    return USERS.get(this.currentAccount) || null;
+  }
+}
+
+export function getAccountInstance(accountIndex: number = currentAccount): AccountInstance {
+  return AccountInstance.getInstance(accountIndex);
+}
 
 // ==========================================
 // VAPID & WEB PUSH NOTIFICATION SUBSYSTEM
@@ -1159,7 +1353,35 @@ async function startServer() {
   };
 
   // Helper to obtain or reconnect live TelegramClient for an authenticated user session
-  const getClientForSession = async (sessionString?: string, phone?: string): Promise<TelegramClient | null> => {
+  const getClientForSession = async (sessionString?: string, phone?: string, accountIndex?: number): Promise<TelegramClient | null> => {
+    // 0. If accountIndex is provided, prioritize loading from isolated sessions/account_{accountIndex}.json
+    if (typeof accountIndex === 'number' && accountIndex >= 0 && accountIndex < 4) {
+      const activeInstance = accountInstances.get(accountIndex);
+      if (activeInstance && activeInstance.client) {
+        if (activeInstance.client.connected) return activeInstance.client;
+        const ok = await connectWithTimeout(activeInstance.client, 2500);
+        if (ok) return activeInstance.client;
+      }
+      const stored = readAccountSession(accountIndex);
+      if (stored && stored.session) {
+        sessionString = stored.session;
+      }
+    }
+
+    // Fallback to active currentAccount if no specific session or phone was passed
+    if (!sessionString && !phone) {
+      const curInst = accountInstances.get(currentAccount);
+      if (curInst && curInst.client && curInst.client.connected) {
+        return curInst.client;
+      }
+      if (mainTelegramClient && mainTelegramClient.connected) {
+        return mainTelegramClient;
+      }
+      const storedCur = readAccountSession(currentAccount);
+      if (storedCur && storedCur.session) {
+        sessionString = storedCur.session;
+      }
+    }
     const sessionKey = sessionString?.trim() || (phone ? formatE164Phone(phone) : '');
     if (sessionKey) {
       const lastFailed = sessionFailureCooldowns.get(sessionKey);
@@ -2122,9 +2344,35 @@ async function startServer() {
       const savedSessionString = sessionData.client.session.save() as unknown as string;
       const sessionId = `tg_sess_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
-      // Save client in active authenticated clients map
-      if (savedSessionString) {
-        authenticatedTelegramClients.set(savedSessionString, sessionData.client);
+      // 1. Determine target account index (0, 1, 2, or 3)
+      let targetAccountIndex = 0;
+      if (typeof req.body.currentAccount === 'number' && req.body.currentAccount >= 0 && req.body.currentAccount < 4) {
+        targetAccountIndex = req.body.currentAccount;
+      } else if (typeof req.body.accountIndex === 'number' && req.body.accountIndex >= 0 && req.body.accountIndex < 4) {
+        targetAccountIndex = req.body.accountIndex;
+      } else if (typeof req.body.index === 'number' && req.body.index >= 0 && req.body.index < 4) {
+        targetAccountIndex = req.body.index;
+      } else {
+        const diskSessions = loadAllAccountSessionsFromDisk();
+        let foundExisting = -1;
+        let firstFree = -1;
+        for (let i = 0; i < 4; i++) {
+          const s = diskSessions.get(i);
+          if (s && s.phone === formattedPhone) {
+            foundExisting = i;
+            break;
+          }
+          if (!s && firstFree === -1) {
+            firstFree = i;
+          }
+        }
+        if (foundExisting !== -1) {
+          targetAccountIndex = foundExisting;
+        } else if (firstFree !== -1) {
+          targetAccountIndex = firstFree;
+        } else {
+          targetAccountIndex = currentAccount;
+        }
       }
 
       // Download user's real avatar immediately with strict timeout
@@ -2143,6 +2391,39 @@ async function startServer() {
         }
       } catch (avErr: any) {
         console.warn('[MTProto] Profile photo download skipped at login (safe fallback):', avErr?.message || avErr);
+      }
+
+
+      // 2. Save session strictly to isolated file: sessions/account_{targetAccountIndex}.json
+      // Format inside file: { "session": "...", "userId": "...", "phone": "..." }
+      saveAccountSession(targetAccountIndex, {
+        session: savedSessionString,
+        userId: String(authorizedUser.id || Date.now()),
+        phone: formattedPhone,
+        name: [authorizedUser.firstName || authorizedUser.first_name, authorizedUser.lastName || authorizedUser.last_name].filter(Boolean).join(' ') || 'مستخدم تيليجرام',
+        username: authorizedUser.username || '',
+        avatar: userAvatar,
+        isPremium: Boolean(authorizedUser.premium),
+      });
+
+      // 3. Update runtime USERS and AccountInstance
+      USERS.set(targetAccountIndex, authorizedUser);
+      accountInstances.set(targetAccountIndex, {
+        currentAccount: targetAccountIndex,
+        userId: String(authorizedUser.id || Date.now()),
+        phone: formattedPhone,
+        sessionString: savedSessionString,
+        client: sessionData.client,
+        user: authorizedUser,
+        lastActive: new Date().toISOString(),
+      });
+
+      currentAccount = targetAccountIndex;
+      mainTelegramClient = sessionData.client;
+
+      // Save client in active authenticated clients map
+      if (savedSessionString) {
+        authenticatedTelegramClients.set(savedSessionString, sessionData.client);
       }
 
       return res.json({
@@ -3500,78 +3781,186 @@ async function startServer() {
     });
   });
 
-  // 12. Multi-Account Management & Sync Endpoints
-  const serverAccountsStore: any[] = [
-    {
-      id: 'acc_personal',
-      name: 'Anwar Fouad',
-      phone: '+967 770 000 000',
-      username: 'anwar_fouad',
-      authKey: crypto.randomBytes(32).toString('hex'),
-      dcId: 4,
-      isPremium: true,
-      lastSync: new Date().toISOString(),
-    },
-    {
-      id: 'acc_work',
-      name: 'Anwar Dev (Work)',
-      phone: '+967 771 999 888',
-      username: 'anwar_tech_dev',
-      authKey: crypto.randomBytes(32).toString('hex'),
-      dcId: 4,
-      isPremium: true,
-      lastSync: new Date().toISOString(),
-    },
-    {
-      id: 'acc_business',
-      name: 'Anwar Business (Official)',
-      phone: '+967 772 333 444',
-      username: 'anwar_official',
-      authKey: crypto.randomBytes(32).toString('hex'),
-      dcId: 4,
-      isPremium: true,
-      lastSync: new Date().toISOString(),
-    },
-  ];
-
+  // 12. Multi-Account Management & Sync Endpoints (Backed by sessions/account_{index}.json)
   app.get('/api/telegram/accounts', (req, res) => {
+    const diskSessions = loadAllAccountSessionsFromDisk();
+    const accountsList: any[] = [];
+
+    for (let i = 0; i < 4; i++) {
+      const sess = diskSessions.get(i);
+      const user = USERS.get(i);
+      const instance = accountInstances.get(i);
+      if (sess) {
+        accountsList.push({
+          id: `acc_${i}`,
+          currentAccount: i,
+          name: sess.name || (user ? [user.firstName, user.lastName].filter(Boolean).join(' ') : `حساب ${i}`),
+          phone: sess.phone,
+          username: sess.username || (user?.username ? `@${user.username}` : ''),
+          userId: sess.userId,
+          isActive: i === currentAccount,
+          avatar: sess.avatar || '',
+          isPremium: Boolean(sess.isPremium || user?.premium),
+          lastSync: instance?.lastActive || sess.updatedAt || new Date().toISOString(),
+        });
+      }
+    }
+
     res.json({
       success: true,
-      accounts: serverAccountsStore,
-      activeDc: 4,
-      totalAccounts: serverAccountsStore.length,
+      currentAccount,
+      activeAccountId: `acc_${currentAccount}`,
+      accounts: accountsList,
+      totalAccounts: accountsList.length,
     });
   });
 
-  app.post('/api/telegram/accounts/switch', (req, res) => {
-    const { accountId } = req.body;
-    const found = serverAccountsStore.find((a) => a.id === accountId);
-    res.json({
-      success: true,
-      activeAccountId: accountId,
-      account: found || null,
-      message: 'Switched MTProto account session successfully.',
-    });
+  app.post('/api/telegram/accounts/switch', async (req, res) => {
+    const { accountId, currentAccount: reqAccountIndex, index } = req.body || {};
+    let targetIndex = 0;
+    if (typeof reqAccountIndex === 'number') {
+      targetIndex = reqAccountIndex;
+    } else if (typeof index === 'number') {
+      targetIndex = index;
+    } else if (typeof accountId === 'string') {
+      const match = accountId.match(/\d+/);
+      if (match) targetIndex = parseInt(match[0], 10);
+    }
+
+    targetIndex = Math.max(0, Math.min(3, targetIndex));
+    console.log(`[AccountSwitch] Switching to Account [${targetIndex}]...`);
+
+    // Strictly load session from sessions/account_{targetIndex}.json only
+    const stored = readAccountSession(targetIndex);
+    if (!stored || !stored.session) {
+      return res.status(404).json({
+        success: false,
+        error: 'ACCOUNT_SESSION_NOT_FOUND',
+        message: `لم يتم العثور على جلسة محفوظة للحساب رقم ${targetIndex} في مجلد sessions/`,
+      });
+    }
+
+    try {
+      let client = accountInstances.get(targetIndex)?.client;
+      if (!client || !client.connected) {
+        console.log(`[AccountSwitch] Connecting TelegramClient for Account [${targetIndex}] using isolated session...`);
+        client = new TelegramClient(
+          new sessions.StringSession(stored.session),
+          Number(TELEGRAM_API_ID),
+          TELEGRAM_API_HASH,
+          {
+            connectionRetries: 3,
+            requestRetries: 3,
+            timeout: 10,
+            useWSS: false,
+            deviceModel: `Telegram Android MTProto (Acc ${targetIndex})`,
+            systemVersion: 'Android 14',
+            appVersion: '11.2.3',
+            langCode: 'ar',
+            systemLangCode: 'ar',
+          }
+        );
+        configureTelegramClient(client, stored.session);
+        await connectWithTimeout(client, 3500);
+      }
+
+      currentAccount = targetIndex;
+      mainTelegramClient = client;
+
+      let userObj = USERS.get(targetIndex);
+      if (!userObj && client && client.connected) {
+        userObj = await client.getMe().catch(() => null);
+        if (userObj) USERS.set(targetIndex, userObj);
+      }
+
+      accountInstances.set(targetIndex, {
+        currentAccount: targetIndex,
+        userId: stored.userId,
+        phone: stored.phone,
+        sessionString: stored.session,
+        client,
+        user: userObj || { id: stored.userId, phone: stored.phone },
+        lastActive: new Date().toISOString(),
+      });
+
+      return res.json({
+        success: true,
+        currentAccount: targetIndex,
+        accountId: `acc_${targetIndex}`,
+        account: {
+          id: `acc_${targetIndex}`,
+          name: stored.name || (userObj ? [userObj.firstName, userObj.lastName].filter(Boolean).join(' ') : `حساب ${targetIndex}`),
+          phone: stored.phone,
+          userId: stored.userId,
+          sessionString: stored.session,
+          currentAccount: targetIndex,
+        },
+        user: userObj || null,
+        message: `تم التبديل إلى الحساب ${targetIndex} وتحميل جلسته بنجاح من مجلد sessions/`,
+      });
+    } catch (switchErr: any) {
+      console.error(`[AccountSwitch] Error switching to account ${targetIndex}:`, switchErr);
+      return res.status(500).json({
+        success: false,
+        error: 'SWITCH_FAILED',
+        message: switchErr?.message || 'فشل التبديل إلى الحساب المحدد',
+      });
+    }
+  });
+
+  app.post('/api/telegram/accounts/remove', async (req, res) => {
+    const { accountId, currentAccount: reqAccountIndex, index } = req.body || {};
+    let targetIndex = 0;
+    if (typeof reqAccountIndex === 'number') {
+      targetIndex = reqAccountIndex;
+    } else if (typeof index === 'number') {
+      targetIndex = index;
+    } else if (typeof accountId === 'string') {
+      const match = accountId.match(/\d+/);
+      if (match) targetIndex = parseInt(match[0], 10);
+    }
+
+    try {
+      const client = accountInstances.get(targetIndex)?.client;
+      if (client) {
+        try { await client.disconnect(); } catch (_) {}
+      }
+      deleteAccountSessionFromDisk(targetIndex);
+      accountInstances.delete(targetIndex);
+      USERS.delete(targetIndex);
+
+      // If active account was removed, switch to another available account if one exists
+      if (currentAccount === targetIndex) {
+        const remaining = loadAllAccountSessionsFromDisk();
+        if (remaining.size > 0) {
+          const firstKey = remaining.keys().next().value;
+          currentAccount = firstKey !== undefined ? firstKey : 0;
+          const nextClient = accountInstances.get(currentAccount)?.client;
+          if (nextClient) mainTelegramClient = nextClient;
+        } else {
+          currentAccount = 0;
+          mainTelegramClient = null;
+        }
+      }
+
+      res.json({
+        success: true,
+        currentAccount,
+        message: `تم حذف جلسة الحساب ${targetIndex} بنجاح من مجلد sessions/`,
+      });
+    } catch (removeErr: any) {
+      res.status(500).json({
+        success: false,
+        error: 'REMOVE_FAILED',
+        message: removeErr?.message || 'فشل حذف الحساب',
+      });
+    }
   });
 
   app.post('/api/telegram/accounts/add', (req, res) => {
-    const { account } = req.body;
-    if (account) {
-      const newAccEntry = {
-        id: account.id || `acc_${Date.now()}`,
-        name: account.user?.name || 'New Account',
-        phone: account.user?.phone || '+00000000',
-        username: account.user?.username || '',
-        authKey: crypto.randomBytes(32).toString('hex'),
-        dcId: 4,
-        isPremium: !!account.user?.isPremium,
-        lastSync: new Date().toISOString(),
-      };
-      serverAccountsStore.push(newAccEntry);
-    }
     res.json({
       success: true,
-      message: 'Account registered and authorized in MTProto 2.0 Layer 184 session pool.',
+      message: 'Account authentication ready. Submit verification code to save isolated session.',
     });
   });
 
@@ -6112,34 +6501,105 @@ async function startServer() {
     console.log(`Telegram Fullstack Server running on http://0.0.0.0:${PORT}`);
     console.log(`Telegram API_ID: ${TELEGRAM_API_ID} | MTProto 2.0 Layer 184`);
 
-    // =========================================================================
-    // 1. Session Health Check (Mandatory Telegram MTProto Session Verification)
-    // =========================================================================
-    const activeSessionToTest = SESSION_STRING.trim();
-    if (activeSessionToTest) {
+  // =========================================================================
+  // BOOT INITIALIZATION: Load all account sessions from sessions/ directory
+  // =========================================================================
+  const initializeSessionsOnBoot = async (): Promise<void> => {
+    console.log('[SessionEngine] Initializing isolated accounts from sessions/ directory...');
+    const diskSessions = loadAllAccountSessionsFromDisk();
+
+    if (diskSessions.size === 0) {
+      console.log('ℹ️ [SessionEngine] No saved sessions found in sessions/ directory. Ready for fresh authentication.');
+      return;
+    }
+
+    console.log(`[SessionEngine] Found ${diskSessions.size} account session(s) on disk. Connecting clients...`);
+
+    for (const [index, sessionData] of diskSessions.entries()) {
       try {
-        console.log('[MTProto] Testing session health via getMe()...');
-        const client = await getClientForSession(activeSessionToTest);
-        if (client && client.connected) {
-          const me: any = await client.getMe();
-          if (me) {
-            mainTelegramClient = client;
-            const userIdentifier = me.username ? `@${me.username}` : (me.phone || me.id);
-            const fullName = [me.firstName, me.lastName].filter(Boolean).join(' ') || 'User';
-            console.log(`✅ Session is REAL. Logged in as: ${fullName} (${userIdentifier})`);
+        console.log(`[SessionEngine] Bootstrapping AccountInstance [${index}] (Phone: ${sessionData.phone || 'unknown'}, UserID: ${sessionData.userId})...`);
+
+        const stringSession = new sessions.StringSession(sessionData.session);
+        const client = new TelegramClient(
+          stringSession,
+          Number(TELEGRAM_API_ID),
+          TELEGRAM_API_HASH,
+          {
+            connectionRetries: 3,
+            requestRetries: 3,
+            timeout: 10,
+            useWSS: false,
+            deviceModel: `Telegram Android MTProto (Acc ${index})`,
+            systemVersion: 'Android 14',
+            appVersion: '11.2.3',
+            langCode: 'ar',
+            systemLangCode: 'ar',
+          }
+        );
+
+        configureTelegramClient(client, sessionData.session);
+
+        const isConnected = await connectWithTimeout(client, 3500);
+        if (isConnected) {
+          const isAuth = await client.checkAuthorization().catch(() => false);
+          if (isAuth) {
+            const me: any = await client.getMe().catch(() => null);
+            const userData = me || {
+              id: sessionData.userId,
+              phone: sessionData.phone,
+              firstName: sessionData.name || `User ${index}`,
+              username: sessionData.username || '',
+            };
+
+            USERS.set(index, userData);
+            authenticatedTelegramClients.set(sessionData.session, client);
+
+            accountInstances.set(index, {
+              currentAccount: index,
+              userId: String(userData.id || sessionData.userId),
+              phone: userData.phone || sessionData.phone,
+              sessionString: sessionData.session,
+              client,
+              user: userData,
+              lastActive: new Date().toISOString(),
+            });
+
+            if (index === currentAccount || !mainTelegramClient) {
+              currentAccount = index;
+              mainTelegramClient = client;
+            }
+
+            const userName = [userData.firstName, userData.lastName].filter(Boolean).join(' ') || userData.firstName || 'مستخدم';
+            console.log(`✅ [SessionEngine] Account [${index}] verified & ready. Logged in as: ${userName} (${userData.phone || userData.id})`);
           } else {
-            console.log('❌ FAILED AUTH: Session is disconnected');
+            console.warn(`⚠️ [SessionEngine] Account [${index}] authorization failed or revoked.`);
           }
         } else {
-          console.log('❌ FAILED AUTH: Session is disconnected');
+          console.warn(`⚠️ [SessionEngine] Account [${index}] connect timed out. Registered in memory for on-demand retry.`);
+          authenticatedTelegramClients.set(sessionData.session, client);
+          accountInstances.set(index, {
+            currentAccount: index,
+            userId: sessionData.userId,
+            phone: sessionData.phone,
+            sessionString: sessionData.session,
+            client,
+            user: null,
+            lastActive: new Date().toISOString(),
+          });
         }
-      } catch (authErr: any) {
-        console.log('❌ FAILED AUTH: Session is disconnected');
-        console.error('[MTProto Auth Error]:', authErr?.errorMessage || authErr?.message || authErr);
+      } catch (err: any) {
+        console.error(`❌ [SessionEngine] Failed to initialize account [${index}] from disk:`, err?.message || err);
       }
-    } else {
-      console.log('❌ FAILED AUTH: Session is disconnected');
     }
+
+    console.log(`[SessionEngine] Boot initialization finished. Loaded accounts: ${accountInstances.size}, Active Account: [${currentAccount}]`);
+  };
+
+    // =========================================================================
+    // 1. Multi-Account Boot & Session Health Check (sessions/ directory)
+    // Replicates official Telegram isolated session structure (sessions/account_{index}.json)
+    // =========================================================================
+    await initializeSessionsOnBoot();
   });
 }
 
