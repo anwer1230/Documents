@@ -4721,11 +4721,29 @@ async function startServer() {
             message: 'السلام عليكم',
           });
 
-          // 2. انتظر فترة زمنية (smart_wait_seconds / 30 ثانية)
+          // 2. تفعيل مستمع الأحداث الحي (Event Listener) لمراقبة الرسائل الجديدة لحظياً خلال فترة الانتظار
+          const liveIncomingMsgs: any[] = [];
+          const liveMsgHandler = (event: any) => {
+            try {
+              const incoming = event?.message;
+              if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
+                liveIncomingMsgs.push(incoming);
+                console.log(`[SendNow] [SalamMode] ⚡ Live event detected in ${label}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
+              }
+            } catch {}
+          };
+          try {
+            client.addEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
+          } catch {}
+
           console.log(`[SendNow] [SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${label}...`);
           await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
 
-          // 3. راقب الرسائل الجديدة في المجموعة
+          try {
+            client.removeEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
+          } catch {}
+
+          // 3. التحقق المزدوج من نشاط المجموعة عبر Event Listener و getMessages
           let interactionPassed = false;
           try {
             const recentMsgs: any = await client.getMessages(entity, {
@@ -4733,13 +4751,18 @@ async function startServer() {
               minId: greetingMsg.id,
             });
             const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            console.log(`[SendNow] [SalamMode] 3. Monitored ${othersMsgs.length} new messages in ${label} (required: ${smart_required_messages})`);
-            if (othersMsgs.length >= smart_required_messages) {
+            const totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
+            console.log(`[SendNow] [SalamMode] 3. Monitored ${totalCount} new messages in ${label} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
+            if (totalCount >= smart_required_messages) {
               interactionPassed = true;
             }
           } catch (chkErr: any) {
             console.warn(`[SendNow] [SalamMode] Error checking messages in ${label}:`, chkErr?.message || chkErr);
-            interactionPassed = false;
+            if (liveIncomingMsgs.length >= smart_required_messages) {
+              interactionPassed = true;
+            } else {
+              interactionPassed = false;
+            }
           }
 
           if (interactionPassed) {
@@ -5840,11 +5863,29 @@ async function startServer() {
             message: 'السلام عليكم',
           });
 
-          // 2. انتظر الفترة الزمنية المحددة (smart_wait_seconds ثانية)
+          // 2. تفعيل مستمع الأحداث الحي (Event Listener) لمراقبة الرسائل الجديدة لحظياً خلال فترة الانتظار
+          const liveIncomingMsgs: any[] = [];
+          const liveMsgHandler = (event: any) => {
+            try {
+              const incoming = event?.message;
+              if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
+                liveIncomingMsgs.push(incoming);
+                console.log(`[SalamMode] ⚡ Live event detected in ${chatId}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
+              }
+            } catch {}
+          };
+          try {
+            client.addEventHandler(liveMsgHandler, new NewMessage({ chats: [peer] }));
+          } catch {}
+
           console.log(`[SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${chatId}...`);
           await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
 
-          // 3. راقب الرسائل الجديدة من باقي أعضاء المجموعة
+          try {
+            client.removeEventHandler(liveMsgHandler, new NewMessage({ chats: [peer] }));
+          } catch {}
+
+          // 3. التحقق المزدوج من نشاط المجموعة عبر Event Listener و getMessages
           let interactionPassed = false;
           try {
             const recentMsgs: any = await client.getMessages(peer, {
@@ -5852,13 +5893,18 @@ async function startServer() {
               minId: greetingMsg.id,
             });
             const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            console.log(`[SalamMode] 3. Monitored ${othersMsgs.length} new messages from participants in ${chatId} (required: ${smart_required_messages})`);
-            if (othersMsgs.length >= smart_required_messages) {
+            const totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
+            console.log(`[SalamMode] 3. Monitored ${totalCount} new messages from participants in ${chatId} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
+            if (totalCount >= smart_required_messages) {
               interactionPassed = true;
             }
           } catch (chkErr) {
             console.warn('[SalamMode] Check messages error:', chkErr);
-            interactionPassed = false;
+            if (liveIncomingMsgs.length >= smart_required_messages) {
+              interactionPassed = true;
+            } else {
+              interactionPassed = false;
+            }
           }
 
           if (interactionPassed) {
