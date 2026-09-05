@@ -40,6 +40,7 @@ import { multiAccountManager } from '../utils/MultiAccountManager';
 import { notificationEngine } from '../services/NotificationEngine';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { storageSyncManager } from '../utils/StorageSyncManager';
+import { draftSyncService } from '../services/DraftSyncService';
 import { themeController } from '../core/ThemeController';
 import { PinnedAndForwardHelper } from '../core/PinnedAndForwardHelper';
 import { OpenTelegramLink } from '../core/OpenTelegramLink';
@@ -875,8 +876,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       window.addEventListener('telegram:session_revoked', onSessionRevokedEvent);
     }
 
-    // Restore drafts into active chats state
-    const existingDrafts = storageSyncManager.getAllDrafts();
+    // Restore drafts into active chats state from DraftSyncService
+    const existingDrafts = draftSyncService.getAllDrafts();
     if (Object.keys(existingDrafts).length > 0) {
       setChats((prev) =>
         prev.map((c) =>
@@ -884,6 +885,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         )
       );
     }
+
+    // Real-time synchronization across different browser sessions and tabs
+    const unsubscribeDrafts = draftSyncService.subscribe((chatId, draft) => {
+      setChats((prev) =>
+        prev.map((c) => {
+          if (c.id === chatId) {
+            if (draft && draft.text && draft.text.trim().length > 0) {
+              const timeStr = new Date(draft.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              return {
+                ...c,
+                draft: draft.text,
+                draftTimestamp: timeStr,
+              };
+            } else {
+              const { draft: _d, draftTimestamp: _dt, ...rest } = c;
+              return rest as Chat;
+            }
+          }
+          return c;
+        })
+      );
+    });
 
     // Load persisted custom settings
     storageSyncManager.loadSettings().then((savedSettings) => {
@@ -930,6 +953,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (typeof window !== 'undefined') {
         window.removeEventListener('telegram:session_revoked', onSessionRevokedEvent);
       }
+      unsubscribeDrafts();
     };
   }, []);
 
@@ -2027,6 +2051,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const trimmed = draftText.trim();
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    draftSyncService.saveDraft(chatId, draftText);
     storageSyncManager.setDraft(chatId, draftText);
 
     setChats((prev) =>
@@ -2050,6 +2075,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const sendMessage = (text: string, media?: MessageMedia) => {
     if (!activeChatId) return;
+
+    // Clear draft for this chat immediately across sessions
+    draftSyncService.clearDraft(activeChatId);
 
     const now = new Date();
     const timeStr = formatTelegramTime(now);

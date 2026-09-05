@@ -41,6 +41,7 @@ import { messagesController } from '../../core/MessagesController';
 import { ChatObject } from '../../core/ChatObject';
 import { UserObject } from '../../core/UserObject';
 import { NotificationCenter } from '../../core/NotificationCenter';
+import { draftSyncService } from '../../services/DraftSyncService';
 import confetti from 'canvas-confetti';
 
 export const ChatInput: React.FC = () => {
@@ -66,7 +67,13 @@ export const ChatInput: React.FC = () => {
     showToast,
   } = useTelegram();
 
-  const [text, setText] = useState(() => activeChat?.draft || '');
+  const [text, setText] = useState(() => {
+    if (activeChatId) {
+      const persistedDraft = draftSyncService.getDraftText(activeChatId);
+      if (persistedDraft) return persistedDraft;
+    }
+    return activeChat?.draft || '';
+  });
   const [isRecording, setIsRecording] = useState(false);
   const [isRecordLocked, setIsRecordLocked] = useState(false);
   const [recordDuration, setRecordDuration] = useState(0);
@@ -118,19 +125,61 @@ export const ChatInput: React.FC = () => {
     { cmd: '/help', desc: isArabic ? 'دليل الأوامر' : 'Help & manual' },
   ];
 
-  // Sync draft state across conversation switches
+  // Sync draft state across conversation switches and restore cursor position
   useEffect(() => {
     const prevChatId = currentChatIdRef.current;
     if (prevChatId && prevChatId !== activeChatId && !editingMessage) {
+      const cursorPos = textareaRef.current ? textareaRef.current.selectionStart : undefined;
+      draftSyncService.saveDraft(prevChatId, text, { cursorPosition: cursorPos, immediate: true });
       setChatDraft(prevChatId, text);
     }
     currentChatIdRef.current = activeChatId;
 
     if (!editingMessage) {
-      setText(activeChat?.draft || '');
+      const persistedDraft = activeChatId ? draftSyncService.getDraft(activeChatId) : null;
+      const initialText = persistedDraft ? persistedDraft.text : (activeChat?.draft || '');
+      setText(initialText);
+
+      // Restore cursor position if available
+      if (persistedDraft?.cursorPosition !== undefined) {
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            try {
+              textareaRef.current.setSelectionRange(
+                persistedDraft.cursorPosition!,
+                persistedDraft.cursorPosition!
+              );
+            } catch (_) {}
+          }
+        });
+      }
     }
     setDismissedPreviewUrl(null);
   }, [activeChatId]);
+
+  // Real-time listener for cross-tab / cross-session draft sync
+  useEffect(() => {
+    const unsubscribe = draftSyncService.subscribe((chatId, draft) => {
+      if (chatId === activeChatId && !editingMessage) {
+        const currentVal = textareaRef.current?.value ?? text;
+        const incomingText = draft?.text || '';
+        if (currentVal !== incomingText) {
+          setText(incomingText);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeChatId, editingMessage, text]);
+
+  // Flush pending draft writes on unmount
+  useEffect(() => {
+    return () => {
+      draftSyncService.flushPendingWrites();
+    };
+  }, []);
 
   // Real-time NotificationCenter listener (chatInfoDidLoad & updateInterfaces)
   const [, setInterfaceVersion] = useState(0);
@@ -160,7 +209,16 @@ export const ChatInput: React.FC = () => {
   const updateTextAndDraft = (newVal: string) => {
     setText(newVal);
     if (!editingMessage && activeChatId) {
+      const cursorPos = textareaRef.current ? textareaRef.current.selectionStart : undefined;
+      draftSyncService.saveDraft(activeChatId, newVal, { cursorPosition: cursorPos });
       setChatDraft(activeChatId, newVal);
+    }
+  };
+
+  const handleBlur = () => {
+    if (activeChatId && !editingMessage) {
+      const cursorPos = textareaRef.current ? textareaRef.current.selectionStart : undefined;
+      draftSyncService.saveDraft(activeChatId, text, { cursorPosition: cursorPos, immediate: true });
     }
   };
 
@@ -179,6 +237,7 @@ export const ChatInput: React.FC = () => {
     }
 
     if (activeChatId) {
+      draftSyncService.clearDraft(activeChatId);
       setChatDraft(activeChatId, '');
       messagesController.recordMessageSent(activeChatId);
     }
@@ -936,6 +995,7 @@ export const ChatInput: React.FC = () => {
                   rows={1}
                   value={text}
                   onChange={(e) => updateTextAndDraft(e.target.value)}
+                  onBlur={handleBlur}
                   onKeyDown={handleKeyDown}
                   placeholder={
                     isSavedMessages
