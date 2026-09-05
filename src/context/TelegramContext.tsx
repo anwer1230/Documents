@@ -245,6 +245,7 @@ interface TelegramContextType {
   jumpToMessage: (chatId: string, messageId: string) => void;
   openPrivateChat: (senderId: string, senderName: string, senderAvatar?: string, senderUsername?: string) => void;
   lastReadPositions: Record<string, ChatReadPosition>;
+  ScrollPositions: Record<string, number>;
   getLastReadPosition: (chatId: string) => ChatReadPosition | undefined;
   saveLastReadPosition: (
     chatId: string,
@@ -4593,6 +4594,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         jumpToMessage,
         openPrivateChat,
         lastReadPositions: chatStore.lastReadPositions,
+        ScrollPositions: chatStore.ScrollPositions,
         getLastReadPosition: (chatId: string) => chatStore.getLastReadPosition(chatId),
         saveLastReadPosition: (chatId: string, data: any) => chatStore.saveLastReadPosition(chatId, data),
         resolveTelegramLink,

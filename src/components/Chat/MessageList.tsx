@@ -190,6 +190,18 @@ export const MessageList: React.FC = () => {
     return baseItems;
   }, [currentMessages, readInboxMaxId, hasMoreOnServer]);
 
+  // Map: Message ID -> Index in groupedItems (mandatory for virtualized lists to locate message positions)
+  const messageIdToIndexMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < groupedItems.length; i++) {
+      const item = groupedItems[i];
+      if (item?.message?.id !== undefined && item?.message?.id !== null) {
+        map.set(String(item.message.id), i);
+      }
+    }
+    return map;
+  }, [groupedItems]);
+
   // Load more older messages from MTProto API stream
   const handleLoadOlder = useCallback(async () => {
     if (!activeChatId || isLoadingOlder || !hasMoreOnServer) return;
@@ -212,7 +224,9 @@ export const MessageList: React.FC = () => {
       const el = listRef.current?.element;
       if (el) {
         const heightDifference = el.scrollHeight - scrollAnchorRef.current.previousScrollHeight;
-        el.scrollTop = scrollAnchorRef.current.previousScrollTop + heightDifference;
+        if (heightDifference > 0) {
+          el.scrollTop = scrollAnchorRef.current.previousScrollTop + heightDifference;
+        }
       }
       scrollAnchorRef.current.shouldRestore = false;
     }
@@ -259,9 +273,10 @@ export const MessageList: React.FC = () => {
     if (!el || groupedItems.length === 0 || !activeChatId) return;
 
     const savedPos = chatStore.getLastReadPosition(activeChatId);
+    const savedNumericPos = chatStore.getScrollPosition(activeChatId);
 
-    // Rule 1: If never opened before (not in lastReadPositions), immediately scroll to bottom
-    if (!savedPos) {
+    // Rule 1: If never opened before (neither in lastReadPositions nor ScrollPositions), immediately scroll to bottom
+    if (!savedPos && savedNumericPos === undefined) {
       listRef.current?.scrollToRow({
         index: groupedItems.length - 1,
         align: 'end',
@@ -275,7 +290,7 @@ export const MessageList: React.FC = () => {
     }
 
     // Rule 2: If user was previously at bottom, scroll directly to bottom
-    if (savedPos.isNearBottom) {
+    if (savedPos?.isNearBottom) {
       listRef.current?.scrollToRow({
         index: groupedItems.length - 1,
         align: 'end',
@@ -288,12 +303,16 @@ export const MessageList: React.FC = () => {
       return;
     }
 
-    // Rule 3: If a specific lastReadMessageId was saved, scroll directly to that message
-    if (savedPos.lastReadMessageId) {
-      const targetIndex = groupedItems.findIndex(
-        (item) => item.message?.id === savedPos.lastReadMessageId
-      );
-      if (targetIndex !== -1) {
+    // Rule 3: Use Message ID -> Index map to scroll to exact message
+    const targetMsgId = savedPos?.lastReadMessageId || (savedNumericPos ? String(savedNumericPos) : undefined);
+    if (targetMsgId) {
+      let targetIndex = messageIdToIndexMap.get(targetMsgId);
+      if (targetIndex === undefined) {
+        // Fallback linear search
+        targetIndex = groupedItems.findIndex((item) => String(item.message?.id) === targetMsgId);
+      }
+
+      if (targetIndex !== undefined && targetIndex !== -1) {
         listRef.current?.scrollToRow({
           index: targetIndex,
           align: 'center',
@@ -307,7 +326,7 @@ export const MessageList: React.FC = () => {
     }
 
     // Rule 4: If lastReadMessageId is not found (or earlier), use preserved scrollTop
-    if (savedPos.scrollTop > 0) {
+    if (savedPos && savedPos.scrollTop > 0) {
       if (savedPos.scrollHeight > 0 && el.scrollHeight > 0) {
         const heightDiff = el.scrollHeight - savedPos.scrollHeight;
         el.scrollTop = Math.max(80, savedPos.scrollTop + (heightDiff > 0 ? heightDiff : 0));
@@ -329,7 +348,7 @@ export const MessageList: React.FC = () => {
     }
 
     isInitialScrollDoneRef.current = true;
-  }, [activeChatId, groupedItems]);
+  }, [activeChatId, groupedItems, messageIdToIndexMap]);
 
   // Handle activeChatId switching & scroll restoration
   useEffect(() => {
@@ -432,6 +451,11 @@ export const MessageList: React.FC = () => {
       setUnreadStreamCount(0);
     }
 
+    // Guard against spurious early mount scroll events where scrollTop is 0 before initial positioning
+    if (!isInitialScrollDoneRef.current) {
+      return;
+    }
+
     if (activeChatId) {
       let lastReadMsgId: string | undefined = undefined;
       if (isNearBottom && currentMessages.length > 0) {
@@ -451,6 +475,11 @@ export const MessageList: React.FC = () => {
         scrollHeight,
         isNearBottom,
       });
+
+      if (lastReadMsgId) {
+        const numId = Number(lastReadMsgId);
+        chatStore.setScrollPosition(activeChatId, !isNaN(numId) ? numId : scrollTop);
+      }
     }
 
     if (scrollTop < 80 && !isLoadingOlder && hasMoreOnServer) {

@@ -23,7 +23,10 @@ export interface InSessionScrollState extends ChatReadPosition {}
 export class ChatStore {
   private static instance: ChatStore;
 
-  // Persistent last read positions per chat (chatId -> ChatReadPosition)
+  // Persistent Record<string, number> for last read message IDs / scroll positions (as requested)
+  public ScrollPositions: Record<string, number> = {};
+
+  // Persistent rich last read positions per chat (chatId -> ChatReadPosition)
   public lastReadPositions: Record<string, ChatReadPosition> = {};
 
   // In-memory session scroll map
@@ -35,6 +38,7 @@ export class ChatStore {
   // Threshold in pixels to consider user "at bottom"
   private readonly NEAR_BOTTOM_THRESHOLD = 140;
   private readonly STORAGE_KEY = 'tg_last_read_positions';
+  private readonly SCROLL_POSITIONS_KEY = 'tg_scroll_positions';
 
   constructor() {
     this.initFromStorage();
@@ -48,11 +52,21 @@ export class ChatStore {
   }
 
   /**
-   * Load persistent scroll positions from localStorage
+   * Load persistent scroll positions from localStorage (both tg_scroll_positions & tg_last_read_positions)
    */
   private initFromStorage(): void {
     if (typeof window === 'undefined') return;
     try {
+      // 1. Load tg_scroll_positions (chatId -> number)
+      const storedPositions = localStorage.getItem(this.SCROLL_POSITIONS_KEY);
+      if (storedPositions) {
+        const parsedPositions = JSON.parse(storedPositions);
+        if (parsedPositions && typeof parsedPositions === 'object') {
+          this.ScrollPositions = parsedPositions;
+        }
+      }
+
+      // 2. Load rich lastReadPositions
       const stored = localStorage.getItem(this.STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -62,33 +76,57 @@ export class ChatStore {
           Object.values(parsed).forEach((item: any) => {
             if (item && item.chatId) {
               this.sessionScrollMap.set(item.chatId, item);
+              if (item.lastReadMessageId && !this.ScrollPositions[item.chatId]) {
+                const numericId = Number(item.lastReadMessageId);
+                if (!isNaN(numericId)) {
+                  this.ScrollPositions[item.chatId] = numericId;
+                }
+              }
             }
           });
         }
       }
     } catch (err) {
-      console.warn('[chatStore] Error reading lastReadPositions from localStorage:', err);
+      console.warn('[chatStore] Error reading positions from localStorage:', err);
     }
   }
 
   /**
-   * Persist lastReadPositions safely to localStorage
+   * Persist both ScrollPositions and lastReadPositions safely to localStorage
    */
   private persistToStorage(): void {
     if (typeof window === 'undefined') return;
     try {
+      localStorage.setItem(this.SCROLL_POSITIONS_KEY, JSON.stringify(this.ScrollPositions));
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.lastReadPositions));
     } catch (err) {
-      console.warn('[chatStore] Error saving lastReadPositions to localStorage:', err);
+      console.warn('[chatStore] Error saving positions to localStorage:', err);
     }
   }
 
   /**
-   * Check if a chat exists in lastReadPositions
+   * Get the saved scroll position number from ScrollPositions
+   */
+  public getScrollPosition(chatId: string): number | undefined {
+    if (!chatId) return undefined;
+    return this.ScrollPositions[chatId];
+  }
+
+  /**
+   * Set the saved scroll position number in ScrollPositions
+   */
+  public setScrollPosition(chatId: string, position: number): void {
+    if (!chatId || position === undefined || isNaN(position)) return;
+    this.ScrollPositions[chatId] = position;
+    this.persistToStorage();
+  }
+
+  /**
+   * Check if a chat exists in lastReadPositions or ScrollPositions
    */
   public hasLastReadPosition(chatId: string): boolean {
     if (!chatId) return false;
-    return Boolean(this.lastReadPositions[chatId]);
+    return Boolean(this.lastReadPositions[chatId] || this.ScrollPositions[chatId] !== undefined);
   }
 
   /**
@@ -154,6 +192,14 @@ export class ChatStore {
     this.sessionScrollMap.set(chatId, updated);
     this.visitedChatsInCurrentSession.add(chatId);
 
+    // Also update ScrollPositions mapping
+    if (lastReadMessageId) {
+      const numId = Number(lastReadMessageId);
+      this.ScrollPositions[chatId] = !isNaN(numId) ? numId : scrollTop;
+    } else if (scrollTop > 0) {
+      this.ScrollPositions[chatId] = scrollTop;
+    }
+
     this.persistToStorage();
   }
 
@@ -207,10 +253,12 @@ export class ChatStore {
   public clearSessionScroll(chatId?: string): void {
     if (chatId) {
       delete this.lastReadPositions[chatId];
+      delete this.ScrollPositions[chatId];
       this.sessionScrollMap.delete(chatId);
       this.visitedChatsInCurrentSession.delete(chatId);
     } else {
       this.lastReadPositions = {};
+      this.ScrollPositions = {};
       this.sessionScrollMap.clear();
       this.visitedChatsInCurrentSession.clear();
     }
