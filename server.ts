@@ -59,6 +59,9 @@ export const MONITOR_KEYWORDS: string[] = [
 
 export let monitoringEnabled = true;
 
+// Server startup threshold timestamp (UNIX seconds). Messages with date < accountStartupTime are old catch-up messages and strictly ignored.
+export const accountStartupTime: number = Math.floor(Date.now() / 1000);
+
 export interface AlertLogItem {
   id: string;
   messageId: string;
@@ -1030,8 +1033,17 @@ async function startServer() {
           // ==============================================================
           // KEYWORD MONITORING ENGINE (AUTOMATIC, REAL-TIME & PERSISTENT)
           // ==============================================================
-          // 1. Strictly ignore outgoing messages (out === true)
-          if (!isOut && !msg.out && monitoringEnabled && textSnippet) {
+          // 1. New Message Threshold & Logical Timestamp Filtering:
+          // Check event.message.date against accountStartupTime.
+          // If message.date < accountStartupTime: old catch-up message -> strictly ignore, do not trigger alerts.
+          // If message.date >= accountStartupTime: real-time new message -> inspect for keywords.
+          const msgDateUnix = typeof event?.message?.date === 'number'
+            ? event.message.date
+            : (typeof msg?.date === 'number' ? msg.date : 0);
+
+          if (msgDateUnix < accountStartupTime) {
+            // Old message (Catch-up) - strictly ignore to prevent duplicate notifications
+          } else if (!isOut && !msg.out && monitoringEnabled && textSnippet) {
             // 2. Prevent duplicate processing using _processed_msg_ids
             const msgUniqueKey = `${chatId}_${msg.id}`;
             if (!_processed_msg_ids.has(msgUniqueKey)) {
@@ -1102,11 +1114,8 @@ async function startServer() {
                   }
                 } catch (_) {}
 
-                const formattedTime = msgDate.toLocaleTimeString('ar-EG', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  hour12: true,
-                });
+                const messageDate = new Date(event.message.date * 1000);
+                const formattedTime = messageDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
                 const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 const alertItem: AlertLogItem = {
@@ -1121,7 +1130,7 @@ async function startServer() {
                   senderUrl: senderUrl || undefined,
                   time: formattedTime,
                   text: rawMsgText,
-                  timestamp: Date.now(),
+                  timestamp: messageDate.getTime(),
                 };
 
                 // Store in USER_LOGS (keep last 200)
