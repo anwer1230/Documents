@@ -29,6 +29,19 @@ export const AutoResponderModal: React.FC = () => {
   const [scope, setScope] = useState<'all' | 'private' | 'groups'>('all');
 
   useEffect(() => {
+    // Fetch persisted rules from SQLite server API
+    fetch('/api/auto_reply/rules')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.rules) && data.rules.length > 0) {
+          backgroundSyncService.setAutoReplyRules(data.rules);
+          if (typeof data.enabled === 'boolean') {
+            backgroundSyncService.toggleGlobalAutoResponder(data.enabled);
+          }
+        }
+      })
+      .catch(() => {});
+
     const unsub = backgroundSyncService.subscribe(() => {
       setRules([...backgroundSyncService.getAutoReplyRules()]);
       setIsGlobalActive(backgroundSyncService.isAutoResponderActive());

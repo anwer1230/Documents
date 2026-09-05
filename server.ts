@@ -11,6 +11,9 @@ import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 import webpush from 'web-push';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
+import { sqliteDatabase } from './server/sqliteService';
+
+export { sqliteDatabase };
 
 // Dynamic Environment & Credentials Resolution (from process.env)
 const TELEGRAM_API_ID = process.env.API_ID || process.env.TELEGRAM_API_ID || '22043994';
@@ -801,120 +804,37 @@ async function startServer() {
   };
 
   // =========================================================================
-  // PERSISTENCE ENGINE: SETTINGS & BATCHES DISK STORAGE
+  // PERSISTENCE ENGINE: SQLITE DATABASE SERVICE (Automation Rules & Sent Batches)
+  // Replaces transient in-memory arrays and JSON files with a real SQLite engine.
+  // Automation rules and batch messages survive server restarts durably.
   // =========================================================================
   const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
   const BATCHES_FILE = path.join(process.cwd(), 'batches.json');
 
-  const loadSettingsFromDisk = () => {
+  // Background mirror helper to keep disk json files synchronized as safety backups
+  const backupToDiskFiles = () => {
     try {
-      if (fs.existsSync(SETTINGS_FILE)) {
-        const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
-        return JSON.parse(raw);
-      }
-    } catch (e) {
-      console.warn('[Settings] Failed to load settings.json:', e);
-    }
-    return { auto_replies: [], auto_replies_enabled: true };
-  };
+      const currentRules = sqliteDatabase.getRules();
+      const currentGlobal = sqliteDatabase.isAutoRepliesEnabled();
+      fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
+        auto_replies: currentRules,
+        auto_replies_enabled: currentGlobal,
+      }, null, 2), 'utf8');
+    } catch (_) {}
 
-  const saveSettingsToDisk = (data: any) => {
     try {
-      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2), 'utf8');
-    } catch (e) {
-      console.warn('[Settings] Failed to save settings.json:', e);
-    }
+      const currentBatches = sqliteDatabase.getBatches();
+      fs.writeFileSync(BATCHES_FILE, JSON.stringify(currentBatches, null, 2), 'utf8');
+    } catch (_) {}
   };
 
-  const loadBatchesFromDisk = (): any[] => {
-    try {
-      if (fs.existsSync(BATCHES_FILE)) {
-        const raw = fs.readFileSync(BATCHES_FILE, 'utf8');
-        return JSON.parse(raw);
-      }
-    } catch (e) {
-      console.warn('[Batches] Failed to load batches.json:', e);
-    }
-    return [];
-  };
-
-  const saveBatchesToDisk = (batches: any[]) => {
-    try {
-      fs.writeFileSync(BATCHES_FILE, JSON.stringify(batches, null, 2), 'utf8');
-    } catch (e) {
-      console.warn('[Batches] Failed to save batches.json:', e);
-    }
-  };
-
-  // Initial state from disk
-  const initialSettings = loadSettingsFromDisk();
-  let autoRepliesEnabled: boolean = initialSettings.auto_replies_enabled !== false;
-  let autoReplyRulesStore: any[] = Array.isArray(initialSettings.auto_replies) && initialSettings.auto_replies.length > 0
-    ? initialSettings.auto_replies
-    : [
-        {
-          id: 'rule_1',
-          keyword: 'السلام عليكم',
-          replyText: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
-          reply: 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸',
-          matchType: 'contains',
-          match: 'contains',
-          scope: 'all',
-          isEnabled: true,
-          timesTriggered: 0,
-          used_count: 0,
-          last_used: 0,
-        },
-        {
-          id: 'rule_2',
-          keyword: 'الأسعار',
-          replyText: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
-          reply: 'أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨',
-          matchType: 'contains',
-          match: 'contains',
-          scope: 'all',
-          isEnabled: true,
-          timesTriggered: 0,
-          used_count: 0,
-          last_used: 0,
-        },
-      ];
-
-  const persistAutoReplies = () => {
-    const curr = loadSettingsFromDisk();
-    curr.auto_replies = autoReplyRulesStore;
-    curr.auto_replies_enabled = autoRepliesEnabled;
-    saveSettingsToDisk(curr);
-  };
-
-  let sentBatchesStore: any[] = loadBatchesFromDisk();
-  if (!sentBatchesStore || sentBatchesStore.length === 0) {
-    sentBatchesStore = [
-      {
-        id: 'batch_101',
-        text: 'السلام عليكم ورحمة الله، يتوفر لدينا خدمات دعم أكاديمي متخصصة 📚',
-        hasImages: false,
-        imagesCount: 0,
-        groupsCount: 3,
-        targets: [
-          { chatId: '-1001749201928', chatTitle: 'قروب المطورين العربي', messageId: '8901' },
-          { chatId: '-1001594839201', chatTitle: 'منصة التقنية والذكاء الاصطناعي', messageId: '8902' },
-          { chatId: '-1001892019283', chatTitle: 'ملتقى رواد الأعمال', messageId: '8903' },
-        ],
-        date: '2026-09-04',
-        timestamp: '10:45 AM',
-      },
-    ];
-    saveBatchesToDisk(sentBatchesStore);
-  }
-
-  // Real Auto Reply Handler Function
+  // Real Auto Reply Handler Function powered by SQLite
   async function handleAutoReplyForMessage(
     client: TelegramClient,
     msg: any,
     meta: { chatId: string; peerIdStr: string; senderId: string; senderName: string; text: string }
   ) {
-    if (!autoRepliesEnabled) return;
+    if (!sqliteDatabase.isAutoRepliesEnabled()) return;
     const rawText = (meta.text || '').trim();
     if (!rawText) return;
     const normalizedText = normalizeArabicText(rawText);
@@ -923,7 +843,8 @@ async function startServer() {
     const isPrivate = !meta.chatId.startsWith('chat_-') && !meta.peerIdStr.startsWith('-') && !msg.isGroup && !msg.isChannel;
     const isGroup = !isPrivate;
 
-    for (const rule of autoReplyRulesStore) {
+    const currentRules = sqliteDatabase.getRules();
+    for (const rule of currentRules) {
       if (!rule.isEnabled) continue;
 
       // Scope check
@@ -960,11 +881,9 @@ async function startServer() {
             replyTo: msg.id,
           });
 
-          // Update usage statistics
-          rule.timesTriggered = (rule.timesTriggered || 0) + 1;
-          rule.used_count = (rule.used_count || 0) + 1;
-          rule.last_used = Date.now();
-          persistAutoReplies();
+          // Update usage statistics in SQLite
+          sqliteDatabase.incrementRuleUsage(rule.id, Date.now());
+          backupToDiskFiles();
 
           io.emit('auto_reply_triggered', {
             ruleId: rule.id,
@@ -6714,13 +6633,13 @@ async function startServer() {
   });
 
   // =========================================================================
-  // 3. القواعد والردود التلقائية (Auto Responder API - Real GramJS)
+  // 3. القواعد والردود التلقائية (Auto Responder API - Powered by SQLite Database)
   // =========================================================================
   app.get('/api/auto_reply/rules', (req, res) => {
     res.json({
       success: true,
-      enabled: autoRepliesEnabled,
-      rules: autoReplyRulesStore,
+      enabled: sqliteDatabase.isAutoRepliesEnabled(),
+      rules: sqliteDatabase.getRules(),
     });
   });
 
@@ -6733,8 +6652,7 @@ async function startServer() {
       return res.status(400).json({ success: false, message: 'الكلمة المفتاحية ونص الرد مطلوبان' });
     }
 
-    const newRule = {
-      id: `rule_${Date.now()}`,
+    const newRule = sqliteDatabase.addRule({
       keyword,
       replyText: replyContent,
       reply: replyContent,
@@ -6742,66 +6660,46 @@ async function startServer() {
       match: data.matchType || data.match || 'contains',
       scope: data.scope || 'all',
       isEnabled: true,
-      timesTriggered: 0,
-      used_count: 0,
-      last_used: 0,
-    };
-
-    autoReplyRulesStore.push(newRule);
-    persistAutoReplies();
+    });
+    backupToDiskFiles();
 
     res.json({
       success: true,
-      message: 'تمت إضافة قاعدة الرد التلقائي وحفظها في settings.json بنجاح',
+      message: 'تمت إضافة قاعدة الرد التلقائي وحفظها في قاعدة بيانات SQLite بنجاح',
       rule: newRule,
     });
   });
 
   app.post('/api/update_auto_reply', (req, res) => {
     const data = req.body || {};
-    const rule = autoReplyRulesStore.find((r) => r.id === data.id);
-    if (!rule) {
+    const updatedRule = sqliteDatabase.updateRule(data.id, data);
+    if (!updatedRule) {
       return res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
     }
-
-    if (data.keyword) rule.keyword = data.keyword;
-    const rep = data.replyText || data.reply;
-    if (rep) {
-      rule.replyText = rep;
-      rule.reply = rep;
-    }
-    if (data.matchType || data.match) {
-      rule.matchType = data.matchType || data.match;
-      rule.match = data.matchType || data.match;
-    }
-    if (data.scope) rule.scope = data.scope;
-    if (typeof data.isEnabled === 'boolean') rule.isEnabled = data.isEnabled;
-
-    persistAutoReplies();
+    backupToDiskFiles();
 
     res.json({
       success: true,
-      message: 'تم تحديث القاعدة وحفظها في settings.json بنجاح',
-      rule,
+      message: 'تم تحديث القاعدة وحفظها في قاعدة بيانات SQLite بنجاح',
+      rule: updatedRule,
     });
   });
 
   app.post('/api/delete_auto_reply', (req, res) => {
     const data = req.body || {};
-    autoReplyRulesStore = autoReplyRulesStore.filter((r) => r.id !== data.id);
-    persistAutoReplies();
+    const deleted = sqliteDatabase.deleteRule(data.id);
+    backupToDiskFiles();
     res.json({
       success: true,
-      message: 'تم حذف القاعدة بنجاح',
+      message: deleted ? 'تم حذف القاعدة بنجاح' : 'القاعدة غير موجودة',
     });
   });
 
   app.post('/api/toggle_auto_reply', (req, res) => {
     const data = req.body || {};
-    const rule = autoReplyRulesStore.find((r) => r.id === data.id);
+    const rule = sqliteDatabase.toggleRule(data.id);
     if (rule) {
-      rule.isEnabled = !rule.isEnabled;
-      persistAutoReplies();
+      backupToDiskFiles();
       return res.json({ success: true, rule });
     }
     res.status(404).json({ success: false, message: 'القاعدة غير موجودة' });
@@ -6809,25 +6707,27 @@ async function startServer() {
 
   app.post('/api/auto_reply/toggle_global', (req, res) => {
     const { enabled } = req.body || {};
+    let nextState: boolean;
     if (typeof enabled === 'boolean') {
-      autoRepliesEnabled = enabled;
+      nextState = enabled;
     } else {
-      autoRepliesEnabled = !autoRepliesEnabled;
+      nextState = !sqliteDatabase.isAutoRepliesEnabled();
     }
-    persistAutoReplies();
+    sqliteDatabase.setAutoRepliesEnabled(nextState);
+    backupToDiskFiles();
     res.json({
       success: true,
-      autoRepliesEnabled,
+      autoRepliesEnabled: nextState,
     });
   });
 
   // =========================================================================
-  // 4. رسائلي وسجل الدفعات (Sent Batches API - Real GramJS editMessage & deleteMessages)
+  // 4. رسائلي وسجل الدفعات (Sent Batches API - Powered by SQLite Database)
   // =========================================================================
   app.get('/api/batches', (req, res) => {
     res.json({
       success: true,
-      batches: sentBatchesStore,
+      batches: sqliteDatabase.getBatches(),
     });
   });
 
@@ -6835,7 +6735,7 @@ async function startServer() {
     const data = req.body || {};
     const { batch_id, new_text, sessionString, phone } = data;
 
-    const batch = sentBatchesStore.find((b) => b.id === batch_id);
+    const batch = sqliteDatabase.getBatchById(batch_id);
     if (!batch) {
       return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
     }
@@ -6861,13 +6761,14 @@ async function startServer() {
       }
     }
 
-    batch.text = new_text;
-    saveBatchesToDisk(sentBatchesStore);
+    sqliteDatabase.updateBatchText(batch_id, new_text);
+    backupToDiskFiles();
+    const updatedBatch = sqliteDatabase.getBatchById(batch_id);
 
     res.json({
       success: true,
       message: `تم تعديل الرسالة بنجاح (نجح: ${successCount}، تعذر: ${failCount})`,
-      batch,
+      batch: updatedBatch,
     });
   });
 
@@ -6875,13 +6776,13 @@ async function startServer() {
     const data = req.body || {};
     const { batch_id, sessionString, phone } = data;
 
-    const idx = sentBatchesStore.findIndex((b) => b.id === batch_id);
-    if (idx === -1) {
+    const removed = sqliteDatabase.getBatchById(batch_id);
+    if (!removed) {
       return res.status(404).json({ success: false, message: 'الدفعة غير موجودة' });
     }
 
-    const removed = sentBatchesStore.splice(idx, 1)[0];
-    saveBatchesToDisk(sentBatchesStore);
+    sqliteDatabase.deleteBatch(batch_id);
+    backupToDiskFiles();
 
     const client = await getClientForSession(sessionString, phone);
     let deletedCount = 0;
@@ -6901,6 +6802,14 @@ async function startServer() {
     res.json({
       success: true,
       message: `تم سحب وحذف الرسائل من تيليجرام (${deletedCount}/${removed.targets.length} مجموعة)`,
+    });
+  });
+
+  // SQLite Database Health & Statistics Endpoint
+  app.get('/api/database/stats', (req, res) => {
+    res.json({
+      success: true,
+      stats: sqliteDatabase.getStats(),
     });
   });
 
@@ -7140,8 +7049,8 @@ async function startServer() {
     };
 
     if (successTargets.length > 0) {
-      sentBatchesStore.unshift(newBatch);
-      saveBatchesToDisk(sentBatchesStore);
+      sqliteDatabase.addBatch(newBatch);
+      backupToDiskFiles();
     }
 
     // Send final report to 'me' (الرسائل المحفوظة)

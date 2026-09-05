@@ -13,3 +13,9 @@ config/release.keystore
 sessions/*.json
 !sessions/.gitkeep
 
+# SQLite Database Storage
+data/*.sqlite
+data/*.sqlite-journal
+!data/.gitkeep
+
+
