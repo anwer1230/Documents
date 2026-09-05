@@ -154,6 +154,7 @@ export const MessageList: React.FC = () => {
   const isUserNearBottomRef = useRef<boolean>(true);
   const activeChatIdRef = useRef<string | null>(activeChatId);
   const isInitialScrollDoneRef = useRef<boolean>(false);
+  const lastVisibleIndexRef = useRef<number>(-1);
 
   const currentMessages = useMemo(() => {
     return (activeChatId && messages[activeChatId]) || [];
@@ -242,14 +243,93 @@ export const MessageList: React.FC = () => {
     isUserNearBottomRef.current = true;
 
     if (activeChatId && el) {
-      chatStore.saveSessionScrollPosition(
-        activeChatId,
-        el.scrollHeight,
-        el.scrollHeight,
-        true
-      );
+      const latestMsgId = currentMessages[currentMessages.length - 1]?.id;
+      chatStore.saveLastReadPosition(activeChatId, {
+        lastReadMessageId: latestMsgId,
+        scrollTop: el.scrollHeight,
+        scrollHeight: el.scrollHeight,
+        isNearBottom: true,
+      });
     }
-  }, [groupedItems.length, activeChatId]);
+  }, [groupedItems.length, activeChatId, currentMessages]);
+
+  // Performs official Telegram scroll restoration upon opening or receiving messages
+  const performInitialScroll = useCallback(() => {
+    const el = listRef.current?.element;
+    if (!el || groupedItems.length === 0 || !activeChatId) return;
+
+    const savedPos = chatStore.getLastReadPosition(activeChatId);
+
+    // Rule 1: If never opened before (not in lastReadPositions), immediately scroll to bottom
+    if (!savedPos) {
+      listRef.current?.scrollToRow({
+        index: groupedItems.length - 1,
+        align: 'end',
+        behavior: 'instant',
+      });
+      el.scrollTop = el.scrollHeight;
+      isUserNearBottomRef.current = true;
+      setShowScrollBottom(false);
+      isInitialScrollDoneRef.current = true;
+      return;
+    }
+
+    // Rule 2: If user was previously at bottom, scroll directly to bottom
+    if (savedPos.isNearBottom) {
+      listRef.current?.scrollToRow({
+        index: groupedItems.length - 1,
+        align: 'end',
+        behavior: 'instant',
+      });
+      el.scrollTop = el.scrollHeight;
+      isUserNearBottomRef.current = true;
+      setShowScrollBottom(false);
+      isInitialScrollDoneRef.current = true;
+      return;
+    }
+
+    // Rule 3: If a specific lastReadMessageId was saved, scroll directly to that message
+    if (savedPos.lastReadMessageId) {
+      const targetIndex = groupedItems.findIndex(
+        (item) => item.message?.id === savedPos.lastReadMessageId
+      );
+      if (targetIndex !== -1) {
+        listRef.current?.scrollToRow({
+          index: targetIndex,
+          align: 'center',
+          behavior: 'instant',
+        });
+        isUserNearBottomRef.current = false;
+        setShowScrollBottom(true);
+        isInitialScrollDoneRef.current = true;
+        return;
+      }
+    }
+
+    // Rule 4: If lastReadMessageId is not found (or earlier), use preserved scrollTop
+    if (savedPos.scrollTop > 0) {
+      if (savedPos.scrollHeight > 0 && el.scrollHeight > 0) {
+        const heightDiff = el.scrollHeight - savedPos.scrollHeight;
+        el.scrollTop = Math.max(80, savedPos.scrollTop + (heightDiff > 0 ? heightDiff : 0));
+      } else {
+        el.scrollTop = savedPos.scrollTop;
+      }
+      isUserNearBottomRef.current = false;
+      setShowScrollBottom(true);
+    } else {
+      // STRICT RULE: NEVER jump to top or scrollTop = 0! Default to bottom
+      listRef.current?.scrollToRow({
+        index: groupedItems.length - 1,
+        align: 'end',
+        behavior: 'instant',
+      });
+      el.scrollTop = el.scrollHeight;
+      isUserNearBottomRef.current = true;
+      setShowScrollBottom(false);
+    }
+
+    isInitialScrollDoneRef.current = true;
+  }, [activeChatId, groupedItems]);
 
   // Handle activeChatId switching & scroll restoration
   useEffect(() => {
@@ -262,57 +342,59 @@ export const MessageList: React.FC = () => {
     setReadInboxMaxId(undefined);
     prevMessagesLengthRef.current = currentMessages.length;
 
-    const sessionState = chatStore.getSessionScrollPosition(activeChatId);
-
-    const performInitialScroll = () => {
-      const el = listRef.current?.element;
-      if (!el || groupedItems.length === 0) return;
-
-      if (sessionState && !sessionState.isNearBottom && sessionState.scrollTop > 0) {
-        if (sessionState.scrollHeight > 0 && el.scrollHeight > 0) {
-          const heightDiff = el.scrollHeight - sessionState.scrollHeight;
-          el.scrollTop = Math.max(0, sessionState.scrollTop + heightDiff);
-        } else {
-          el.scrollTop = sessionState.scrollTop;
-        }
-        isUserNearBottomRef.current = false;
-        setShowScrollBottom(true);
-      } else {
-        listRef.current?.scrollToRow({
-          index: groupedItems.length - 1,
-          align: 'end',
-          behavior: 'instant',
-        });
-        el.scrollTop = el.scrollHeight;
-        isUserNearBottomRef.current = true;
-        setShowScrollBottom(false);
-      }
-      isInitialScrollDoneRef.current = true;
-    };
-
     chatStore.markChatVisitedInCurrentSession(activeChatId);
-
-    requestAnimationFrame(performInitialScroll);
-    const t1 = setTimeout(performInitialScroll, 40);
-    const t2 = setTimeout(performInitialScroll, 120);
-
     markChatAsRead(activeChatId);
 
+    if (groupedItems.length > 0) {
+      requestAnimationFrame(performInitialScroll);
+      const t1 = setTimeout(performInitialScroll, 40);
+      const t2 = setTimeout(performInitialScroll, 120);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [activeChatId, markChatAsRead, performInitialScroll, groupedItems.length, currentMessages.length]);
+
+  // Trigger initial scroll as soon as messages are hydrated from IndexedDB / SQLite
+  useLayoutEffect(() => {
+    if (!activeChatId || groupedItems.length === 0) return;
+    if (!isInitialScrollDoneRef.current) {
+      performInitialScroll();
+      requestAnimationFrame(performInitialScroll);
+      const timer = setTimeout(performInitialScroll, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [activeChatId, groupedItems.length, performInitialScroll]);
+
+  // Save read position when unmounting or switching chats
+  useEffect(() => {
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
       const el = listRef.current?.element;
-      if (el && activeChatId) {
+      const currentChatId = activeChatIdRef.current;
+      if (el && currentChatId) {
         const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-        chatStore.saveSessionScrollPosition(
-          activeChatId,
-          el.scrollTop,
-          el.scrollHeight,
-          distance <= 120
-        );
+        const isNear = distance <= 140;
+        let lastMsgId: string | undefined = undefined;
+        if (isNear && currentMessages.length > 0) {
+          lastMsgId = currentMessages[currentMessages.length - 1]?.id;
+        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
+          for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
+            if (groupedItems[i]?.message?.id) {
+              lastMsgId = groupedItems[i].message.id;
+              break;
+            }
+          }
+        }
+        chatStore.saveLastReadPosition(currentChatId, {
+          lastReadMessageId: lastMsgId,
+          scrollTop: el.scrollTop,
+          scrollHeight: el.scrollHeight,
+          isNearBottom: isNear,
+        });
       }
     };
-  }, [activeChatId]);
+  }, [groupedItems, currentMessages]);
 
   // Handle incoming stream updates & outgoing messages with smart auto-scroll
   useEffect(() => {
@@ -351,22 +433,61 @@ export const MessageList: React.FC = () => {
     }
 
     if (activeChatId) {
-      chatStore.saveSessionScrollPosition(activeChatId, scrollTop, scrollHeight, isNearBottom);
+      let lastReadMsgId: string | undefined = undefined;
+      if (isNearBottom && currentMessages.length > 0) {
+        lastReadMsgId = currentMessages[currentMessages.length - 1]?.id;
+      } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
+        for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
+          if (groupedItems[i]?.message?.id) {
+            lastReadMsgId = groupedItems[i].message.id;
+            break;
+          }
+        }
+      }
+
+      chatStore.saveLastReadPosition(activeChatId, {
+        lastReadMessageId: lastReadMsgId,
+        scrollTop,
+        scrollHeight,
+        isNearBottom,
+      });
     }
 
     if (scrollTop < 80 && !isLoadingOlder && hasMoreOnServer) {
       handleLoadOlder();
     }
-  }, [activeChatId, unreadStreamCount, isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
+  }, [activeChatId, unreadStreamCount, isLoadingOlder, hasMoreOnServer, handleLoadOlder, currentMessages, groupedItems]);
 
   // Virtualized row rendering window callback
   const handleRowsRendered = useCallback((
     visibleRows: { startIndex: number; stopIndex: number }
   ) => {
+    lastVisibleIndexRef.current = visibleRows.stopIndex;
+
+    // Live update position as user scrolls past messages
+    if (activeChatId && !isUserNearBottomRef.current) {
+      let visibleMsgId: string | undefined = undefined;
+      for (let i = Math.min(visibleRows.stopIndex, groupedItems.length - 1); i >= visibleRows.startIndex; i--) {
+        if (groupedItems[i]?.message?.id) {
+          visibleMsgId = groupedItems[i].message.id;
+          break;
+        }
+      }
+      if (visibleMsgId) {
+        const el = listRef.current?.element;
+        chatStore.saveLastReadPosition(activeChatId, {
+          lastReadMessageId: visibleMsgId,
+          scrollTop: el?.scrollTop ?? 0,
+          scrollHeight: el?.scrollHeight ?? 0,
+          isNearBottom: false,
+        });
+      }
+    }
+
     if (visibleRows.startIndex <= 2 && !isLoadingOlder && hasMoreOnServer) {
       handleLoadOlder();
     }
-  }, [isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
+  }, [activeChatId, groupedItems, isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
 
   // Jump to specific message handler (search, reply, pin)
   useEffect(() => {

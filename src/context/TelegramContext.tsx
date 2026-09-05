@@ -60,6 +60,7 @@ import { io as createSocketIO, Socket } from 'socket.io-client';
 import { getTelegramEpoch, parseTelegramDate, formatTelegramTime } from '../utils/dateUtils';
 import { messageCache } from '../services/IndexedDBMessageCache';
 import { telegramDB } from '../utils/sqliteStorage';
+import { chatStore, ChatReadPosition } from '../store/chatStore';
 
 interface TelegramContextType {
   currentUser: User;
@@ -243,6 +244,17 @@ interface TelegramContextType {
   createNewChat: (type: 'private' | 'group' | 'channel', title: string, username?: string, description?: string) => void;
   jumpToMessage: (chatId: string, messageId: string) => void;
   openPrivateChat: (senderId: string, senderName: string, senderAvatar?: string, senderUsername?: string) => void;
+  lastReadPositions: Record<string, ChatReadPosition>;
+  getLastReadPosition: (chatId: string) => ChatReadPosition | undefined;
+  saveLastReadPosition: (
+    chatId: string,
+    data: {
+      lastReadMessageId?: string;
+      scrollTop?: number;
+      scrollHeight?: number;
+      isNearBottom?: boolean;
+    }
+  ) => void;
   resolveTelegramLink: (urlOrQuery: string) => Promise<void>;
   syncCloudData: () => Promise<void>;
   syncInitializationRoutine: (phoneOverride?: string, sessionStringOverride?: string) => Promise<void>;
@@ -4354,6 +4366,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const jumpToMessage = (chatId: string, messageId: string) => {
     setActiveChatId(chatId);
+    chatStore.saveLastReadPosition(chatId, {
+      lastReadMessageId: messageId,
+      isNearBottom: false,
+    });
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent('tg-scroll-to-message', {
@@ -4576,6 +4592,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         createNewChat,
         jumpToMessage,
         openPrivateChat,
+        lastReadPositions: chatStore.lastReadPositions,
+        getLastReadPosition: (chatId: string) => chatStore.getLastReadPosition(chatId),
+        saveLastReadPosition: (chatId: string, data: any) => chatStore.saveLastReadPosition(chatId, data),
         resolveTelegramLink,
         syncCloudData,
         syncInitializationRoutine,

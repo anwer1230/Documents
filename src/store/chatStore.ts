@@ -1,34 +1,109 @@
 /**
  * chatStore.ts
- * Manages in-memory session scroll positions and smart auto-scrolling
+ * Manages chat scroll positions, read message persistence, and smart auto-scrolling
  * Replicates official Telegram scroll behavior:
- * - Default on opening a chat is ALWAYS scroll to bottom (scrollToBottom)
- * - Old scroll position is only restored if returning to the same chat within the active session
- * - Smart scroll on new messages: smooth scroll to bottom if near bottom, preserve reading offset if scrolled up
+ * - Stores lastReadPositions (chatId -> { lastReadMessageId, scrollTop, scrollHeight, isNearBottom, lastUpdated }) in localStorage
+ * - When opening a chat for the first time: immediately scrolls to bottom (scrollToBottom)
+ * - When returning to a chat: navigates to lastReadMessageId / last saved reading position, never jumping to top
+ * - Smart scroll on new messages: smooth scroll to bottom if near bottom or outgoing, preserve reading offset if scrolled up
+ * - Live update on scroll: updates lastReadMessageId and scroll position dynamically
  */
 
-export interface InSessionScrollState {
+export interface ChatReadPosition {
   chatId: string;
+  lastReadMessageId?: string;
   scrollTop: number;
   scrollHeight: number;
   isNearBottom: boolean;
   lastUpdated: number;
 }
 
-class ChatStore {
+export interface InSessionScrollState extends ChatReadPosition {}
+
+export class ChatStore {
   private static instance: ChatStore;
-  // In-memory only: reset whenever page reloads or a fresh session begins
+
+  // Persistent last read positions per chat (chatId -> ChatReadPosition)
+  public lastReadPositions: Record<string, ChatReadPosition> = {};
+
+  // In-memory session scroll map
   private sessionScrollMap: Map<string, InSessionScrollState> = new Map();
+
   // Tracks chats visited during the current session
   private visitedChatsInCurrentSession: Set<string> = new Set();
+
   // Threshold in pixels to consider user "at bottom"
-  private readonly NEAR_BOTTOM_THRESHOLD = 120;
+  private readonly NEAR_BOTTOM_THRESHOLD = 140;
+  private readonly STORAGE_KEY = 'tg_last_read_positions';
+
+  constructor() {
+    this.initFromStorage();
+  }
 
   public static getInstance(): ChatStore {
     if (!ChatStore.instance) {
       ChatStore.instance = new ChatStore();
     }
     return ChatStore.instance;
+  }
+
+  /**
+   * Load persistent scroll positions from localStorage
+   */
+  private initFromStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = localStorage.getItem(this.STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === 'object') {
+          this.lastReadPositions = parsed;
+          // Synchronize to session map as well
+          Object.values(parsed).forEach((item: any) => {
+            if (item && item.chatId) {
+              this.sessionScrollMap.set(item.chatId, item);
+            }
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[chatStore] Error reading lastReadPositions from localStorage:', err);
+    }
+  }
+
+  /**
+   * Persist lastReadPositions safely to localStorage
+   */
+  private persistToStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.lastReadPositions));
+    } catch (err) {
+      console.warn('[chatStore] Error saving lastReadPositions to localStorage:', err);
+    }
+  }
+
+  /**
+   * Check if a chat exists in lastReadPositions
+   */
+  public hasLastReadPosition(chatId: string): boolean {
+    if (!chatId) return false;
+    return Boolean(this.lastReadPositions[chatId]);
+  }
+
+  /**
+   * Get the saved read position for a chat
+   */
+  public getLastReadPosition(chatId: string): ChatReadPosition | undefined {
+    if (!chatId) return undefined;
+    return this.lastReadPositions[chatId];
+  }
+
+  /**
+   * Get the last read message ID for a chat
+   */
+  public getLastReadMessageId(chatId: string): string | undefined {
+    return this.getLastReadPosition(chatId)?.lastReadMessageId;
   }
 
   /**
@@ -42,38 +117,88 @@ class ChatStore {
    * Mark a chat as opened/visited in the current session
    */
   public markChatVisitedInCurrentSession(chatId: string): void {
+    if (!chatId) return;
     this.visitedChatsInCurrentSession.add(chatId);
   }
 
   /**
-   * Saves the scroll position for a chat in the current session
+   * Saves the scroll & last-read position for a chat
+   */
+  public saveLastReadPosition(
+    chatId: string,
+    data: {
+      lastReadMessageId?: string;
+      scrollTop?: number;
+      scrollHeight?: number;
+      isNearBottom?: boolean;
+    }
+  ): void {
+    if (!chatId) return;
+
+    const existing = this.lastReadPositions[chatId];
+    const isNearBottom = data.isNearBottom !== undefined ? data.isNearBottom : (existing?.isNearBottom ?? true);
+    const scrollTop = data.scrollTop !== undefined ? data.scrollTop : (existing?.scrollTop ?? 0);
+    const scrollHeight = data.scrollHeight !== undefined ? data.scrollHeight : (existing?.scrollHeight ?? 0);
+    const lastReadMessageId = data.lastReadMessageId !== undefined ? data.lastReadMessageId : existing?.lastReadMessageId;
+
+    const updated: ChatReadPosition = {
+      chatId,
+      lastReadMessageId,
+      scrollTop,
+      scrollHeight,
+      isNearBottom,
+      lastUpdated: Date.now(),
+    };
+
+    this.lastReadPositions[chatId] = updated;
+    this.sessionScrollMap.set(chatId, updated);
+    this.visitedChatsInCurrentSession.add(chatId);
+
+    this.persistToStorage();
+  }
+
+  /**
+   * Updates last read message ID specifically
+   */
+  public updateLastReadMessageId(
+    chatId: string,
+    messageId: string,
+    isNearBottom: boolean = false,
+    scrollTop: number = 0,
+    scrollHeight: number = 0
+  ): void {
+    this.saveLastReadPosition(chatId, {
+      lastReadMessageId: messageId,
+      isNearBottom,
+      scrollTop,
+      scrollHeight,
+    });
+  }
+
+  /**
+   * Legacy & in-session compatibility method
    */
   public saveSessionScrollPosition(
     chatId: string,
     scrollTop: number,
     scrollHeight: number,
-    isNearBottom: boolean
+    isNearBottom: boolean,
+    lastReadMessageId?: string
   ): void {
-    if (!chatId) return;
-    this.sessionScrollMap.set(chatId, {
-      chatId,
+    this.saveLastReadPosition(chatId, {
       scrollTop,
       scrollHeight,
       isNearBottom,
-      lastUpdated: Date.now(),
+      lastReadMessageId,
     });
-    this.visitedChatsInCurrentSession.add(chatId);
   }
 
   /**
-   * Returns saved position ONLY if returning to the same chat in current session
-   * and if the user was intentionally reading above bottom.
+   * Returns saved position for a chat
    */
   public getSessionScrollPosition(chatId: string): InSessionScrollState | null {
-    if (!this.visitedChatsInCurrentSession.has(chatId)) {
-      return null;
-    }
-    return this.sessionScrollMap.get(chatId) || null;
+    if (!chatId) return null;
+    return this.getLastReadPosition(chatId) || this.sessionScrollMap.get(chatId) || null;
   }
 
   /**
@@ -81,12 +206,15 @@ class ChatStore {
    */
   public clearSessionScroll(chatId?: string): void {
     if (chatId) {
+      delete this.lastReadPositions[chatId];
       this.sessionScrollMap.delete(chatId);
       this.visitedChatsInCurrentSession.delete(chatId);
     } else {
+      this.lastReadPositions = {};
       this.sessionScrollMap.clear();
       this.visitedChatsInCurrentSession.clear();
     }
+    this.persistToStorage();
   }
 
   /**
@@ -117,3 +245,4 @@ class ChatStore {
 }
 
 export const chatStore = ChatStore.getInstance();
+
