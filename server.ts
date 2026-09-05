@@ -8034,6 +8034,7 @@ async function startServer() {
     app.use(express.static(distPath, {
       setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) {
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         } else if (filePath.includes('/assets/')) {
           // Bundled hashed assets can be cached safely
@@ -8042,6 +8043,7 @@ async function startServer() {
       }
     }));
     app.get('*', (req, res) => {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
