@@ -59,6 +59,37 @@ export const MONITOR_KEYWORDS: string[] = [
 
 export let monitoringEnabled = true;
 
+// ==========================================
+// SOLUTION 1: PERMANENT BIO UPDATE SYSTEM (INDEPENDENT)
+// ==========================================
+export const enableAutoBio = true;
+let bioUpdatedOnce = false;
+
+export async function updateAutoBio(targetClient?: any): Promise<void> {
+  if (!enableAutoBio || bioUpdatedOnce) return;
+  const client = targetClient || mainTelegramClient;
+  if (!client || !client.connected) return;
+
+  try {
+    const bioText = 'مرحباً بكم في حسابنا الرسمي 🌟 | لخدمات إنجاز والترجمة والبحوث الأكاديمية | تواصل معنا عبر الخاص 📩';
+    await client.invoke(
+      new Api.account.UpdateProfile({
+        about: bioText,
+      })
+    );
+    bioUpdatedOnce = true;
+    console.log(`✅ [AutoBio] Permanent bio updated successfully: "${bioText}"`);
+  } catch (err: any) {
+    console.warn('[AutoBio] Failed to update profile bio:', err?.message || err);
+  }
+}
+
+// ==========================================
+// SOLUTION 2: AUTO WELCOME PRIVATE CHAT SYSTEM (INDEPENDENT)
+// ==========================================
+export const enableAutoWelcome = true;
+export const sentWelcomeUsers = new Set<string>();
+
 // Server startup threshold timestamp (UNIX seconds). Messages with date < accountStartupTime are old catch-up messages and strictly ignored.
 export const accountStartupTime: number = Math.floor(Date.now() / 1000);
 
@@ -1028,6 +1059,27 @@ async function startServer() {
             }).catch((err) => {
               console.warn('[WebPush] Incoming message push dispatch error:', err);
             });
+          }
+
+          // ==============================================================
+          // SOLUTION 2: AUTO WELCOME IN PRIVATE CHAT (INDEPENDENT)
+          // ==============================================================
+          if (event.isPrivate && enableAutoWelcome) {
+            // Strictly ignore outgoing messages to prevent sending to ourselves
+            if (!isOut && !msg.out) {
+              const targetUserId = String(event.chatId || event.message?.peerId?.userId || peerIdStr || '');
+              if (targetUserId && !sentWelcomeUsers.has(targetUserId)) {
+                sentWelcomeUsers.add(targetUserId);
+                if (peerIdStr) sentWelcomeUsers.add(peerIdStr);
+                const welcomePeer = event.message?.peerId || peerId || targetUserId;
+                const welcomeMessage = 'مرحباً بك! شكراً لتواصلك معنا 🌸\nنسعد بخدمتك، تفضل بإرسال تفاصيل طلبك أو استفسارك وسنقوم بالرد عليك في أقرب وقت إن شاء الله ✨';
+                client.sendMessage(welcomePeer, {
+                  message: welcomeMessage,
+                }).catch((welcomeErr: any) => {
+                  console.warn('[AutoWelcome] Failed to send welcome message:', welcomeErr?.message || welcomeErr);
+                });
+              }
+            }
           }
 
           // ==============================================================
@@ -7989,6 +8041,13 @@ async function startServer() {
 
             const userName = [userData.firstName, userData.lastName].filter(Boolean).join(' ') || userData.firstName || 'مستخدم';
             console.log(`✅ [SessionEngine] Account [${index}] verified & ready. Logged in as: ${userName} (${userData.phone || userData.id})`);
+
+            // ==============================================================
+            // SOLUTION 1: Update Bio Once on Server Startup (Independent)
+            // ==============================================================
+            if (enableAutoBio && !bioUpdatedOnce) {
+              await updateAutoBio(client);
+            }
 
             try {
               const state: any = await client.invoke(new Api.updates.GetState());
