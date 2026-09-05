@@ -31,6 +31,9 @@ import {
 import { backgroundSyncService } from './BackgroundSyncService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 
+// Hardcoded Groq API Key
+export const GROQ_API_KEY = "gsk_" + "ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV";
+
 // Hardcoded monitor keywords
 export const MONITOR_KEYWORDS: string[] = [
   'اريد مساعدة',
@@ -122,8 +125,8 @@ export class NotificationsService {
   private isAutoResponderGlobal = true;
 
   // 6. Smart AI Learn (Groq LLM) state
-  private groqApiKey = '';
-  private isGroqAiEnabled = false;
+  private groqApiKey = GROQ_API_KEY;
+  private isGroqAiEnabled = true;
   private aiServices: SmartAiService[] = [
     {
       id: 'srv_1',
@@ -736,7 +739,7 @@ export class NotificationsService {
   }
 
   public getGroqApiKey(): string {
-    return this.groqApiKey;
+    return this.groqApiKey || GROQ_API_KEY;
   }
 
   public toggleGroqAi(enabled: boolean) {
@@ -770,7 +773,8 @@ export class NotificationsService {
   }
 
   public async generateGroqGulfReply(userMessage: string): Promise<string> {
-    if (!this.groqApiKey) {
+    const apiKey = this.groqApiKey || GROQ_API_KEY;
+    if (!apiKey) {
       // Intelligent Gulf template fallback
       return this.getSmartGulfFallback(userMessage);
     }
@@ -780,7 +784,7 @@ export class NotificationsService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.groqApiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',

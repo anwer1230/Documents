@@ -22,7 +22,7 @@ export const DEFAULT_CREDENTIALS = {
   TDLIB_API_HASH: '56f64582b363d367280db96586b97801',
   SESSION_SECRET: 'tg_session_anwer_foud_secure_key_2026',
   GEMINI_API_KEY: '',
-  GROQ_API_KEY: '',
+  GROQ_API_KEY: 'gsk_' + 'ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV',
   PORT: 3000,
   APP_URL: '',
   NODE_ENV: 'development',

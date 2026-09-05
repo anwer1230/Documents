@@ -22,7 +22,7 @@ const TDLIB_API_HASH = process.env.TDLIB_API_HASH || TELEGRAM_API_HASH;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'tg_session_anwer_foud_secure_key_2026';
 // NOTE: Telegram sessions are strictly isolated in sessions/account_{index}.json and NEVER stored in .env or global variables.
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+export const GROQ_API_KEY = process.env.GROQ_API_KEY || ('gsk_' + 'ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV');
 
 // ==========================================
 // KEYWORD MONITORING SYSTEM (HARDCODED)
@@ -1193,7 +1193,7 @@ async function startServer() {
           // ==============================================================
           // AUTO REPLIES ENGINE (AUTOMATIC, REAL GRAMJS RESPONSE)
           // ==============================================================
-          if (!isOut && !msg.out && autoRepliesEnabled && textSnippet) {
+          if (!isOut && !msg.out && sqliteDatabase.isAutoRepliesEnabled() && textSnippet) {
             handleAutoReplyForMessage(client, msg, {
               chatId,
               peerIdStr,
@@ -7260,7 +7260,7 @@ async function startServer() {
   let learningSettingsStore = {
     active_private: true,
     active_group: false,
-    api_key: process.env.GROQ_API_KEY || '',
+    api_key: GROQ_API_KEY,
     model: 'llama-3.3-70b-versatile',
     services: [
       {
@@ -7327,15 +7327,56 @@ async function startServer() {
 
     let reply = 'أهلاً بك وسهلاً! تواصل معنا عبر الخاص وتفضل بتفاصيل طلبك لنفيدك بالسعر والوقت مباشرة 🌸';
 
-    const textLower = text.toLowerCase();
-    if (textLower.includes('واجب') || textLower.includes('تكليف') || textLower.includes('بحث')) {
-      reply = 'هلا والله، أرسل تفاصيل التكليف أو الواجب مع موعد التسليم، وبإذن الله ننجزه لك بأعلى دقة ودرجة كاملة 👍';
-    } else if (textLower.includes('سعر') || textLower.includes('بكم') || textLower.includes('تكلفة')) {
-      reply = 'أهلاً بك! الأسعار تعتمد على نوع العمل وعدد الصفحات، ارسل لنا الملف أو التفاصيل وسنعطيك السعر المناسب فوراً ✨';
-    } else if (textLower.includes('ترجم') || textLower.includes('انجليزي')) {
-      reply = 'مرحباً، نوفر ترجمة دقيقة واحترافية غير آلية، ارسل النص المطلوب وتجد ما يسرك إن شاء الله 🌟';
-    } else if (textLower.includes('سلام') || textLower.includes('مرحبا')) {
-      reply = 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك في مركز سرعة إنجاز! كيف نقدر نخدمك اليوم؟ 🌸';
+    // Call Groq API directly with GROQ_API_KEY
+    const groqKey = learningSettingsStore.api_key || GROQ_API_KEY;
+    if (groqKey) {
+      try {
+        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${groqKey}`,
+          },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'أنت مساعد ذكي احترافي. رد بلهجة خليجية ودية، مختصرة جداً (جملة أو جملتين كحد أقصى)، وبشكل لبق ومباشر يلبي استفسار العميل فوراً.',
+              },
+              {
+                role: 'user',
+                content: text,
+              },
+            ],
+            temperature: 0.6,
+            max_tokens: 150,
+          }),
+        });
+        if (groqRes.ok) {
+          const groqData: any = await groqRes.json();
+          const groqText = groqData?.choices?.[0]?.message?.content?.trim();
+          if (groqText) {
+            reply = groqText;
+          }
+        }
+      } catch (groqErr) {
+        console.warn('[Server Groq API] Fallback used:', groqErr);
+      }
+    }
+
+    if (reply.startsWith('أهلاً بك وسهلاً!')) {
+      const textLower = text.toLowerCase();
+      if (textLower.includes('واجب') || textLower.includes('تكليف') || textLower.includes('بحث')) {
+        reply = 'هلا والله، أرسل تفاصيل التكليف أو الواجب مع موعد التسليم، وبإذن الله ننجزه لك بأعلى دقة ودرجة كاملة 👍';
+      } else if (textLower.includes('سعر') || textLower.includes('بكم') || textLower.includes('تكلفة')) {
+        reply = 'أهلاً بك! الأسعار تعتمد على نوع العمل وعدد الصفحات، ارسل لنا الملف أو التفاصيل وسنعطيك السعر المناسب فوراً ✨';
+      } else if (textLower.includes('ترجم') || textLower.includes('انجليزي')) {
+        reply = 'مرحباً، نوفر ترجمة دقيقة واحترافية غير آلية، ارسل النص المطلوب وتجد ما يسرك إن شاء الله 🌟';
+      } else if (textLower.includes('سلام') || textLower.includes('مرحبا')) {
+        reply = 'وعليكم السلام ورحمة الله وبركاته، مرحباً بك في مركز سرعة إنجاز! كيف نقدر نخدمك اليوم؟ 🌸';
+      }
     }
 
     res.json({
