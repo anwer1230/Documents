@@ -1,6 +1,10 @@
 import {
   useSalamMessageTracker,
   addSalamMessageListener,
+  SalamModeObserver,
+  SalamGreetingAction,
+  SalamObserverOptions,
+  SalamDecisionResult,
   SalamTrackOptions,
   SalamTrackResult,
   SalamSessionController,
@@ -12,6 +16,10 @@ import {
 export {
   useSalamMessageTracker,
   addSalamMessageListener,
+  SalamModeObserver,
+  type SalamGreetingAction,
+  type SalamObserverOptions,
+  type SalamDecisionResult,
   type SalamTrackOptions,
   type SalamTrackResult,
   type SalamSessionController,
