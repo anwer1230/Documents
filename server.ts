@@ -115,6 +115,10 @@ export interface StoredAccountSession {
   avatar?: string;
   isPremium?: boolean;
   updatedAt?: string;
+  pts?: number;
+  qts?: number;
+  date?: number;
+  seq?: number;
 }
 
 /**
@@ -139,6 +143,10 @@ export function saveAccountSession(
     username?: string;
     avatar?: string;
     isPremium?: boolean;
+    pts?: number;
+    qts?: number;
+    date?: number;
+    seq?: number;
   }
 ): boolean {
   try {
@@ -146,19 +154,24 @@ export function saveAccountSession(
       fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     }
     const filePath = getSessionFilePath(index);
+    const existing = readAccountSession(index);
     const payload: StoredAccountSession = {
       session: data.session,
-      userId: String(data.userId || ''),
-      phone: String(data.phone || ''),
+      userId: String(data.userId || existing?.userId || ''),
+      phone: String(data.phone || existing?.phone || ''),
       index,
-      name: data.name || '',
-      username: data.username || '',
-      avatar: data.avatar || '',
-      isPremium: Boolean(data.isPremium),
+      name: data.name ?? existing?.name ?? '',
+      username: data.username ?? existing?.username ?? '',
+      avatar: data.avatar ?? existing?.avatar ?? '',
+      isPremium: data.isPremium !== undefined ? Boolean(data.isPremium) : Boolean(existing?.isPremium),
+      pts: data.pts !== undefined ? data.pts : existing?.pts,
+      qts: data.qts !== undefined ? data.qts : existing?.qts,
+      date: data.date !== undefined ? data.date : existing?.date,
+      seq: data.seq !== undefined ? data.seq : existing?.seq,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
-    console.log(`[SessionEngine] Successfully saved isolated session for account ${index} -> ${filePath}`);
+    console.log(`[SessionEngine] Successfully saved isolated session for account ${index} (PTS: ${payload.pts ?? 'none'}) -> ${filePath}`);
     return true;
   } catch (error) {
     console.error(`[SessionEngine] Error saving session file for account ${index}:`, error);
@@ -1267,10 +1280,171 @@ async function startServer() {
         }
       }, new NewMessage({}));
 
-      // 2. Raw GramJS Updates Listener: settings, user profile, privacy, authorization updates
+      // 2. Raw GramJS Updates Listener: full state management, edits, deletions, read history, and raw updates
       client.addEventHandler(async (update: any) => {
         try {
           if (!update) return;
+
+          // Always emit raw_update for frontend state synchronizers (MessagesController, etc.)
+          try {
+            io.emit('raw_update', {
+              type: update.className || update._,
+              update,
+              pts: update.pts,
+              pts_count: update.pts_count,
+              timestamp: Date.now(),
+            });
+          } catch (_) {}
+
+          // Track and update PTS if present
+          if (update.pts) {
+            try {
+              if (sessionKey) {
+                for (const [idx, acc] of accountInstances.entries()) {
+                  if (acc.sessionString === sessionKey) {
+                    const stored = readAccountSession(idx);
+                    if (stored) {
+                      saveAccountSession(idx, {
+                        ...stored,
+                        pts: update.pts,
+                      });
+                    }
+                    break;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          // 2.1 UpdateEditMessage / UpdateEditChannelMessage
+          if (
+            update.className === 'UpdateEditMessage' ||
+            update._ === 'updateEditMessage' ||
+            update.className === 'UpdateEditChannelMessage' ||
+            update._ === 'updateEditChannelMessage'
+          ) {
+            const msg = update.message;
+            if (msg) {
+              const peerId = msg.peerId
+                ? msg.peerId.channelId || msg.peerId.chatId || msg.peerId.userId || msg.chatId
+                : msg.chatId;
+              const peerIdStr = peerId ? String(peerId) : '';
+              const chatId = `chat_${peerIdStr}`;
+              const senderId = msg.fromId
+                ? String(msg.fromId.userId || msg.fromId.channelId || msg.senderId || '')
+                : msg.senderId
+                ? String(msg.senderId)
+                : '';
+              const msgTimestampSec = msg.date || Math.floor(Date.now() / 1000);
+              const msgDate = new Date(msgTimestampSec * 1000);
+              const isOut = Boolean(msg.out);
+
+              const editPayload = {
+                type: 'edit_message',
+                className: update.className || update._,
+                chatId,
+                peerId: peerIdStr,
+                messageId: String(msg.id),
+                message: {
+                  id: String(msg.id),
+                  chatId,
+                  peerId: peerIdStr,
+                  senderId,
+                  senderName: isOut ? 'أنت' : 'Telegram User',
+                  text: msg.message || '',
+                  timestamp: msgDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+                  date: msgDate.toISOString().split('T')[0],
+                  epoch: msgDate.getTime(),
+                  rawDate: msgTimestampSec,
+                  out: isOut,
+                  isOutgoing: isOut,
+                  status: 'read',
+                },
+                pts: update.pts,
+                pts_count: update.pts_count,
+                epoch: Date.now(),
+              };
+
+              broadcastTelegramUpdate(editPayload);
+              io.emit('raw_update', editPayload);
+            }
+          }
+
+          // 2.2 UpdateDeleteMessages / UpdateDeleteChannelMessages
+          if (
+            update.className === 'UpdateDeleteMessages' ||
+            update._ === 'updateDeleteMessages' ||
+            update.className === 'UpdateDeleteChannelMessages' ||
+            update._ === 'updateDeleteChannelMessages'
+          ) {
+            const channelId = update.channelId ? `chat_${update.channelId}` : undefined;
+            const messages = (update.messages || []).map(String);
+            const deletePayload = {
+              type: 'delete_messages',
+              className: update.className || update._,
+              channelId,
+              messages,
+              pts: update.pts,
+              pts_count: update.pts_count,
+              epoch: Date.now(),
+            };
+
+            broadcastTelegramUpdate(deletePayload);
+            io.emit('raw_update', deletePayload);
+          }
+
+          // 2.3 UpdateReadHistoryInbox / UpdateReadChannelInbox
+          if (
+            update.className === 'UpdateReadHistoryInbox' ||
+            update._ === 'updateReadHistoryInbox' ||
+            update.className === 'UpdateReadChannelInbox' ||
+            update._ === 'updateReadChannelInbox'
+          ) {
+            const peerId = update.peer
+              ? update.peer.channelId || update.peer.chatId || update.peer.userId
+              : update.channelId;
+            const chatId = peerId ? `chat_${peerId}` : '';
+            const maxId = update.maxId || update.max_id;
+            const readPayload = {
+              type: 'read_history_inbox',
+              className: update.className || update._,
+              chatId,
+              maxId: maxId ? String(maxId) : undefined,
+              stillUnreadCount: update.stillUnreadCount || update.still_unread_count || 0,
+              pts: update.pts,
+              pts_count: update.pts_count,
+              epoch: Date.now(),
+            };
+
+            broadcastTelegramUpdate(readPayload);
+            io.emit('raw_update', readPayload);
+          }
+
+          // 2.4 UpdateReadHistoryOutbox
+          if (
+            update.className === 'UpdateReadHistoryOutbox' ||
+            update._ === 'updateReadHistoryOutbox' ||
+            update.className === 'UpdateReadChannelOutbox' ||
+            update._ === 'updateReadChannelOutbox'
+          ) {
+            const peerId = update.peer
+              ? update.peer.channelId || update.peer.chatId || update.peer.userId
+              : update.channelId;
+            const chatId = peerId ? `chat_${peerId}` : '';
+            const maxId = update.maxId || update.max_id;
+            const readPayload = {
+              type: 'read_history_outbox',
+              className: update.className || update._,
+              chatId,
+              maxId: maxId ? String(maxId) : undefined,
+              pts: update.pts,
+              pts_count: update.pts_count,
+              epoch: Date.now(),
+            };
+
+            broadcastTelegramUpdate(readPayload);
+            io.emit('raw_update', readPayload);
+          }
 
           // Check for session revocation / security updates
           if (
@@ -3265,6 +3439,280 @@ async function startServer() {
         isOffline: true,
         reason: 'SERVICE_UNAVAILABLE',
         message: 'Could not contact Telegram MTProto servers for session verification.',
+      });
+    }
+  });
+
+  // 8.0 MTProto updates.getDifference gap recovery endpoint
+  app.post('/api/telegram/updates/difference', async (req, res) => {
+    const { pts, date, qts, accountIndex, phone, sessionString } = req.body || {};
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'NO_SESSION',
+          message: 'لا توجد جلسة تيليجرام نشطة لجلب الفروقات.',
+        });
+      }
+
+      let curPts = Number(pts) || 0;
+      let curDate = Number(date) || Math.floor(Date.now() / 1000) - 86400;
+      let curQts = Number(qts) || 0;
+
+      if (curPts === 0) {
+        const stateRes: any = await client.invoke(new Api.updates.GetState());
+        if (stateRes) {
+          curPts = stateRes.pts;
+          curDate = stateRes.date;
+          curQts = stateRes.qts;
+        }
+      }
+
+      console.log(`[MTProto] Fetching updates.getDifference (pts=${curPts}, date=${curDate}, qts=${curQts})...`);
+      const diffRes: any = await client.invoke(
+        new Api.updates.GetDifference({
+          pts: curPts,
+          ptsTotalLimit: 100,
+          date: curDate,
+          qts: curQts,
+        })
+      );
+
+      if (!diffRes) {
+        return res.json({ success: true, empty: true });
+      }
+
+      const isSlice = diffRes.className === 'updates.DifferenceSlice' || diffRes._ === 'updates.differenceSlice';
+      const isTooLong = diffRes.className === 'updates.DifferenceTooLong' || diffRes._ === 'updates.differenceTooLong';
+
+      const rawMessages = diffRes.newMessages || diffRes.messages || [];
+      const newMessages: any[] = [];
+      for (const m of rawMessages) {
+        try {
+          if (!m || !m.id) continue;
+          const peerId = m.peerId
+            ? m.peerId.channelId || m.peerId.chatId || m.peerId.userId || m.chatId
+            : m.chatId;
+          const peerIdStr = peerId ? String(peerId) : '';
+          const chatId = `chat_${peerIdStr}`;
+          const isOut = Boolean(m.out);
+          const mDateSec = m.date || Math.floor(Date.now() / 1000);
+          const mDate = new Date(mDateSec * 1000);
+
+          let textSnippet = m.message || '';
+          if (m.media) {
+            if (m.media.photo) textSnippet = textSnippet || '📷 صورة';
+            else if (m.media.document) textSnippet = textSnippet || '📄 مستند';
+            else if (m.media.voice) textSnippet = textSnippet || '🎤 رسالة صوتية';
+          }
+
+          newMessages.push({
+            id: String(m.id),
+            chatId,
+            peerId: peerIdStr,
+            senderId: m.fromId ? String(m.fromId.userId || m.fromId.channelId || '') : '',
+            senderName: isOut ? 'أنت' : 'Telegram User',
+            text: textSnippet,
+            timestamp: mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            date: mDate.toISOString().split('T')[0],
+            epoch: mDate.getTime(),
+            rawDate: mDateSec,
+            out: isOut,
+            isOutgoing: isOut,
+            status: 'read',
+          });
+        } catch (_) {}
+      }
+
+      const otherUpdates = diffRes.otherUpdates || [];
+      const state = diffRes.state || diffRes.intermediateState;
+
+      if (state) {
+        const targetIdx = typeof accountIndex === 'number' ? accountIndex : currentAccount;
+        const stored = readAccountSession(targetIdx);
+        if (stored) {
+          saveAccountSession(targetIdx, {
+            ...stored,
+            pts: state.pts,
+            qts: state.qts,
+            date: state.date,
+            seq: state.seq,
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        newMessages,
+        otherUpdates,
+        users: diffRes.users || [],
+        chats: diffRes.chats || [],
+        state: state ? {
+          pts: state.pts,
+          qts: state.qts,
+          date: state.date,
+          seq: state.seq,
+        } : undefined,
+        isSlice,
+        isTooLong,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] updates.getDifference error:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || String(err),
+      });
+    }
+  });
+
+  // 8.0.1 MTProto updates.getChannelDifference endpoint
+  app.post('/api/telegram/updates/channel-difference', async (req, res) => {
+    const { channelId, pts, accountIndex, phone, sessionString, fetchHistoryIfTooLong = true } = req.body || {};
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'NO_SESSION',
+          message: 'لا توجد جلسة تيليجرام نشطة.',
+        });
+      }
+
+      const cleanChanId = String(channelId || '').replace('chat_', '');
+      let targetEntity: any = cleanChanId;
+      try {
+        targetEntity = await client.getInputEntity(cleanChanId).catch(() => null);
+        if (!targetEntity && !isNaN(Number(cleanChanId))) {
+          const numId = Number(cleanChanId);
+          targetEntity = await client.getInputEntity(numId).catch(() => null);
+          if (!targetEntity && cleanChanId.startsWith('-100')) {
+            const strippedId = Number(cleanChanId.replace('-100', ''));
+            targetEntity = await client.getInputEntity(strippedId).catch(() => null);
+          }
+        }
+        if (!targetEntity) {
+          targetEntity = await client.getEntity(cleanChanId).catch(() => null);
+        }
+      } catch (_) {
+        targetEntity = cleanChanId;
+      }
+
+      let channelDiff: any = null;
+      try {
+        channelDiff = await client.invoke(
+          new Api.updates.GetChannelDifference({
+            channel: targetEntity,
+            filter: new Api.ChannelMessagesFilterEmpty(),
+            pts: Number(pts) || 0,
+            limit: 100,
+          })
+        );
+      } catch (invokeErr: any) {
+        // If channel difference fails due to invalid PTS or PERSISTENT_TIMESTAMP_INVALID, retry with pts=0 or fallback
+        console.warn(`[MTProto] GetChannelDifference failed for ${channelId} (pts=${pts}):`, invokeErr?.message || invokeErr);
+        if (pts && Number(pts) > 0) {
+          try {
+            channelDiff = await client.invoke(
+              new Api.updates.GetChannelDifference({
+                channel: targetEntity,
+                filter: new Api.ChannelMessagesFilterEmpty(),
+                pts: 0,
+                limit: 100,
+              })
+            );
+          } catch (retryErr: any) {
+            throw retryErr;
+          }
+        } else {
+          throw invokeErr;
+        }
+      }
+
+      if (!channelDiff) {
+        return res.json({ success: true, empty: true, pts: Number(pts) || 0, isFinal: true });
+      }
+
+      const isSlice = channelDiff.className === 'updates.ChannelDifferenceSlice' || channelDiff._ === 'updates.channelDifferenceSlice';
+      const isTooLong = channelDiff.className === 'updates.ChannelDifferenceTooLong' || channelDiff._ === 'updates.channelDifferenceTooLong';
+      const isEmpty = channelDiff.className === 'updates.ChannelDifferenceEmpty' || channelDiff._ === 'updates.channelDifferenceEmpty';
+      const isFinal = channelDiff.final !== undefined ? Boolean(channelDiff.final) : (!isSlice);
+
+      let rawMessages = channelDiff.newMessages || channelDiff.messages || [];
+
+      // If channelDifferenceTooLong occurred during long offline periods, ensure we don't lose historical messages
+      if (isTooLong && fetchHistoryIfTooLong && rawMessages.length < 20) {
+        try {
+          console.log(`[MTProto] ChannelDifferenceTooLong detected for ${channelId}. Fetching recent history to ensure no message loss...`);
+          const historyMsgs: any = await client.getMessages(targetEntity, { limit: 50 });
+          if (Array.isArray(historyMsgs) && historyMsgs.length > 0) {
+            rawMessages = historyMsgs;
+          }
+        } catch (histErr: any) {
+          console.warn('[MTProto] Fallback getMessages on ChannelDifferenceTooLong:', histErr?.message || histErr);
+        }
+      }
+
+      const newMessages: any[] = [];
+      for (const m of rawMessages) {
+        try {
+          if (!m || !m.id) continue;
+          const peerId = m.peerId
+            ? m.peerId.channelId || m.peerId.chatId || m.peerId.userId || cleanChanId
+            : cleanChanId;
+          const peerIdStr = String(peerId);
+          const chatId = `chat_${peerIdStr}`;
+          const isOut = Boolean(m.out);
+          const mDateSec = m.date || Math.floor(Date.now() / 1000);
+          const mDate = new Date(mDateSec * 1000);
+
+          let textSnippet = m.message || '';
+          if (m.media) {
+            if (m.media.photo) textSnippet = textSnippet || '📷 صورة';
+            else if (m.media.document) textSnippet = textSnippet || '📄 مستند';
+            else if (m.media.voice) textSnippet = textSnippet || '🎤 رسالة صوتية';
+            else if (m.media.video) textSnippet = textSnippet || '📹 فيديو';
+          }
+
+          newMessages.push({
+            id: String(m.id),
+            chatId,
+            peerId: peerIdStr,
+            senderId: m.fromId ? String(m.fromId.userId || m.fromId.channelId || '') : '',
+            senderName: isOut ? 'أنت' : (m.postAuthor || 'Telegram User'),
+            text: textSnippet,
+            timestamp: mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            date: mDate.toISOString().split('T')[0],
+            epoch: mDate.getTime(),
+            rawDate: mDateSec,
+            out: isOut,
+            isOutgoing: isOut,
+            status: 'read',
+            media: m.media ? { type: m.media.photo ? 'photo' : m.media.document ? 'document' : 'media' } : undefined,
+          });
+        } catch (_) {}
+      }
+
+      return res.json({
+        success: true,
+        channelId,
+        newMessages,
+        otherUpdates: channelDiff.otherUpdates || [],
+        pts: channelDiff.pts,
+        timeout: channelDiff.timeout,
+        isSlice,
+        isTooLong,
+        isEmpty,
+        isFinal,
+        topMessage: channelDiff.topMessage,
+        readInboxMaxId: channelDiff.readInboxMaxId,
+        unreadCount: channelDiff.unreadCount,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] updates.getChannelDifference error:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || String(err),
       });
     }
   });
@@ -7060,6 +7508,22 @@ async function startServer() {
 
             const userName = [userData.firstName, userData.lastName].filter(Boolean).join(' ') || userData.firstName || 'مستخدم';
             console.log(`✅ [SessionEngine] Account [${index}] verified & ready. Logged in as: ${userName} (${userData.phone || userData.id})`);
+
+            try {
+              const state: any = await client.invoke(new Api.updates.GetState());
+              if (state) {
+                console.log(`[MTProto] Initialized PTS for Account [${index}]: pts=${state.pts}, qts=${state.qts}, date=${state.date}, seq=${state.seq}`);
+                saveAccountSession(index, {
+                  ...sessionData,
+                  pts: state.pts,
+                  qts: state.qts,
+                  date: state.date,
+                  seq: state.seq,
+                });
+              }
+            } catch (stErr: any) {
+              console.warn(`[MTProto] Initial GetState skipped for Account [${index}]:`, stErr?.message || stErr);
+            }
           } else {
             console.warn(`⚠️ [SessionEngine] Account [${index}] authorization failed or revoked.`);
           }
