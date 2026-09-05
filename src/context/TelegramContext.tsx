@@ -59,6 +59,7 @@ import {
 import { io as createSocketIO, Socket } from 'socket.io-client';
 import { getTelegramEpoch, parseTelegramDate, formatTelegramTime } from '../utils/dateUtils';
 import { messageCache } from '../services/IndexedDBMessageCache';
+import { telegramDB } from '../utils/sqliteStorage';
 
 interface TelegramContextType {
   currentUser: User;
@@ -623,6 +624,70 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       localStorage.setItem('tg_auto_join_enabled_v1', String(autoJoinLinksEnabled));
     } catch {}
   }, [autoJoinLinksEnabled]);
+
+  // Load persistent chats & messages from IndexedDB (telegramDB SQLite & messageCache)
+  useEffect(() => {
+    let isCancelled = false;
+    (async () => {
+      try {
+        await telegramDB.init();
+        const storedChats = telegramDB.getChats();
+        if (storedChats && storedChats.length > 0 && !isCancelled) {
+          setChats((prev) => {
+            if (prev.length === 0) return storedChats;
+            // Merge unread and latest data
+            const existingIds = new Set(prev.map((c) => c.id));
+            const newFromDb = storedChats.filter((c) => !existingIds.has(c.id));
+            return newFromDb.length > 0 ? [...prev, ...newFromDb] : prev;
+          });
+        }
+      } catch (err) {
+        console.warn('[StorageEngine] Error hydrating chats from IndexedDB:', err);
+      }
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  // When active chat changes, hydrate its full conversation history from IndexedDB
+  useEffect(() => {
+    if (!activeChatId) return;
+    let isCancelled = false;
+    (async () => {
+      try {
+        // 1. First check IndexedDB messageCache
+        const cached = await messageCache.getCachedMessages(activeChatId, { limit: 100 });
+        if (cached && cached.length > 0 && !isCancelled) {
+          setMessages((prev) => {
+            const current = prev[activeChatId] || [];
+            if (current.length >= cached.length) return prev;
+            return {
+              ...prev,
+              [activeChatId]: cached,
+            };
+          });
+          return;
+        }
+
+        // 2. Then check telegramDB SQLite messages table (backed by IndexedDB)
+        const sqliteMsgs = telegramDB.getMessagesForChat(activeChatId);
+        if (sqliteMsgs && sqliteMsgs.length > 0 && !isCancelled) {
+          setMessages((prev) => {
+            const current = prev[activeChatId] || [];
+            if (current.length >= sqliteMsgs.length) return prev;
+            return {
+              ...prev,
+              [activeChatId]: sqliteMsgs,
+            };
+          });
+        }
+      } catch (_) {}
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeChatId]);
 
   const [isSessionValidating, setIsSessionValidating] = useState<boolean>(false);
 
@@ -1259,8 +1324,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Sync current account changes into accounts array & localStorage
+  // Sync current account changes into accounts array & IndexedDB persistence
   useEffect(() => {
+    // 1. Persist chats to IndexedDB (via telegramDB in sqliteStorage)
+    if (chats.length > 0) {
+      try {
+        telegramDB.saveChats(chats);
+      } catch (e) {
+        console.warn('[IndexedDB StorageEngine] Error saving chats:', e);
+      }
+    }
+
+    // 2. Persist messages to IndexedDB (via telegramDB & messageCache)
+    try {
+      for (const [chatId, msgs] of Object.entries(messages)) {
+        if (msgs && msgs.length > 0) {
+          telegramDB.saveMessages(msgs);
+        }
+      }
+    } catch (e) {
+      console.warn('[IndexedDB StorageEngine] Error saving messages:', e);
+    }
+
     setAccounts((prev) => {
       const next = prev.map((acc) => {
         if (acc.id === activeAccountId) {
@@ -1276,10 +1361,19 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return acc;
       });
       try {
-        localStorage.setItem('tg_multi_accounts_v3', JSON.stringify(next));
+        // Strip heavy chats and messages payloads before writing to localStorage
+        // This ensures 100% adherence to avoiding localStorage for chats/messages and prevents QuotaExceededError
+        const sanitizedAccounts = next.map((a) => ({
+          ...a,
+          chats: [],
+          messages: {},
+        }));
+        localStorage.setItem('tg_multi_accounts_v3', JSON.stringify(sanitizedAccounts));
         localStorage.setItem('tg_active_account_id_v3', activeAccountId);
-        multiAccountManager.syncWithStorage(next, activeAccountId);
-      } catch {}
+        multiAccountManager.syncWithStorage(sanitizedAccounts, activeAccountId);
+      } catch (e) {
+        console.warn('[StorageEngine] Error syncing accounts metadata:', e);
+      }
       return next;
     });
   }, [currentUser, settings, chats, messages, activeAccountId]);
@@ -3743,6 +3837,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       socket.on('raw_update', (rawUpdate: any) => {
         try {
+          if (rawUpdate?.message || rawUpdate?.type === 'new_message') {
+            handleIncomingUpdate(rawUpdate);
+          }
           import('../core/MessagesController').then(({ MessagesController }) => {
             const controller = MessagesController.getInstance();
             if (rawUpdate?.update) {

@@ -819,6 +819,7 @@ async function startServer() {
     // 1. Real-time WebSocket Broadcast via Socket.IO
     try {
       io.emit('telegram_update', update);
+      io.emit('raw_update', update);
       if (update.type) {
         io.emit(update.type, update);
       }
@@ -1029,6 +1030,19 @@ async function startServer() {
             mediaType,
           };
 
+          // Immediate real-time broadcast via Socket.IO raw_update
+          try {
+            io.emit('raw_update', {
+              type: 'new_message',
+              chatId,
+              peerId: peerIdStr,
+              out: isOut,
+              message: formattedMsg,
+              epoch: Date.now(),
+              pts: (event as any)?.pts || (msg as any)?.pts || (event as any)?.originalUpdate?.pts,
+            });
+          } catch (_) {}
+
           broadcastTelegramUpdate({
             type: 'new_message',
             chatId,
@@ -1037,6 +1051,32 @@ async function startServer() {
             message: formattedMsg,
             epoch: Date.now(),
           });
+
+          // Persist PTS, SEQ, QTS after each message into sessions/account_X.json so no event is lost
+          const msgPts = (event as any)?.pts || (msg as any)?.pts || (event as any)?.originalUpdate?.pts;
+          const msgSeq = (event as any)?.seq || (event as any)?.originalUpdate?.seq;
+          const msgQts = (event as any)?.qts || (event as any)?.originalUpdate?.qts;
+          const currentMsgDateUnix = msgTimestampSec || Math.floor(Date.now() / 1000);
+
+          if (sessionKey) {
+            try {
+              for (const [idx, acc] of accountInstances.entries()) {
+                if (acc.sessionString === sessionKey || idx === currentAccount) {
+                  const stored = readAccountSession(idx);
+                  if (stored) {
+                    saveAccountSession(idx, {
+                      ...stored,
+                      pts: msgPts !== undefined ? Number(msgPts) : stored.pts,
+                      seq: msgSeq !== undefined ? Number(msgSeq) : stored.seq,
+                      qts: msgQts !== undefined ? Number(msgQts) : stored.qts,
+                      date: currentMsgDateUnix,
+                    });
+                  }
+                  break;
+                }
+              }
+            } catch (_) {}
+          }
 
           // Dispatch Web Push notification to all subscribers for background delivery
           if (!msg.out) {
@@ -3560,7 +3600,41 @@ async function startServer() {
     }
   });
 
-  // 8.0.1 MTProto updates.getChannelDifference endpoint
+  // 8.0.1 MTProto updates.getChannelDifference function & endpoint
+  async function getChannelDifference(channelId: string | number, pts: number, targetClient?: any): Promise<any> {
+    const client = targetClient || mainTelegramClient;
+    if (!client || !client.connected) {
+      throw new Error('Telegram client is not connected');
+    }
+    const cleanChanId = String(channelId || '').replace('chat_', '');
+    let targetEntity: any = cleanChanId;
+    try {
+      targetEntity = await client.getInputEntity(cleanChanId).catch(() => null);
+      if (!targetEntity && !isNaN(Number(cleanChanId))) {
+        const numId = Number(cleanChanId);
+        targetEntity = await client.getInputEntity(numId).catch(() => null);
+        if (!targetEntity && cleanChanId.startsWith('-100')) {
+          const strippedId = Number(cleanChanId.replace('-100', ''));
+          targetEntity = await client.getInputEntity(strippedId).catch(() => null);
+        }
+      }
+      if (!targetEntity) {
+        targetEntity = await client.getEntity(cleanChanId).catch(() => null);
+      }
+    } catch (_) {
+      targetEntity = cleanChanId;
+    }
+
+    return await client.invoke(
+      new Api.updates.GetChannelDifference({
+        channel: targetEntity,
+        filter: new Api.ChannelMessagesFilterEmpty(),
+        pts: Number(pts) || 0,
+        limit: 100,
+      })
+    );
+  }
+
   app.post('/api/telegram/updates/channel-difference', async (req, res) => {
     const { channelId, pts, accountIndex, phone, sessionString, fetchHistoryIfTooLong = true } = req.body || {};
     try {
@@ -3594,27 +3668,13 @@ async function startServer() {
 
       let channelDiff: any = null;
       try {
-        channelDiff = await client.invoke(
-          new Api.updates.GetChannelDifference({
-            channel: targetEntity,
-            filter: new Api.ChannelMessagesFilterEmpty(),
-            pts: Number(pts) || 0,
-            limit: 100,
-          })
-        );
+        channelDiff = await getChannelDifference(channelId, pts, client);
       } catch (invokeErr: any) {
         // If channel difference fails due to invalid PTS or PERSISTENT_TIMESTAMP_INVALID, retry with pts=0 or fallback
         console.warn(`[MTProto] GetChannelDifference failed for ${channelId} (pts=${pts}):`, invokeErr?.message || invokeErr);
         if (pts && Number(pts) > 0) {
           try {
-            channelDiff = await client.invoke(
-              new Api.updates.GetChannelDifference({
-                channel: targetEntity,
-                filter: new Api.ChannelMessagesFilterEmpty(),
-                pts: 0,
-                limit: 100,
-              })
-            );
+            channelDiff = await getChannelDifference(channelId, 0, client);
           } catch (retryErr: any) {
             throw retryErr;
           }
@@ -3633,14 +3693,19 @@ async function startServer() {
       const isFinal = channelDiff.final !== undefined ? Boolean(channelDiff.final) : (!isSlice);
 
       let rawMessages = channelDiff.newMessages || channelDiff.messages || [];
+      let resolvedPts = channelDiff.pts !== undefined ? channelDiff.pts : Number(pts) || 0;
 
-      // If channelDifferenceTooLong occurred during long offline periods, ensure we don't lose historical messages
-      if (isTooLong && fetchHistoryIfTooLong && rawMessages.length < 20) {
+      // Handle ChannelDifferenceTooLong: fetch last 100 messages via GetHistory and update pts to newest received message
+      if (isTooLong) {
         try {
-          console.log(`[MTProto] ChannelDifferenceTooLong detected for ${channelId}. Fetching recent history to ensure no message loss...`);
-          const historyMsgs: any = await client.getMessages(targetEntity, { limit: 50 });
+          console.log(`[MTProto] ChannelDifferenceTooLong detected for ${channelId}. Fetching recent 100 messages via GetHistory...`);
+          const historyMsgs: any = await client.getMessages(targetEntity, { limit: 100 });
           if (Array.isArray(historyMsgs) && historyMsgs.length > 0) {
             rawMessages = historyMsgs;
+            const newestMsgWithPts = historyMsgs.find((m: any) => m?.pts);
+            if (newestMsgWithPts?.pts) {
+              resolvedPts = Number(newestMsgWithPts.pts);
+            }
           }
         } catch (histErr: any) {
           console.warn('[MTProto] Fallback getMessages on ChannelDifferenceTooLong:', histErr?.message || histErr);
@@ -3687,12 +3752,27 @@ async function startServer() {
         } catch (_) {}
       }
 
+      // Broadcast new messages live to the frontend
+      for (const msgItem of newMessages) {
+        try {
+          io.emit('raw_update', {
+            type: 'new_message',
+            chatId: msgItem.chatId,
+            peerId: msgItem.peerId,
+            out: msgItem.out,
+            message: msgItem,
+            epoch: Date.now(),
+            pts: resolvedPts,
+          });
+        } catch (_) {}
+      }
+
       return res.json({
         success: true,
         channelId,
         newMessages,
         otherUpdates: channelDiff.otherUpdates || [],
-        pts: channelDiff.pts,
+        pts: resolvedPts,
         timeout: channelDiff.timeout,
         isSlice,
         isTooLong,

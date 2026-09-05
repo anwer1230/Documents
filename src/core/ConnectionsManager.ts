@@ -864,6 +864,21 @@ export class ConnectionsManager {
       throw err;
     }
   }
+  /**
+   * Fetches updates.getChannelDifference for a channel/supergroup
+   */
+  public async getChannelDifference(channelId: string | number, pts: number): Promise<any> {
+    return this.sendRequest({
+      _: 'updates.getChannelDifference',
+      channel: channelId,
+      pts: Number(pts) || 0,
+      limit: 100,
+    });
+  }
+}
+
+export async function getChannelDifference(channelId: string | number, pts: number): Promise<any> {
+  return ConnectionsManager.getInstance().getChannelDifference(channelId, pts);
 }
 
 export const connectionsManager = ConnectionsManager.getInstance();

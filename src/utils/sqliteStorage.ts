@@ -118,6 +118,31 @@ class TelegramSQLiteDatabase {
         updated_at INTEGER
       );
 
+      CREATE TABLE IF NOT EXISTS diff_params (
+        account_id TEXT PRIMARY KEY,
+        pts INTEGER,
+        seq INTEGER,
+        date INTEGER,
+        qts INTEGER,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS privacy_rules (
+        rule_key TEXT PRIMARY KEY,
+        rules_json TEXT,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_scroll (
+        scroll_key TEXT PRIMARY KEY,
+        dialog_id TEXT,
+        position INTEGER,
+        top_offset INTEGER,
+        message_id TEXT,
+        is_bottom INTEGER,
+        updated_at INTEGER
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     `);
 
@@ -469,6 +494,126 @@ class TelegramSQLiteDatabase {
       console.warn('[SQLite] getAllChannelPts error:', e);
     }
     return result;
+  }
+
+  // SQLite Ops for Diff Params
+  public saveDiffParams(accountId: string | number, pts: number, seq: number, date: number, qts: number): void {
+    if (!this.db) return;
+    try {
+      this.db.run(
+        'INSERT OR REPLACE INTO diff_params (account_id, pts, seq, date, qts, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [String(accountId), Number(pts) || 0, Number(seq) || 0, Number(date) || 0, Number(qts) || 0, Date.now()]
+      );
+      this.persist();
+    } catch (e) {
+      console.warn('[SQLite] saveDiffParams error:', e);
+    }
+  }
+
+  public getDiffParams(accountId: string | number): { pts: number; seq: number; date: number; qts: number } | null {
+    if (!this.db) return null;
+    try {
+      const stmt = this.db.prepare('SELECT pts, seq, date, qts FROM diff_params WHERE account_id = ?');
+      stmt.bind([String(accountId)]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject() as any;
+        stmt.free();
+        return {
+          pts: Number(row.pts) || 0,
+          seq: Number(row.seq) || 0,
+          date: Number(row.date) || 0,
+          qts: Number(row.qts) || 0,
+        };
+      }
+      stmt.free();
+    } catch (e) {
+      console.warn('[SQLite] getDiffParams error:', e);
+    }
+    return null;
+  }
+
+  // SQLite Ops for Privacy Rules
+  public savePrivacyRules(account: number, type: number, rules: any[]): void {
+    if (!this.db) return;
+    try {
+      const ruleKey = `privacy_${account}_${type}`;
+      this.db.run(
+        'INSERT OR REPLACE INTO privacy_rules (rule_key, rules_json, updated_at) VALUES (?, ?, ?)',
+        [ruleKey, JSON.stringify(rules), Date.now()]
+      );
+      this.persist();
+    } catch (e) {
+      console.warn('[SQLite] savePrivacyRules error:', e);
+    }
+  }
+
+  public getPrivacyRules(account: number, type: number): any[] | null {
+    if (!this.db) return null;
+    try {
+      const ruleKey = `privacy_${account}_${type}`;
+      const stmt = this.db.prepare('SELECT rules_json FROM privacy_rules WHERE rule_key = ?');
+      stmt.bind([ruleKey]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject() as any;
+        stmt.free();
+        if (row.rules_json) {
+          return JSON.parse(row.rules_json);
+        }
+      }
+      stmt.free();
+    } catch (e) {
+      console.warn('[SQLite] getPrivacyRules error:', e);
+    }
+    return null;
+  }
+
+  // SQLite Ops for Chat Scroll Position
+  public saveChatScroll(
+    account: number,
+    dialogId: string,
+    position: number,
+    topOffset: number,
+    messageId: string | number,
+    isAtBottom: boolean
+  ): void {
+    if (!this.db) return;
+    try {
+      const scrollKey = `scroll_${account}_${dialogId}`;
+      this.db.run(
+        'INSERT OR REPLACE INTO chat_scroll (scroll_key, dialog_id, position, top_offset, message_id, is_bottom, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [scrollKey, dialogId, position, topOffset, String(messageId), isAtBottom ? 1 : 0, Date.now()]
+      );
+      this.persist();
+    } catch (e) {
+      console.warn('[SQLite] saveChatScroll error:', e);
+    }
+  }
+
+  public getChatScroll(
+    account: number,
+    dialogId: string
+  ): { dialogId: string; position: number; topOffset: number; messageId: string; isAtBottom: boolean } | null {
+    if (!this.db) return null;
+    try {
+      const scrollKey = `scroll_${account}_${dialogId}`;
+      const stmt = this.db.prepare('SELECT * FROM chat_scroll WHERE scroll_key = ?');
+      stmt.bind([scrollKey]);
+      if (stmt.step()) {
+        const row = stmt.getAsObject() as any;
+        stmt.free();
+        return {
+          dialogId: row.dialog_id || dialogId,
+          position: Number(row.position) || 0,
+          topOffset: Number(row.top_offset) || 0,
+          messageId: String(row.message_id || ''),
+          isAtBottom: Boolean(row.is_bottom),
+        };
+      }
+      stmt.free();
+    } catch (e) {
+      console.warn('[SQLite] getChatScroll error:', e);
+    }
+    return null;
   }
 }
 
