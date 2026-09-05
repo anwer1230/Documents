@@ -89,8 +89,11 @@ export const ChatListHeader: React.FC = () => {
         borderColor: 'var(--tg-theme-border)',
       }}
     >
-      {/* Official Telegram Android Action Bar (56px standard) */}
-      <div className="h-14 px-2 flex items-center justify-between gap-1 relative">
+      {/* Top Brand Gradient Accent Bar (#8A2BE2 to #FF69B4) */}
+      <div className="h-[2.5px] w-full bg-gradient-to-r from-[#8A2BE2] via-[#d946ef] to-[#FF69B4] shrink-0" />
+
+      {/* Official Telegram Android Action Bar (56px standard) with subtle gradient hue */}
+      <div className="h-14 px-2 flex items-center justify-between gap-1 relative bg-gradient-to-r from-[#8A2BE2]/10 via-transparent to-[#FF69B4]/10">
         {isSearchActive || searchQuery ? (
           /* Search Mode (ActionBarSearchItem) */
           <div className="flex items-center w-full gap-2 px-1 animate-in fade-in duration-150">
