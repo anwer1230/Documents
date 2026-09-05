@@ -4575,6 +4575,58 @@ async function startServer() {
   app.get('/api/get_all_groups', handleGetAllGroups);
   app.post('/api/get_all_groups', handleGetAllGroups);
 
+  // -------------------------------------------------------------
+  // Salam Mode Activity Store & Real-time Broadcasting
+  // -------------------------------------------------------------
+  interface SalamActivityRecord {
+    id: string;
+    chatId: string | number;
+    chatTitle?: string;
+    greetingMsgId?: number | string;
+    status: 'greeting_sent' | 'waiting_interaction' | 'interaction_detected' | 'message_edited' | 'message_deleted' | 'error';
+    statusLabel: string;
+    interactionCount: number;
+    requiredInteractions: number;
+    remainingSeconds: number;
+    totalWaitSeconds: number;
+    lastMessageSnippet?: string;
+    lastMessageSender?: string;
+    originalText?: string;
+    details?: string;
+    timestamp: string;
+    decision?: 'edit' | 'delete' | 'pending';
+  }
+
+  const salamActivities: SalamActivityRecord[] = [];
+
+  function recordSalamActivity(data: Omit<SalamActivityRecord, 'id' | 'timestamp'>): SalamActivityRecord {
+    const record: SalamActivityRecord = {
+      id: `salam_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      ...data,
+    };
+    salamActivities.unshift(record);
+    if (salamActivities.length > 150) {
+      salamActivities.length = 150;
+    }
+    try {
+      io.emit('salam_activity', record);
+    } catch {}
+    return record;
+  }
+
+  app.get('/api/salam_activities', (req, res) => {
+    res.json({ success: true, activities: salamActivities });
+  });
+
+  app.post('/api/salam_activities/clear', (req, res) => {
+    salamActivities.length = 0;
+    try {
+      io.emit('salam_activities_cleared');
+    } catch {}
+    res.json({ success: true, message: 'تم مسح سجل نشاط السلام بنجاح' });
+  });
+
   app.post('/api/send_now', async (req, res) => {
     const data = req.body || {};
     const message = (data.message || '').trim();
@@ -4721,14 +4773,59 @@ async function startServer() {
             message: 'السلام عليكم',
           });
 
+          recordSalamActivity({
+            chatId: label,
+            chatTitle: label,
+            greetingMsgId: greetingMsg.id,
+            status: 'greeting_sent',
+            statusLabel: 'تم إرسال السلام كتمويه أولي 🚀',
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: message,
+            details: `تم إرسال 'السلام عليكم' بنجاح (معرف: ${greetingMsg.id}) وبدء مهلة الانتظار الذكية`,
+          });
+
           // 2. تفعيل مستمع الأحداث الحي (Event Listener) لمراقبة الرسائل الجديدة لحظياً خلال فترة الانتظار
           const liveIncomingMsgs: any[] = [];
+          const waitStartTime = Date.now();
+          recordSalamActivity({
+            chatId: label,
+            chatTitle: label,
+            greetingMsgId: greetingMsg.id,
+            status: 'waiting_interaction',
+            statusLabel: `في انتظار تفاعل الأعضاء (${smart_wait_seconds} ثانية)`,
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: message,
+            details: `جاري رصد الرسائل الواردة من الأعضاء لحساب معدل النشاط المطلوب (${smart_required_messages}+)`,
+          });
+
           const liveMsgHandler = (event: any) => {
             try {
               const incoming = event?.message;
               if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
                 liveIncomingMsgs.push(incoming);
                 console.log(`[SendNow] [SalamMode] ⚡ Live event detected in ${label}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
+                const elapsed = Math.floor((Date.now() - waitStartTime) / 1000);
+                recordSalamActivity({
+                  chatId: label,
+                  chatTitle: label,
+                  greetingMsgId: greetingMsg.id,
+                  status: 'interaction_detected',
+                  statusLabel: `تفاعل وارد (${liveIncomingMsgs.length}/${smart_required_messages})`,
+                  interactionCount: liveIncomingMsgs.length,
+                  requiredInteractions: smart_required_messages,
+                  remainingSeconds: Math.max(0, smart_wait_seconds - elapsed),
+                  totalWaitSeconds: smart_wait_seconds,
+                  lastMessageSnippet: incoming.message ? String(incoming.message).slice(0, 70) : undefined,
+                  lastMessageSender: incoming.senderId ? String(incoming.senderId) : undefined,
+                  originalText: message,
+                  details: `وردت رسالة جديدة من عضو: "${(incoming.message || '').slice(0, 40)}"`,
+                });
               }
             } catch {}
           };
@@ -4745,13 +4842,14 @@ async function startServer() {
 
           // 3. التحقق المزدوج من نشاط المجموعة عبر Event Listener و getMessages
           let interactionPassed = false;
+          let totalCount = liveIncomingMsgs.length;
           try {
             const recentMsgs: any = await client.getMessages(entity, {
               limit: 20,
               minId: greetingMsg.id,
             });
             const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            const totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
+            totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
             console.log(`[SendNow] [SalamMode] 3. Monitored ${totalCount} new messages in ${label} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
             if (totalCount >= smart_required_messages) {
               interactionPassed = true;
@@ -4773,6 +4871,20 @@ async function startServer() {
               text: message,
               parseMode: 'md',
             });
+            recordSalamActivity({
+              chatId: label,
+              chatTitle: label,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_edited',
+              statusLabel: 'تم تعديل رسالة السلام إلى الرسالة الأصلية ✍️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: message,
+              decision: 'edit',
+              details: `المجموعة نشطة (${totalCount} تفاعلات >= ${smart_required_messages}). تم استبدال السلام بالمنشور الفعلي بنجاح.`,
+            });
             sentResults.push({
               target: label,
               messageId: greetingMsg.id || 0,
@@ -4784,6 +4896,20 @@ async function startServer() {
             // 5. إذا لم يصل العدد: قم بحذف رسالة "السلام" عبر client.deleteMessages
             console.log(`[SendNow] [SalamMode] 5. Low interaction (<${smart_required_messages}). Deleting greeting message from ${label}...`);
             await client.deleteMessages(entity, [greetingMsg.id], { revoke: true }).catch(() => {});
+            recordSalamActivity({
+              chatId: label,
+              chatTitle: label,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_deleted',
+              statusLabel: 'تم حذف رسالة السلام لعدم وجود تفاعل كافٍ 🗑️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: message,
+              decision: 'delete',
+              details: `المجموعة صامتة أو خاملة (${totalCount}/${smart_required_messages} تفاعلات). تم حذف رسالة السلام لمنع كشف البوت وتأمين الحساب.`,
+            });
             failedResults.push({
               target: label,
               error: `سحبت رسالة التمويه الذكية لعدم وجود تفاعل كافٍ من الأعضاء (${smart_required_messages} رسائل جديدة مطلوبة خلال ${smart_wait_seconds}ث)`,
@@ -5863,14 +5989,59 @@ async function startServer() {
             message: 'السلام عليكم',
           });
 
+          recordSalamActivity({
+            chatId,
+            chatTitle: chatId,
+            greetingMsgId: greetingMsg.id,
+            status: 'greeting_sent',
+            statusLabel: 'تم إرسال السلام كتمويه أولي (مجدول)',
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: text,
+            details: `تم إرسال 'السلام عليكم' بنجاح (معرف: ${greetingMsg.id}) في الدفعة المجدولة`,
+          });
+
           // 2. تفعيل مستمع الأحداث الحي (Event Listener) لمراقبة الرسائل الجديدة لحظياً خلال فترة الانتظار
           const liveIncomingMsgs: any[] = [];
+          const waitStartTime = Date.now();
+          recordSalamActivity({
+            chatId,
+            chatTitle: chatId,
+            greetingMsgId: greetingMsg.id,
+            status: 'waiting_interaction',
+            statusLabel: `في انتظار تفاعل الأعضاء (${smart_wait_seconds} ثانية)`,
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: text,
+            details: `جاري رصد تفاعل الأعضاء في المجموعة ${chatId}`,
+          });
+
           const liveMsgHandler = (event: any) => {
             try {
               const incoming = event?.message;
               if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
                 liveIncomingMsgs.push(incoming);
                 console.log(`[SalamMode] ⚡ Live event detected in ${chatId}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
+                const elapsed = Math.floor((Date.now() - waitStartTime) / 1000);
+                recordSalamActivity({
+                  chatId,
+                  chatTitle: chatId,
+                  greetingMsgId: greetingMsg.id,
+                  status: 'interaction_detected',
+                  statusLabel: `تفاعل وارد (${liveIncomingMsgs.length}/${smart_required_messages})`,
+                  interactionCount: liveIncomingMsgs.length,
+                  requiredInteractions: smart_required_messages,
+                  remainingSeconds: Math.max(0, smart_wait_seconds - elapsed),
+                  totalWaitSeconds: smart_wait_seconds,
+                  lastMessageSnippet: incoming.message ? String(incoming.message).slice(0, 70) : undefined,
+                  lastMessageSender: incoming.senderId ? String(incoming.senderId) : undefined,
+                  originalText: text,
+                  details: `وردت رسالة من عضو برقم ${incoming.id}`,
+                });
               }
             } catch {}
           };
@@ -5887,13 +6058,14 @@ async function startServer() {
 
           // 3. التحقق المزدوج من نشاط المجموعة عبر Event Listener و getMessages
           let interactionPassed = false;
+          let totalCount = liveIncomingMsgs.length;
           try {
             const recentMsgs: any = await client.getMessages(peer, {
               limit: 20,
               minId: greetingMsg.id,
             });
             const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            const totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
+            totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
             console.log(`[SalamMode] 3. Monitored ${totalCount} new messages from participants in ${chatId} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
             if (totalCount >= smart_required_messages) {
               interactionPassed = true;
@@ -5915,6 +6087,20 @@ async function startServer() {
               text,
               parseMode: 'md',
             });
+            recordSalamActivity({
+              chatId,
+              chatTitle: chatId,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_edited',
+              statusLabel: 'تم تعديل رسالة السلام إلى الرسالة الأصلية ✍️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: text,
+              decision: 'edit',
+              details: `المجموعة نشطة (${totalCount} تفاعلات). تم التعديل إلى المنشور المطلوب بنجاح.`,
+            });
             targetResults.push({
               chatId,
               messageId: String(greetingMsg.id),
@@ -5925,6 +6111,20 @@ async function startServer() {
             // 5. إذا لم يحدث تفاعل كافٍ، احذف رسالة "السلام"
             console.log(`[SalamMode] 5. Low interaction in ${chatId} (<${smart_required_messages}). Deleting greeting message via deleteMessages...`);
             await client.deleteMessages(peer, [greetingMsg.id], { revoke: true }).catch(() => {});
+            recordSalamActivity({
+              chatId,
+              chatTitle: chatId,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_deleted',
+              statusLabel: 'تم حذف رسالة السلام لعدم وجود تفاعل كافٍ 🗑️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: text,
+              decision: 'delete',
+              details: `المجموعة صامتة (${totalCount}/${smart_required_messages}). تم حذف الرسالة لتأمين الحساب من الحظر.`,
+            });
             targetResults.push({
               chatId,
               messageId: String(greetingMsg.id),

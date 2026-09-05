@@ -27,6 +27,7 @@ import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
 import { notificationsController } from '../../core/NotificationsController';
 import { MonitorAlert, ProtectionMode } from '../../types';
+import { SalamActivityLog } from '../SalamActivityLog';
 
 export interface MessageDraftItem {
   id: number;
@@ -275,6 +276,7 @@ export const SenderModal: React.FC = () => {
   const [showModeDesc, setShowModeDesc] = useState<boolean>(false);
   const [isSending, setIsSending] = useState<boolean>(false);
   const [sendStatusMsg, setSendStatusMsg] = useState<{ text: string; success: boolean } | null>(null);
+  const [senderActiveTab, setSenderActiveTab] = useState<'sender' | 'salam_log'>('sender');
 
   // Monitoring State
   const [watchWords, setWatchWords] = useState<string>('واجب\nبحث\nسعر\nوظيفة\nتصميم\nبرمجة');
@@ -634,9 +636,9 @@ export const SenderModal: React.FC = () => {
           }}
         >
           {/* Header */}
-          <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between bg-white/[0.03]">
+          <div className="px-4 py-3 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white/[0.03]">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/30">
+              <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/30 shrink-0">
                 <Send className="w-4 h-4" />
               </div>
               <div>
@@ -644,16 +646,55 @@ export const SenderModal: React.FC = () => {
                 <p className="text-[10px] text-gray-400 m-0">نشر مجدول وذكي ومراقبة الرسائل والكلمات المفتاحية فورياً</p>
               </div>
             </div>
-            <button
-              onClick={() => setActiveModal('none')}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+
+            {/* Navigation Switcher between Sender and Salam Activity Log */}
+            <div className="flex items-center gap-1.5 self-end sm:self-center">
+              <div className="flex items-center bg-black/40 p-0.5 rounded-lg border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setSenderActiveTab('sender')}
+                  className={`px-3 py-1 rounded-md text-[0.72rem] font-semibold transition-all ${
+                    senderActiveTab === 'sender'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  الإرسال والمراقبة
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSenderActiveTab('salam_log')}
+                  className={`px-3 py-1 rounded-md text-[0.72rem] font-semibold flex items-center gap-1.5 transition-all ${
+                    senderActiveTab === 'salam_log'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
+                  <span>سجل نشاط السلام</span>
+                  <span className="text-[0.6rem] px-1 py-0.2 bg-emerald-500/30 text-emerald-200 rounded font-mono">
+                    LIVE
+                  </span>
+                </button>
+              </div>
+
+              <button
+                onClick={() => setActiveModal('none')}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+                title="إغلاق"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
-          {/* Body with 2-Column Responsive Layout */}
-          <div className="p-3 sm:p-4 overflow-y-auto flex-1 space-y-4">
+          {/* Body */}
+          {senderActiveTab === 'salam_log' ? (
+            <div className="overflow-hidden flex-1 h-[70vh]">
+              <SalamActivityLog compact={true} />
+            </div>
+          ) : (
+            <div className="p-3 sm:p-4 overflow-y-auto flex-1 space-y-4">
             {/* 5. الإرسال والمراقبة */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
               {/* العمود الأيمن: الإرسال الذكي والمباشر */}
@@ -879,6 +920,22 @@ export const SenderModal: React.FC = () => {
                           <div><strong>🚫 معطّل:</strong> يرسل الرسالة كما هي (خطر حظر).</div>
                         </div>
                       )}
+
+                      {sanitizeMode === 'salam' && (
+                        <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-[0.68rem] text-emerald-300">
+                            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                            <span>سجل نشاط وضع السلام شفاف ومباشر</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSenderActiveTab('salam_log')}
+                            className="px-2 py-0.5 text-[0.65rem] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/30 rounded font-semibold transition-all"
+                          >
+                            عرض السجل المباشر ↗
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1065,6 +1122,7 @@ export const SenderModal: React.FC = () => {
               </div>
             </div>
           </div>
+          )}
         </motion.div>
       </div>
     </AnimatePresence>

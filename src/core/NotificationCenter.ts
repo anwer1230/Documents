@@ -397,6 +397,7 @@ export class NotificationCenter {
   public static readonly smartSenderWaitingIntervalEnded = 48;
   public static readonly salamModeInteractionRecorded = 49;
   public static readonly salamModeDecisionMade = 50;
+  public static readonly salamActivityReceived = 51;
   public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0001;
   public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0002;
   public static readonly UPDATE_MASK_SEND_STATE = 0x0004;

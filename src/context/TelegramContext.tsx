@@ -31,6 +31,7 @@ import {
   INITIAL_MESSAGES,
 } from '../data/mockTelegramData';
 import { telegramAudio } from '../utils/audioNotification';
+import { NotificationCenter } from '../core/NotificationCenter';
 import { notificationsController } from '../core/NotificationsController';
 import { notificationsService } from '../core/NotificationsService';
 import { backgroundSyncService } from '../core/BackgroundSyncService';
@@ -100,7 +101,8 @@ interface TelegramContextType {
     | 'live-link-discover'
     | 'user-profile'
     | 'android-notification-shade'
-    | 'restricted-content';
+    | 'restricted-content'
+    | 'salam-activity-log';
   selectedProfileUser: ProfileUserInfo | null;
   setSelectedProfileUser: (user: ProfileUserInfo | null) => void;
   openUserProfile: (user: ProfileUserInfo) => void;
@@ -186,6 +188,7 @@ interface TelegramContextType {
       | 'user-profile'
       | 'android-notification-shade'
       | 'restricted-content'
+      | 'salam-activity-log'
   ) => void;
   setViewerMedia: (media: { url: string; title?: string; sender?: string; timestamp?: string } | null) => void;
   setReplyingTo: (reply: ReplyInfo | null) => void;
@@ -422,6 +425,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     | 'user-profile'
     | 'android-notification-shade'
     | 'restricted-content'
+    | 'salam-activity-log'
   >('none');
   const [selectedProfileUser, setSelectedProfileUser] = useState<ProfileUserInfo | null>(null);
 
@@ -3542,6 +3546,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (schedData?.active) {
           console.log('[Scheduler] Active round:', schedData.roundsExecuted);
         }
+      });
+
+      socket.on('salam_activity', (salamData: any) => {
+        NotificationCenter.getGlobalInstance().postNotificationName(
+          NotificationCenter.salamActivityReceived,
+          salamData
+        );
       });
     } catch (sockErr) {
       console.warn('[Socket.IO] Client connection error:', sockErr);
