@@ -581,7 +581,7 @@ self.addEventListener('push', (event) => {
       Promise.all([
         self.registration.showNotification(title, {
           body,
-          icon: 'https://telegram.org/img/t_logo.png',
+          icon: '/icon-192.png',
           badge: '/telegram-logo.svg',
           tag: 'tg_session_revoked',
           data: {
