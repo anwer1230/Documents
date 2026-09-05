@@ -1664,9 +1664,69 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     logout(targetAccountId);
   };
 
-  const updateAccountProfile = (data: Partial<User>) => {
+  const updateAccountProfile = async (data: Partial<User> & { photoBase64?: string }) => {
+    // 1. Optimistic local update
     setCurrentUser((prev) => ({ ...prev, ...data }));
-    showToast(settings.language === 'ar' ? 'تم تحديث الملف الشخصي' : 'Profile updated', '✅');
+
+    // 2. MTProto Telegram Server Update
+    const activeSession =
+      accounts.find((a) => a.id === activeAccountId)?.sessionString ||
+      (typeof window !== 'undefined' ? localStorage.getItem('tg_session_string') : null) ||
+      '';
+
+    if (!activeSession) {
+      showToast(settings.language === 'ar' ? 'تم حفظ التعديل محلياً' : 'Saved locally', '⚠️');
+      return;
+    }
+
+    try {
+      let firstName: string | undefined;
+      let lastName: string | undefined;
+
+      if (data.name !== undefined) {
+        const parts = data.name.trim().split(' ');
+        firstName = parts[0] || '';
+        lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
+      }
+
+      const resp = await fetch('/api/telegram/account/update-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionString: activeSession,
+          firstName,
+          lastName,
+          about: data.bio,
+          username: data.username,
+          photoBase64: data.avatar || data.photoBase64,
+        }),
+      });
+
+      const resData = await resp.json().catch(() => ({}));
+      if (!resp.ok || !resData.success) {
+        showToast(
+          resData.error ||
+            (settings.language === 'ar' ? 'فشل تحديث الإعدادات في تيليجرام' : 'Failed to update profile on Telegram'),
+          '❌'
+        );
+        return;
+      }
+
+      if (resData.user) {
+        setCurrentUser((prev) => ({
+          ...prev,
+          ...resData.user,
+        }));
+      }
+
+      showToast(
+        settings.language === 'ar' ? 'تمت مزامنة الملف الشخصي مع تيليجرام بنجاح' : 'Profile synced with Telegram',
+        '✅'
+      );
+    } catch (e: any) {
+      console.warn('[TelegramContext] updateAccountProfile error:', e);
+      showToast(e?.message || (settings.language === 'ar' ? 'خطأ في الاتصال بالخادم' : 'Server connection error'), '❌');
+    }
   };
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
@@ -3617,6 +3677,56 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           controller.getDifference();
           controller.getChannelDifferenceService().handleLongOfflineRecovery();
         }).catch(() => {});
+      });
+
+      socket.on('settings_updated', (payload: any) => {
+        console.log('[Socket.IO] settings_updated received:', payload);
+        // 1. Profile / user updates
+        if (payload?.type === 'profile_updated' || payload?.subType === 'profile_updated' || payload?.user) {
+          const user = payload.user || payload.data?.user;
+          if (user) {
+            setCurrentUser((prev: any) => {
+              if (!prev) return user;
+              return {
+                ...prev,
+                ...user,
+                name: user.name || prev.name,
+                firstName: user.firstName !== undefined ? user.firstName : prev.firstName,
+                lastName: user.lastName !== undefined ? user.lastName : prev.lastName,
+                username: user.username !== undefined ? user.username : prev.username,
+                avatar: user.avatar !== undefined ? user.avatar : prev.avatar,
+                bio: user.bio !== undefined ? user.bio : prev.bio,
+              };
+            });
+            showToast(settings.language === 'ar' ? 'تمت مزامنة الملف الشخصي تلقائياً' : 'Profile synced with Telegram', '👤');
+          }
+        }
+        // 2. 2FA / Password updates
+        if (
+          payload?.subType === '2fa_updated' ||
+          payload?.type === '2fa_updated' ||
+          payload?.subType === 'email_verified'
+        ) {
+          import('../core/messenger/TwoStepVerificationController')
+            .then(({ TwoStepVerificationController }) => {
+              TwoStepVerificationController.getInstance().updateFromRemote(payload);
+            })
+            .catch(() => {});
+          showToast(settings.language === 'ar' ? 'تم تحديث إعدادات التحقق بخطوتين والبريد' : '2FA settings synced', '🔐');
+        }
+        // 3. Privacy updates
+        if (payload?.subType === 'privacy_updated' || payload?.type === 'privacy_updated' || payload?.target) {
+          import('../core/messenger/PrivacySettingsController')
+            .then(({ PrivacySettingsController }) => {
+              if (payload.target && payload.option) {
+                PrivacySettingsController.getInstance().updateRuleFromRemote(payload.target, payload.option);
+              } else {
+                PrivacySettingsController.getInstance().loadPrivacySettings();
+              }
+            })
+            .catch(() => {});
+          showToast(settings.language === 'ar' ? 'تم تحديث إعدادات الخصوصية' : 'Privacy settings synced', '🛡️');
+        }
       });
 
       socket.on('telegram_update', (update: any) => {

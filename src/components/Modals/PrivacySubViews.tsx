@@ -103,10 +103,14 @@ export const PrivacyControlView: React.FC<SubViewProps & { target: PrivacyTarget
 
   const info = titles[target] || titles.phone_number;
 
-  const handleSelectOption = (opt: PrivacyOption) => {
+  const handleSelectOption = async (opt: PrivacyOption) => {
     setCurrentOption(opt);
-    privacyController.setPrivacy(target, opt);
-    showToast(isArabic ? 'تم تحديث إعدادات الخصوصية' : 'Privacy settings updated', '🔒');
+    try {
+      await privacyController.setPrivacy(target, opt);
+      showToast(isArabic ? 'تم تحديث إعدادات الخصوصية في سيرفر تيليجرام' : 'Privacy settings synced with Telegram', '🔒');
+    } catch (e: any) {
+      showToast(e?.message || (isArabic ? 'فشل تحديث الخصوصية' : 'Failed to set privacy'), '❌');
+    }
   };
 
   return (

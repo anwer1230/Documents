@@ -6,7 +6,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
-import { TelegramClient, Api, sessions } from 'telegram';
+import { TelegramClient, Api, sessions, password as pwdHelper } from 'telegram';
+import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 import webpush from 'web-push';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
@@ -1474,18 +1475,31 @@ async function startServer() {
             }
           }
 
-          // Check for user/profile/settings updates (updateUser, updateProfile, updateUserName, updatePrivacy)
+          // Check for user/profile/settings updates (updateUser, updateProfile, updateUserName, updatePrivacy, updateNotifySettings)
           if (
             update.className === 'UpdateUser' ||
             update._ === 'updateUser' ||
             update.className === 'UpdateUserName' ||
             update._ === 'updateUserName' ||
+            update.className === 'UpdateUserPhoto' ||
+            update._ === 'updateUserPhoto' ||
             update.className === 'UpdateUserStatus' ||
             update._ === 'updateUserStatus' ||
             update.className === 'UpdatePrivacy' ||
-            update._ === 'updatePrivacy'
+            update._ === 'updatePrivacy' ||
+            update.className === 'UpdateNotifySettings' ||
+            update._ === 'updateNotifySettings'
           ) {
             console.log(`[TelegramClient] GramJS settings/user update received: ${update.className || update._}`);
+            
+            const payload = {
+              type: 'settings_updated',
+              updateType: update.className || update._,
+              data: update,
+              timestamp: Date.now(),
+            };
+            io.emit('settings_updated', payload);
+            broadcastTelegramUpdate(payload);
             broadcastTelegramUpdate({
               type: 'updateUser',
               updateType: update.className || update._,
@@ -4209,86 +4223,225 @@ async function startServer() {
     const phone = (req.query?.phone as string) || '';
     try {
       const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected) {
-        const pwd: any = await client.invoke(new Api.account.GetPassword());
-        return res.json({
-          success: true,
-          hasPassword: Boolean(pwd.hasPassword),
-          hasRecovery: Boolean(pwd.hasRecovery),
-          hint: pwd.hint || '',
-          loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
-          emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
-          pendingResetDate: pwd.pendingResetDate || undefined,
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'NO_SESSION',
+          message: 'لا توجد جلسة تيليجرام نشطة.',
+          hasPassword: false,
+          hasRecovery: false,
+          hint: '',
+          loginEmailPattern: '',
+          emailUnconfirmedPattern: '',
         });
       }
+
+      const pwd: any = await client.invoke(new Api.account.GetPassword());
+      return res.json({
+        success: true,
+        hasPassword: Boolean(pwd.hasPassword),
+        hasRecovery: Boolean(pwd.hasRecovery),
+        hint: pwd.hint || '',
+        loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
+        emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
+        pendingResetDate: pwd.pendingResetDate || undefined,
+      });
     } catch (err: any) {
       console.warn('[MTProto] getPassword error:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || String(err),
+        hasPassword: false,
+        hasRecovery: false,
+        hint: '',
+        loginEmailPattern: '',
+        emailUnconfirmedPattern: '',
+      });
     }
-    return res.json({
-      success: true,
-      hasPassword: true,
-      hasRecovery: true,
-      hint: 'Security Hint',
-      loginEmailPattern: 'u***@gmail.com',
-      emailUnconfirmedPattern: '',
-    });
   });
 
   app.post('/api/telegram/account/password-settings', async (req, res) => {
-    const { password, newPassword, hint, email, sessionString, phone } = req.body;
+    const { password, currentPassword, newPassword, hint, email, sessionString, phone } = req.body;
     try {
       const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected) {
-        const inputSettings = new Api.account.PasswordInputSettings({
-          hint: hint || '',
-          email: email || undefined,
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'NO_SESSION',
+          message: 'لا توجد جلسة تيليجرام نشطة.',
         });
-        const updateRes = await client.invoke(new Api.account.UpdatePasswordSettings({
-          password: new Api.InputCheckPasswordEmpty(),
-          newSettings: inputSettings,
-        }));
-        return res.json({ success: true, updated: Boolean(updateRes) });
       }
+
+      // 1. Fetch real current 2FA password state
+      const pwd: any = await client.invoke(new Api.account.GetPassword());
+
+      // 2. Prepare checkPassword for existing password
+      let checkPassword: any = new Api.InputCheckPasswordEmpty();
+      const currentPwdToUse = currentPassword || password;
+      if (pwd.hasPassword) {
+        if (!currentPwdToUse) {
+          return res.status(400).json({
+            success: false,
+            error: 'PASSWORD_HASH_INVALID',
+            message: 'كلمة المرور الحالية مطلوبة للتعديل.',
+          });
+        }
+        checkPassword = await pwdHelper.computeCheck(pwd, currentPwdToUse);
+      }
+
+      // 3. Prepare new password settings
+      let inputSettings: any;
+      if (newPassword) {
+        const newAlgo = pwd.newAlgo;
+        const newPasswordHash = await pwdHelper.computeDigest(newAlgo, newPassword);
+        inputSettings = new Api.account.PasswordInputSettings({
+          newAlgo,
+          newPasswordHash,
+          hint: hint !== undefined ? hint : (pwd.hint || ''),
+          email: email ? email.trim() : undefined,
+        });
+      } else if (newPassword === '') {
+        // Disabling 2FA password
+        inputSettings = new Api.account.PasswordInputSettings({
+          newPasswordHash: Buffer.alloc(0),
+          hint: '',
+          email: undefined,
+        });
+      } else {
+        // Only updating hint or email
+        inputSettings = new Api.account.PasswordInputSettings({
+          hint: hint !== undefined ? hint : (pwd.hint || ''),
+          email: email !== undefined ? (email ? email.trim() : '') : undefined,
+        });
+      }
+
+      const updateRes = await client.invoke(
+        new Api.account.UpdatePasswordSettings({
+          password: checkPassword,
+          newSettings: inputSettings,
+        })
+      );
+
+      // Fetch updated password state from Telegram
+      const updatedPwd: any = await client.invoke(new Api.account.GetPassword()).catch(() => null);
+
+      const broadcastPayload = {
+        type: 'settings_updated',
+        subType: '2fa_updated',
+        hasPassword: updatedPwd ? Boolean(updatedPwd.hasPassword) : Boolean(newPassword),
+        hasRecovery: updatedPwd ? Boolean(updatedPwd.hasRecovery) : Boolean(email),
+        hint: updatedPwd ? updatedPwd.hint : hint,
+        loginEmailPattern: updatedPwd ? (updatedPwd.loginEmailPattern || updatedPwd.emailUnconfirmedPattern) : '',
+        timestamp: Date.now(),
+      };
+
+      io.emit('settings_updated', broadcastPayload);
+      broadcastTelegramUpdate(broadcastPayload);
+
+      return res.json({
+        success: true,
+        updated: Boolean(updateRes),
+        hasPassword: updatedPwd ? Boolean(updatedPwd.hasPassword) : Boolean(newPassword),
+        hint: updatedPwd ? updatedPwd.hint : hint,
+        loginEmailPattern: updatedPwd ? (updatedPwd.loginEmailPattern || updatedPwd.emailUnconfirmedPattern) : '',
+        needEmailConfirm: Boolean(updatedPwd?.emailUnconfirmedPattern),
+      });
     } catch (err: any) {
       console.warn('[MTProto] updatePasswordSettings error:', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || String(err),
+        message: err?.message || 'فشل تحديث إعدادات كلمة المرور',
+      });
     }
-    return res.json({ success: true, updated: true });
   });
 
-  // 8.9 Send Email Verification Code (account.sendVerifyEmailCode RPC)
+  // 8.9 Send / Resend Email Verification Code (account.sendVerifyEmailCode / resendPasswordEmail RPC)
   app.post('/api/telegram/account/email/send-code', async (req, res) => {
     const { email, sessionString, phone } = req.body;
     try {
       const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected && email) {
-        const sendRes: any = await client.invoke(new Api.account.SendVerifyEmailCode({
-          purpose: new Api.EmailVerifyPurposePassport(),
-          email,
-        }));
-        return res.json({ success: true, pattern: sendRes?.pattern || email, length: sendRes?.length || 6 });
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
       }
+
+      let sendRes: any = null;
+      try {
+        sendRes = await client.invoke(new Api.account.ResendPasswordEmail());
+      } catch (_) {
+        if (email) {
+          sendRes = await client.invoke(
+            new Api.account.SendVerifyEmailCode({
+              purpose: new Api.EmailVerifyPurposePassport(),
+              email,
+            })
+          );
+        }
+      }
+
+      return res.json({
+        success: true,
+        pattern: sendRes?.pattern || email || '',
+        length: sendRes?.length || 6,
+      });
     } catch (err: any) {
       console.warn('[MTProto] sendVerifyEmailCode error:', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || String(err),
+      });
     }
-    return res.json({ success: true, pattern: email, length: 6 });
   });
 
-  // 8.10 Verify Email (account.verifyEmail RPC)
+  // 8.10 Verify Email (account.confirmPasswordEmail / account.verifyEmail RPC)
   app.post('/api/telegram/account/email/verify', async (req, res) => {
     const { code, email, sessionString, phone } = req.body;
     try {
       const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected && code) {
-        const verifyRes: any = await client.invoke(new Api.account.VerifyEmail({
-          purpose: new Api.EmailVerifyPurposePassport(),
-          verification: new Api.EmailVerificationCode({ code }),
-        }));
-        return res.json({ success: true, verified: Boolean(verifyRes) });
+      if (!client || !client.connected || !code) {
+        return res.status(400).json({ success: false, error: 'INVALID_PARAMETERS' });
       }
+
+      let verifyRes: any = null;
+      try {
+        verifyRes = await client.invoke(
+          new Api.account.ConfirmPasswordEmail({
+            code: String(code).trim(),
+          })
+        );
+      } catch (confirmErr: any) {
+        verifyRes = await client.invoke(
+          new Api.account.VerifyEmail({
+            purpose: new Api.EmailVerifyPurposePassport(),
+            verification: new Api.EmailVerificationCode({ code: String(code).trim() }),
+          })
+        );
+      }
+
+      const updatedPwd: any = await client.invoke(new Api.account.GetPassword()).catch(() => null);
+
+      const broadcastPayload = {
+        type: 'settings_updated',
+        subType: 'email_verified',
+        hasPassword: updatedPwd ? Boolean(updatedPwd.hasPassword) : true,
+        loginEmailPattern: updatedPwd ? updatedPwd.loginEmailPattern : email,
+        timestamp: Date.now(),
+      };
+      io.emit('settings_updated', broadcastPayload);
+      broadcastTelegramUpdate(broadcastPayload);
+
+      return res.json({
+        success: true,
+        verified: Boolean(verifyRes),
+        hasPassword: updatedPwd ? Boolean(updatedPwd.hasPassword) : true,
+      });
     } catch (err: any) {
       console.warn('[MTProto] verifyEmail error:', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || String(err),
+      });
     }
-    return res.json({ success: true, verified: true });
   });
 
   // 8.11 Cancel Pending Password Email (account.cancelPasswordEmail RPC)
@@ -4300,10 +4453,379 @@ async function startServer() {
         await client.invoke(new Api.account.CancelPasswordEmail());
         return res.json({ success: true, cancelled: true });
       }
+      return res.status(401).json({ success: false, error: 'NO_SESSION' });
     } catch (err: any) {
       console.warn('[MTProto] cancelPasswordEmail error:', err?.message || err);
+      return res.status(400).json({ success: false, error: err?.message || String(err) });
     }
-    return res.json({ success: true, cancelled: true });
+  });
+
+  // 8.12 Real Profile Settings (getMe / users.getFullUser / account.updateProfile / account.updateUsername / photos.uploadProfilePhoto)
+  app.get('/api/telegram/account/profile', async (req, res) => {
+    const sessionString = (req.query?.sessionString as string) || '';
+    const phone = (req.query?.phone as string) || '';
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      const me: any = await client.getMe();
+      if (!me) {
+        return res.status(401).json({ success: false, error: 'AUTH_KEY_UNREGISTERED' });
+      }
+
+      let userBio = '';
+      try {
+        const fullUser: any = await withTimeout(
+          client.invoke(new Api.users.GetFullUser({ id: new Api.InputUserSelf() })),
+          3000,
+          null
+        );
+        if (fullUser?.fullUser?.about) {
+          userBio = fullUser.fullUser.about;
+        }
+      } catch (_) {}
+
+      let avatarUrl = '';
+      try {
+        const photoBuf: any = await withTimeout(client.downloadProfilePhoto('me', { isBig: false }), 2500, null);
+        if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+          avatarUrl = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
+        }
+      } catch (_) {}
+
+      const firstName = me.firstName || me.first_name || '';
+      const lastName = me.lastName || me.last_name || '';
+      const fullName = [firstName, lastName].filter(Boolean).join(' ') || 'Telegram User';
+
+      const userProfile = {
+        id: String(me.id),
+        name: fullName,
+        firstName,
+        lastName,
+        username: me.username ? (me.username.startsWith('@') ? me.username : `@${me.username}`) : undefined,
+        phone: me.phone ? (me.phone.startsWith('+') ? me.phone : `+${me.phone}`) : phone,
+        avatar: avatarUrl,
+        bio: userBio,
+        isOnline: true,
+        isPremium: Boolean(me.premium),
+        isVerified: Boolean(me.verified),
+      };
+
+      return res.json({
+        success: true,
+        user: userProfile,
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] getProfile error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/telegram/account/update-profile', async (req, res) => {
+    const { firstName, lastName, about, username, photoBase64, sessionString, phone } = req.body;
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      // 1. Update Profile (firstName, lastName, about) via account.updateProfile
+      if (firstName !== undefined || lastName !== undefined || about !== undefined) {
+        await client.invoke(
+          new Api.account.UpdateProfile({
+            firstName: firstName !== undefined ? String(firstName).trim() : undefined,
+            lastName: lastName !== undefined ? String(lastName).trim() : undefined,
+            about: about !== undefined ? String(about).trim() : undefined,
+          })
+        );
+      }
+
+      // 2. Update Username via account.updateUsername
+      if (username !== undefined) {
+        const cleanUsername = String(username).replace(/^@/, '').trim();
+        await client.invoke(
+          new Api.account.UpdateUsername({
+            username: cleanUsername,
+          })
+        );
+      }
+
+      // 3. Upload Profile Photo via photos.uploadProfilePhoto
+      let newAvatarUrl = '';
+      if (photoBase64 && typeof photoBase64 === 'string') {
+        try {
+          const base64Clean = photoBase64.replace(/^data:image\/\w+;base64,/, '');
+          const photoBuffer = Buffer.from(base64Clean, 'base64');
+          const uploadedFile: any = await client.uploadFile({
+            file: new CustomFile('profile_photo.jpg', photoBuffer.length, '', photoBuffer),
+            workers: 1,
+          });
+          if (uploadedFile) {
+            await client.invoke(
+              new Api.photos.UploadProfilePhoto({
+                file: uploadedFile,
+              })
+            );
+            newAvatarUrl = photoBase64;
+          }
+        } catch (photoErr: any) {
+          console.warn('[MTProto] Upload photo error:', photoErr?.message || photoErr);
+        }
+      }
+
+      // 4. Fetch updated me object
+      const me: any = await client.getMe();
+      const updatedFirstName = me.firstName || me.first_name || '';
+      const updatedLastName = me.lastName || me.last_name || '';
+      const updatedFullName = [updatedFirstName, updatedLastName].filter(Boolean).join(' ') || 'Telegram User';
+
+      const updatedUser = {
+        id: String(me.id),
+        name: updatedFullName,
+        firstName: updatedFirstName,
+        lastName: updatedLastName,
+        username: me.username ? (me.username.startsWith('@') ? me.username : `@${me.username}`) : undefined,
+        phone: me.phone ? (me.phone.startsWith('+') ? me.phone : `+${me.phone}`) : phone,
+        avatar: newAvatarUrl || undefined,
+        bio: about !== undefined ? about : undefined,
+        isPremium: Boolean(me.premium),
+        isVerified: Boolean(me.verified),
+      };
+
+      // Real-time broadcast to all connected devices/windows
+      const broadcastPayload = {
+        type: 'settings_updated',
+        subType: 'profile_updated',
+        user: updatedUser,
+        timestamp: Date.now(),
+      };
+      io.emit('settings_updated', broadcastPayload);
+      broadcastTelegramUpdate(broadcastPayload);
+      broadcastTelegramUpdate({
+        type: 'updateUser',
+        data: { user: updatedUser },
+        timestamp: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        user: updatedUser,
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] updateProfile error:', err?.message || err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || String(err),
+        message: err?.message || 'فشل تحديث البيانات الشخصية على خادم تيليجرام',
+      });
+    }
+  });
+
+  // 8.13 Real Privacy Settings (account.getPrivacy / account.setPrivacy RPC)
+  app.get('/api/telegram/account/privacy', async (req, res) => {
+    const sessionString = (req.query?.sessionString as string) || '';
+    const phone = (req.query?.phone as string) || '';
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      const parseRules = (rules: any[]): 'everybody' | 'contacts' | 'nobody' => {
+        if (!rules || !Array.isArray(rules) || rules.length === 0) return 'everybody';
+        for (const r of rules) {
+          const cName = r.className || r._;
+          if (cName === 'PrivacyValueAllowAll' || cName === 'privacyValueAllowAll') return 'everybody';
+          if (cName === 'PrivacyValueAllowContacts' || cName === 'privacyValueAllowContacts') return 'contacts';
+          if (cName === 'PrivacyValueDisallowAll' || cName === 'privacyValueDisallowAll') return 'nobody';
+        }
+        return 'everybody';
+      };
+
+      const keysToFetch: { key: any; target: string }[] = [
+        { key: new Api.InputPrivacyKeyStatusTimestamp(), target: 'lastSeen' },
+        { key: new Api.InputPrivacyKeyPhoneNumber(), target: 'phoneNumber' },
+        { key: new Api.InputPrivacyKeyProfilePhoto(), target: 'profilePhotos' },
+        { key: new Api.InputPrivacyKeyForwards(), target: 'forwards' },
+        { key: new Api.InputPrivacyKeyPhoneCall(), target: 'calls' },
+        { key: new Api.InputPrivacyKeyVoiceMessages(), target: 'voiceMessages' },
+        { key: new Api.InputPrivacyKeyAbout(), target: 'bio' },
+      ];
+
+      const privacySettings: Record<string, 'everybody' | 'contacts' | 'nobody'> = {};
+
+      for (const item of keysToFetch) {
+        try {
+          const resPriv: any = await client.invoke(new Api.account.GetPrivacy({ key: item.key }));
+          privacySettings[item.target] = parseRules(resPriv?.rules || []);
+        } catch (_) {
+          privacySettings[item.target] = 'everybody';
+        }
+      }
+
+      return res.json({
+        success: true,
+        settings: privacySettings,
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] getPrivacy error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/telegram/account/privacy', async (req, res) => {
+    const { target, option, sessionString, phone } = req.body;
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      let inputKey: any = null;
+      switch (target) {
+        case 'last_seen':
+        case 'lastSeen':
+          inputKey = new Api.InputPrivacyKeyStatusTimestamp();
+          break;
+        case 'phone_number':
+        case 'phoneNumber':
+          inputKey = new Api.InputPrivacyKeyPhoneNumber();
+          break;
+        case 'profile_photos':
+        case 'profilePhotos':
+          inputKey = new Api.InputPrivacyKeyProfilePhoto();
+          break;
+        case 'forwards':
+          inputKey = new Api.InputPrivacyKeyForwards();
+          break;
+        case 'calls':
+          inputKey = new Api.InputPrivacyKeyPhoneCall();
+          break;
+        case 'voice_messages':
+        case 'voiceMessages':
+          inputKey = new Api.InputPrivacyKeyVoiceMessages();
+          break;
+        case 'bio':
+          inputKey = new Api.InputPrivacyKeyAbout();
+          break;
+        default:
+          inputKey = new Api.InputPrivacyKeyStatusTimestamp();
+      }
+
+      let inputRules: any[] = [];
+      if (option === 'contacts') {
+        inputRules = [new Api.InputPrivacyValueAllowContacts(), new Api.InputPrivacyValueDisallowAll()];
+      } else if (option === 'nobody') {
+        inputRules = [new Api.InputPrivacyValueDisallowAll()];
+      } else {
+        inputRules = [new Api.InputPrivacyValueAllowAll()];
+      }
+
+      const setRes = await client.invoke(
+        new Api.account.SetPrivacy({
+          key: inputKey,
+          rules: inputRules,
+        })
+      );
+
+      const broadcastPayload = {
+        type: 'settings_updated',
+        subType: 'privacy_updated',
+        target,
+        option,
+        timestamp: Date.now(),
+      };
+      io.emit('settings_updated', broadcastPayload);
+      broadcastTelegramUpdate(broadcastPayload);
+
+      return res.json({
+        success: true,
+        target,
+        option,
+        rules: setRes?.rules || [],
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] setPrivacy error:', err?.message || err);
+      return res.status(400).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  // 8.14 Real Notification Settings (account.getNotifySettings / account.updateNotifySettings RPC)
+  app.get('/api/telegram/account/notify-settings', async (req, res) => {
+    const sessionString = (req.query?.sessionString as string) || '';
+    const phone = (req.query?.phone as string) || '';
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      const usersNotify: any = await client.invoke(
+        new Api.account.GetNotifySettings({ peer: new Api.InputNotifyUsers() })
+      ).catch(() => null);
+
+      const chatsNotify: any = await client.invoke(
+        new Api.account.GetNotifySettings({ peer: new Api.InputNotifyChats() })
+      ).catch(() => null);
+
+      const broadcastsNotify: any = await client.invoke(
+        new Api.account.GetNotifySettings({ peer: new Api.InputNotifyBroadcasts() })
+      ).catch(() => null);
+
+      return res.json({
+        success: true,
+        users: usersNotify,
+        chats: chatsNotify,
+        broadcasts: broadcastsNotify,
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] getNotifySettings error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/telegram/account/notify-settings', async (req, res) => {
+    const { peerType, muteUntil, showPreviews = true, silent = false, sessionString, phone } = req.body;
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION' });
+      }
+
+      let peer: any = new Api.InputNotifyUsers();
+      if (peerType === 'chats') peer = new Api.InputNotifyChats();
+      else if (peerType === 'broadcasts') peer = new Api.InputNotifyBroadcasts();
+
+      await client.invoke(
+        new Api.account.UpdateNotifySettings({
+          peer,
+          settings: new Api.InputPeerNotifySettings({
+            showPreviews: Boolean(showPreviews),
+            silent: Boolean(silent),
+            muteUntil: muteUntil !== undefined ? Number(muteUntil) : 0,
+          }),
+        })
+      );
+
+      const broadcastPayload = {
+        type: 'settings_updated',
+        subType: 'notify_settings_updated',
+        peerType,
+        showPreviews,
+        silent,
+        muteUntil,
+        timestamp: Date.now(),
+      };
+      io.emit('settings_updated', broadcastPayload);
+      broadcastTelegramUpdate(broadcastPayload);
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.warn('[MTProto] updateNotifySettings error:', err?.message || err);
+      return res.status(400).json({ success: false, error: err?.message || String(err) });
+    }
   });
 
   // 9. BotFather Interactive Command Engine
