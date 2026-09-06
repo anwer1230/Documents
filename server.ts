@@ -10,6 +10,7 @@ import { TelegramClient, Api, sessions, password as pwdHelper } from 'telegram';
 import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 import webpush from 'web-push';
+import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
 import { sqliteDatabase } from './server/sqliteService';
 
@@ -611,7 +612,9 @@ async function startServer() {
     if (!raw || typeof raw !== 'string') return '';
     let clean = raw.trim().replace(/[\s\-\(\)]/g, '');
     if (!clean) return '';
-    if (!clean.startsWith('+')) {
+    if (clean.startsWith('00')) {
+      clean = '+' + clean.slice(2);
+    } else if (!clean.startsWith('+')) {
       clean = '+' + clean;
     }
     return clean;
@@ -2290,7 +2293,8 @@ async function startServer() {
   };
 
   // Send Code Handler (auth.sendCode RPC via Official Telegram MTProto Servers)
-  app.post('/api/telegram/auth/send-code', async (req, res) => {
+  // Supports both /api/telegram/auth/send-code and /api/auth/send-code
+  app.post(['/api/telegram/auth/send-code', '/api/auth/send-code'], async (req, res) => {
     cleanExpiredTelegramSessions();
     const { phone, deliveryType = 'app', apiId = TELEGRAM_API_ID, apiHash = TELEGRAM_API_HASH } = req.body;
     const formattedPhone = formatE164Phone(phone);
@@ -2303,10 +2307,30 @@ async function startServer() {
       });
     }
 
+    // Extract country code, calling code, and national number automatically via libphonenumber-js
+    let detectedCountry = '';
+    let countryCallingCode = '';
+    let nationalNumber = '';
+    let internationalFormatted = formattedPhone;
+
+    try {
+      const parsed = parsePhoneNumberFromString(formattedPhone);
+      if (parsed) {
+        detectedCountry = parsed.country || '';
+        countryCallingCode = parsed.countryCallingCode ? `+${parsed.countryCallingCode}` : '';
+        nationalNumber = parsed.nationalNumber || '';
+        internationalFormatted = parsed.formatInternational() || formattedPhone;
+      }
+    } catch (parseErr) {
+      console.warn('[MTProto] Error parsing phone with libphonenumber-js:', parseErr);
+    }
+
     const numericApiId = Number(apiId) || Number(TELEGRAM_API_ID) || 22043994;
     const stringApiHash = String(apiHash || TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801');
 
-    console.log(`[MTProto] Official sendCode requested for: ${formattedPhone}, delivery: ${deliveryType}`);
+    console.log(
+      `[MTProto] Official sendCode requested for: ${formattedPhone} (Country: ${detectedCountry || 'Unknown'}, CallingCode: ${countryCallingCode || 'N/A'}), delivery: ${deliveryType}`
+    );
 
     // Disconnect any prior session for this phone
     if (realTelegramSessions.has(formattedPhone)) {
@@ -2386,6 +2410,10 @@ async function startServer() {
         timeout: timeout,
         expiresInSeconds: 300,
         message: messageDescription,
+        country: detectedCountry,
+        countryCallingCode,
+        nationalNumber,
+        formattedPhone: internationalFormatted,
         mtproto: {
           layer: 184,
           dcId: (client as any)?._currentDc || 4,

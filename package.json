@@ -30,6 +30,7 @@
     "idb": "^8.0.3",
     "idb-keyval": "^6.3.0",
     "input": "^1.0.1",
+    "libphonenumber-js": "^1.13.12",
     "lottie-react": "^3.1.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
