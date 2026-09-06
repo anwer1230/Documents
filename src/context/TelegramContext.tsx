@@ -4752,40 +4752,53 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Smart App Update & Render Deploy Hook state
   const [updateState, setUpdateState] = useState<AppUpdateState>({
     hasUpdate: false,
+    updateCount: 0,
     showUpdateNotification: false,
     isUpdating: false,
   });
 
   const checkForAppUpdates = React.useCallback(async () => {
     try {
-      const res = await fetch('/api/update/status');
+      // Read last known commit from localStorage
+      const lastKnownCommit = typeof window !== 'undefined'
+        ? (localStorage.getItem('last_shown_update_commit') || localStorage.getItem('tg_installed_commit') || '')
+        : '';
+      const url = lastKnownCommit
+        ? `/api/update/status?lastKnownCommit=${encodeURIComponent(lastKnownCommit)}`
+        : '/api/update/status';
+
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        if (data.hasUpdate) {
-          setUpdateState((prev) => ({
-            ...prev,
-            hasUpdate: true,
-            showUpdateNotification: true,
-            commitHash: data.commitHash,
-            fullCommitHash: data.fullCommitHash,
-            commitMessage: data.commitMessage,
-            commitAuthor: data.commitAuthor,
-            commitDate: data.commitDate,
-            currentCommitHash: data.currentCommitHash,
-          }));
-        } else {
-          setUpdateState((prev) => ({
-            ...prev,
-            hasUpdate: false,
-            commitHash: data.commitHash || prev.commitHash,
-            currentCommitHash: data.currentCommitHash || prev.currentCommitHash,
-          }));
-        }
+        const count = typeof data.updateCount === 'number' ? data.updateCount : (data.hasUpdate ? 1 : 0);
+        const latestSha = data.fullCommitHash || data.commitHash || '';
+        const lastShown = typeof window !== 'undefined' ? localStorage.getItem('last_shown_update_commit') : null;
+
+        // STRICT RULES:
+        // 1. Never show if user is not authenticated (login screen)
+        // 2. Only show if updateCount > 0
+        // 3. Do not re-show if commit has not changed and was already shown/dismissed
+        const isSameAsLastShown = Boolean(lastShown && latestSha && lastShown.toLowerCase() === latestSha.toLowerCase());
+        const shouldShow = Boolean(data.hasUpdate && count > 0 && isAuthenticated && !isSameAsLastShown);
+
+        setUpdateState((prev) => ({
+          ...prev,
+          hasUpdate: Boolean(data.hasUpdate && count > 0),
+          updateCount: count,
+          showUpdateNotification: shouldShow,
+          commitHash: data.commitHash,
+          fullCommitHash: data.fullCommitHash,
+          commitMessage: data.commitMessage,
+          commitAuthor: data.commitAuthor,
+          commitDate: data.commitDate,
+          currentCommitHash: data.currentCommitHash,
+          commits: data.commits || [],
+        }));
       }
     } catch (err) {
       console.warn('[TelegramContext] Failed to check for updates:', err);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   const triggerAppUpdate = React.useCallback(async (): Promise<boolean> => {
     setUpdateState((prev) => ({ ...prev, isUpdating: true, error: undefined }));
@@ -4796,7 +4809,20 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       const data = await res.json();
       if (data.success) {
-        setUpdateState((prev) => ({ ...prev, isUpdating: false }));
+        // Record latest commit in localStorage to prevent notification from reappearing
+        const latestSha = updateState.fullCommitHash || updateState.commitHash || data.latestCommit || '';
+        if (latestSha && typeof window !== 'undefined') {
+          localStorage.setItem('last_shown_update_commit', latestSha);
+          localStorage.setItem('tg_installed_commit', latestSha);
+        }
+
+        setUpdateState((prev) => ({
+          ...prev,
+          isUpdating: false,
+          hasUpdate: false,
+          updateCount: 0,
+          showUpdateNotification: false,
+        }));
         return true;
       } else {
         setUpdateState((prev) => ({
@@ -4814,20 +4840,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }));
       return false;
     }
-  }, []);
+  }, [updateState.fullCommitHash, updateState.commitHash]);
 
   const dismissUpdateNotification = React.useCallback(() => {
+    const latestSha = updateState.fullCommitHash || updateState.commitHash || '';
+    if (latestSha && typeof window !== 'undefined') {
+      localStorage.setItem('last_shown_update_commit', latestSha);
+    }
     setUpdateState((prev) => ({ ...prev, showUpdateNotification: false }));
-  }, []);
+  }, [updateState.fullCommitHash, updateState.commitHash]);
 
-  // Check for updates on startup and periodically every 5 minutes
+  // Check for updates on startup, upon authentication, and periodically every 5 minutes
   useEffect(() => {
-    checkForAppUpdates();
-    const updateInterval = setInterval(() => {
+    if (isAuthenticated) {
       checkForAppUpdates();
+    }
+    const updateInterval = setInterval(() => {
+      if (isAuthenticated) {
+        checkForAppUpdates();
+      }
     }, 5 * 60 * 1000);
     return () => clearInterval(updateInterval);
-  }, [checkForAppUpdates]);
+  }, [checkForAppUpdates, isAuthenticated]);
 
   return (
     <TelegramContext.Provider

@@ -516,6 +516,12 @@ async function startServer() {
 
   // In-memory cache for GitHub commits check to prevent hitting rate limits
   let lastGitHubCheckTimestamp = 0;
+  let cachedGitHubCommits: Array<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+  }> = [];
   let cachedLatestGitHubCommit: {
     sha: string;
     message: string;
@@ -525,64 +531,118 @@ async function startServer() {
 
   /**
    * GET /api/update/status
-   * Checks GitHub API for latest commit on 'main' branch and compares with current server state.
-   * Returns: { hasUpdate: boolean, commitHash: string, commitMessage?: string }
+   * Checks GitHub API for latest commits on 'main' branch and aggregates all pending commits into ONE single notification.
+   * STRICT RULES:
+   * 1. FORBIDDEN to emit separate notifications per commit.
+   * 2. Reads client last known commit (query parameter or local repo HEAD).
+   * 3. Calculates total available updateCount.
+   * 4. Returns: { hasUpdate: boolean, updateCount: number, commitHash: string, fullCommitHash: string, commitMessage: string, commits: [...] }
    */
   app.get('/api/update/status', async (req, res) => {
     try {
       const now = Date.now();
-      // Cache GitHub response for 60 seconds to avoid exceeding rate limits (60 req/hr)
-      if (!cachedLatestGitHubCommit || now - lastGitHubCheckTimestamp > 60000) {
-        const ghResponse = await fetch(
-          'https://api.github.com/repos/anwer1230/Documents/commits/main',
-          {
-            headers: {
-              'User-Agent': 'Salam-Telegram-Web/1.0',
-              'Accept': 'application/vnd.github.v3+json',
-            },
-          }
-        );
+      const clientKnownCommit = ((req.query.lastKnownCommit as string) || (req.query.currentCommit as string) || '').trim();
 
-        if (ghResponse.ok) {
-          const ghData = (await ghResponse.json()) as any;
-          cachedLatestGitHubCommit = {
-            sha: ghData.sha || '',
-            message: (ghData.commit?.message || '').split('\n')[0],
-            author: ghData.commit?.author?.name || ghData.author?.login || '',
-            date: ghData.commit?.author?.date || '',
-          };
-          lastGitHubCheckTimestamp = now;
+      // Cache GitHub response for 45 seconds to avoid exceeding rate limits (60 req/hr unauthenticated)
+      if (cachedGitHubCommits.length === 0 || now - lastGitHubCheckTimestamp > 45000) {
+        try {
+          const ghResponse = await fetch(
+            'https://api.github.com/repos/anwer1230/Documents/commits?sha=main&per_page=30',
+            {
+              headers: {
+                'User-Agent': 'Salam-Telegram-Web/1.0',
+                'Accept': 'application/vnd.github.v3+json',
+              },
+            }
+          );
 
-          // If server was started in an environment without git / env var, initialize with first fetched commit
-          if (!serverCurrentCommit && cachedLatestGitHubCommit.sha) {
-            serverCurrentCommit = cachedLatestGitHubCommit.sha;
+          if (ghResponse.ok) {
+            const rawCommits = (await ghResponse.json()) as any[];
+            if (Array.isArray(rawCommits) && rawCommits.length > 0) {
+              cachedGitHubCommits = rawCommits.map((item: any) => ({
+                sha: item.sha || '',
+                message: (item.commit?.message || '').split('\n')[0],
+                author: item.commit?.author?.name || item.author?.login || 'Developer',
+                date: item.commit?.author?.date || '',
+              }));
+
+              cachedLatestGitHubCommit = cachedGitHubCommits[0] || null;
+              lastGitHubCheckTimestamp = now;
+
+              // If server startup had no commit, initialize with current HEAD
+              if (!serverCurrentCommit && cachedLatestGitHubCommit?.sha) {
+                serverCurrentCommit = cachedLatestGitHubCommit.sha;
+              }
+            }
+          } else {
+            console.warn('[Update Status] GitHub API status:', ghResponse.status);
           }
-        } else if (!cachedLatestGitHubCommit) {
-          console.warn('[Update Status] GitHub API responded with status:', ghResponse.status);
+        } catch (fetchErr: any) {
+          console.warn('[Update Status] Failed to fetch commits from GitHub:', fetchErr?.message);
         }
       }
 
-      const latestSha = cachedLatestGitHubCommit?.sha || '';
-      // Has update if server commit is known and differs from latest GitHub main commit
-      const hasUpdate = Boolean(
-        serverCurrentCommit &&
-        latestSha &&
-        serverCurrentCommit.toLowerCase() !== latestSha.toLowerCase()
-      );
+      const latestCommit = cachedLatestGitHubCommit || (cachedGitHubCommits[0] || null);
+      const latestSha = latestCommit?.sha || '';
+
+      // Determine baseline commit to compare against
+      const baseCommit = clientKnownCommit || serverCurrentCommit || '';
+
+      let updateCount = 0;
+      let pendingCommits: typeof cachedGitHubCommits = [];
+
+      if (latestSha && cachedGitHubCommits.length > 0) {
+        if (!baseCommit) {
+          // No base known yet (first run)
+          updateCount = 0;
+        } else {
+          // Look for baseCommit in the fetched commits list
+          const foundIndex = cachedGitHubCommits.findIndex((c) =>
+            c.sha.toLowerCase() === baseCommit.toLowerCase() ||
+            c.sha.toLowerCase().startsWith(baseCommit.toLowerCase()) ||
+            baseCommit.toLowerCase().startsWith(c.sha.toLowerCase())
+          );
+
+          if (foundIndex > 0) {
+            // Found baseCommit down the list -> foundIndex newer commits are pending
+            updateCount = foundIndex;
+            pendingCommits = cachedGitHubCommits.slice(0, foundIndex);
+          } else if (foundIndex === 0) {
+            // Already on the latest commit
+            updateCount = 0;
+          } else {
+            // baseCommit not in recent 30 commits: if it differs from latest, there's at least 1+ updates
+            const isDifferent =
+              !latestSha.toLowerCase().startsWith(baseCommit.toLowerCase()) &&
+              !baseCommit.toLowerCase().startsWith(latestSha.toLowerCase());
+            if (isDifferent) {
+              updateCount = Math.min(cachedGitHubCommits.length, 10);
+              pendingCommits = cachedGitHubCommits.slice(0, updateCount);
+            } else {
+              updateCount = 0;
+            }
+          }
+        }
+      }
+
+      const hasUpdate = updateCount > 0;
 
       return res.json({
         hasUpdate,
-        commitHash: latestSha ? latestSha.substring(0, 7) : (serverCurrentCommit ? serverCurrentCommit.substring(0, 7) : ''),
-        fullCommitHash: latestSha || serverCurrentCommit,
-        commitMessage: cachedLatestGitHubCommit?.message || '',
-        commitAuthor: cachedLatestGitHubCommit?.author || '',
-        commitDate: cachedLatestGitHubCommit?.date || '',
-        currentCommitHash: serverCurrentCommit ? serverCurrentCommit.substring(0, 7) : '',
+        updateCount,
+        commitHash: latestSha ? latestSha.substring(0, 7) : '',
+        fullCommitHash: latestSha,
+        commitMessage: latestCommit?.message || '',
+        commitAuthor: latestCommit?.author || '',
+        commitDate: latestCommit?.date || '',
+        currentCommitHash: baseCommit ? baseCommit.substring(0, 7) : '',
+        commits: pendingCommits,
       });
     } catch (err: any) {
       console.warn('[Update Status] Error querying GitHub commits:', err?.message);
       return res.status(500).json({
         hasUpdate: false,
+        updateCount: 0,
         error: 'Failed to query update status',
       });
     }
@@ -622,10 +682,16 @@ async function startServer() {
         throw new Error(`Render hook returned HTTP ${hookResponse.status}`);
       }
 
+      // If GitHub latest commit is known, advance server commit state
+      if (cachedLatestGitHubCommit?.sha) {
+        serverCurrentCommit = cachedLatestGitHubCommit.sha;
+      }
+
       // Return clean success response without exposing any URL or credentials
       return res.json({
         success: true,
         message: 'Deployment triggered successfully on Render',
+        latestCommit: cachedLatestGitHubCommit?.sha || serverCurrentCommit,
       });
     } catch (err: any) {
       console.error('[Update Trigger] Failed to trigger deploy hook:', err?.message);

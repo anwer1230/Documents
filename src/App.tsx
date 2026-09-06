@@ -125,7 +125,6 @@ const TelegramAppContent: React.FC = () => {
   if (!isAuthenticated) {
     return (
       <div id="tg-auth-wrapper" className="w-screen h-screen min-h-screen bg-[#0e1621] text-white overflow-hidden relative select-none flex flex-col">
-        <UpdateNotification />
         {isOffline && (
           <div
             id="tg-offline-top-strip-auth"

@@ -859,6 +859,7 @@ export interface PlusConfig {
 // ==========================================
 export interface AppUpdateState {
   hasUpdate: boolean;
+  updateCount: number;
   showUpdateNotification: boolean;
   isUpdating: boolean;
   commitHash?: string;
@@ -867,5 +868,11 @@ export interface AppUpdateState {
   commitAuthor?: string;
   commitDate?: string;
   currentCommitHash?: string;
+  commits?: Array<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+  }>;
   error?: string;
 }
