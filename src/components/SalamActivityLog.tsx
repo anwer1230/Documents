@@ -24,6 +24,7 @@ import {
 import { NotificationCenter } from '../core/NotificationCenter';
 import { SalamActivityItem, SalamActivityStatus } from '../types';
 import { useTelegram } from '../context/TelegramContext';
+import { SalamActivityChart } from './SalamActivityChart';
 
 interface SalamActivityLogProps {
   isOpen?: boolean;
@@ -566,6 +567,9 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Daily User Activity Interactive Recharts Chart */}
+      <SalamActivityChart activities={activities} />
 
       {/* Action Bar: Search, Filters, Live Simulation & Clear */}
       <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between pb-3 border-b border-white/[0.06] shrink-0">

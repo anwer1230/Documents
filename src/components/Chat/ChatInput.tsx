@@ -215,6 +215,29 @@ export const ChatInput: React.FC = () => {
     }
   };
 
+  // Listen to Web Speech API dictation insertion
+  useEffect(() => {
+    const handleDictationInsert = (e: any) => {
+      const speechText = e.detail;
+      if (speechText) {
+        setText((prev) => {
+          const updated = prev && prev.trim() ? `${prev.trim()} ${speechText}` : speechText;
+          if (activeChatId) {
+            draftSyncService.saveDraft(activeChatId, updated);
+            setChatDraft(activeChatId, updated);
+          }
+          return updated;
+        });
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 80);
+      }
+    };
+
+    window.addEventListener('tg_dictation_insert', handleDictationInsert);
+    return () => window.removeEventListener('tg_dictation_insert', handleDictationInsert);
+  }, [activeChatId, setChatDraft]);
+
   const handleBlur = () => {
     if (activeChatId && !editingMessage) {
       const cursorPos = textareaRef.current ? textareaRef.current.selectionStart : undefined;
@@ -1042,18 +1065,28 @@ export const ChatInput: React.FC = () => {
               <Send className="w-5 h-5 ml-0.5 rtl:ml-0 rtl:mr-0.5" />
             </button>
           ) : (
-            <button
-              onClick={() => startRecording()}
-              onTouchStart={(e) => startRecording(e)}
-              onTouchMove={handleMicTouchMove}
-              onTouchEnd={handleMicTouchEnd}
-              onMouseDown={(e) => startRecording(e)}
-              onMouseUp={handleMicTouchEnd}
-              className="p-2.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-sky-400 active:scale-110 active:text-[#2481cc] transition-all shrink-0 select-none"
-              title={isArabic ? 'تسجيل رسالة صوتية (اضغط أو اسحب)' : 'Record voice note'}
-            >
-              <Mic className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('tg_toggle_dictation'))}
+                className="p-2.5 rounded-full hover:bg-cyan-500/15 text-cyan-400/80 hover:text-cyan-300 active:scale-110 transition-all shrink-0 select-none"
+                title={isArabic ? 'إملاء الرسائل صوتياً بدلاً من الكتابة (Web Speech API)' : 'Voice dictation (Speech to text)'}
+              >
+                <Sparkles className="w-5 h-5 text-cyan-400" />
+              </button>
+              <button
+                onClick={() => startRecording()}
+                onTouchStart={(e) => startRecording(e)}
+                onTouchMove={handleMicTouchMove}
+                onTouchEnd={handleMicTouchEnd}
+                onMouseDown={(e) => startRecording(e)}
+                onMouseUp={handleMicTouchEnd}
+                className="p-2.5 rounded-full hover:bg-white/10 text-gray-400 hover:text-sky-400 active:scale-110 active:text-[#2481cc] transition-all shrink-0 select-none"
+                title={isArabic ? 'تسجيل رسالة صوتية (اضغط أو اسحب)' : 'Record voice note'}
+              >
+                <Mic className="w-5 h-5" />
+              </button>
+            </div>
           )}
         </div>
       )}
