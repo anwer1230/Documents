@@ -486,6 +486,149 @@ async function startServer() {
     });
   });
 
+
+
+  // ==========================================
+  // SMART IN-APP UPDATE & RENDER DEPLOY HOOK
+  // ==========================================
+
+  // Determine current server commit hash (set by Render RENDER_GIT_COMMIT or local git HEAD)
+  let serverCurrentCommit: string = process.env.RENDER_GIT_COMMIT || '';
+  if (!serverCurrentCommit) {
+    try {
+      const { execSync } = require('child_process');
+      serverCurrentCommit = execSync('git rev-parse HEAD', {
+        encoding: 'utf8',
+        timeout: 2000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+    } catch {
+      serverCurrentCommit = '';
+    }
+  }
+
+  // In-memory cache for GitHub commits check to prevent hitting rate limits
+  let lastGitHubCheckTimestamp = 0;
+  let cachedLatestGitHubCommit: {
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+  } | null = null;
+
+  /**
+   * GET /api/update/status
+   * Checks GitHub API for latest commit on 'main' branch and compares with current server state.
+   * Returns: { hasUpdate: boolean, commitHash: string, commitMessage?: string }
+   */
+  app.get('/api/update/status', async (req, res) => {
+    try {
+      const now = Date.now();
+      // Cache GitHub response for 60 seconds to avoid exceeding rate limits (60 req/hr)
+      if (!cachedLatestGitHubCommit || now - lastGitHubCheckTimestamp > 60000) {
+        const ghResponse = await fetch(
+          'https://api.github.com/repos/anwer1230/Documents/commits/main',
+          {
+            headers: {
+              'User-Agent': 'Salam-Telegram-Web/1.0',
+              'Accept': 'application/vnd.github.v3+json',
+            },
+          }
+        );
+
+        if (ghResponse.ok) {
+          const ghData = (await ghResponse.json()) as any;
+          cachedLatestGitHubCommit = {
+            sha: ghData.sha || '',
+            message: (ghData.commit?.message || '').split('\n')[0],
+            author: ghData.commit?.author?.name || ghData.author?.login || '',
+            date: ghData.commit?.author?.date || '',
+          };
+          lastGitHubCheckTimestamp = now;
+
+          // If server was started in an environment without git / env var, initialize with first fetched commit
+          if (!serverCurrentCommit && cachedLatestGitHubCommit.sha) {
+            serverCurrentCommit = cachedLatestGitHubCommit.sha;
+          }
+        } else if (!cachedLatestGitHubCommit) {
+          console.warn('[Update Status] GitHub API responded with status:', ghResponse.status);
+        }
+      }
+
+      const latestSha = cachedLatestGitHubCommit?.sha || '';
+      // Has update if server commit is known and differs from latest GitHub main commit
+      const hasUpdate = Boolean(
+        serverCurrentCommit &&
+        latestSha &&
+        serverCurrentCommit.toLowerCase() !== latestSha.toLowerCase()
+      );
+
+      return res.json({
+        hasUpdate,
+        commitHash: latestSha ? latestSha.substring(0, 7) : (serverCurrentCommit ? serverCurrentCommit.substring(0, 7) : ''),
+        fullCommitHash: latestSha || serverCurrentCommit,
+        commitMessage: cachedLatestGitHubCommit?.message || '',
+        commitAuthor: cachedLatestGitHubCommit?.author || '',
+        commitDate: cachedLatestGitHubCommit?.date || '',
+        currentCommitHash: serverCurrentCommit ? serverCurrentCommit.substring(0, 7) : '',
+      });
+    } catch (err: any) {
+      console.warn('[Update Status] Error querying GitHub commits:', err?.message);
+      return res.status(500).json({
+        hasUpdate: false,
+        error: 'Failed to query update status',
+      });
+    }
+  });
+
+  /**
+   * POST /api/update/trigger
+   * Triggers Render Deploy Hook using process.env.RENDER_DEPLOY_HOOK_URL.
+   * STRICT SECURITY: RENDER_DEPLOY_HOOK_URL is NEVER returned in response or exposed to client.
+   */
+  app.post('/api/update/trigger', async (req, res) => {
+    // Read strictly from server environment variables
+    const deployHookUrl = process.env.RENDER_DEPLOY_HOOK_URL;
+
+    if (!deployHookUrl) {
+      console.warn('[Update Trigger] Request received but RENDER_DEPLOY_HOOK_URL is not set in environment.');
+      return res.status(500).json({
+        success: false,
+        error: 'Render Deploy Hook is not configured on the server (missing RENDER_DEPLOY_HOOK_URL)',
+      });
+    }
+
+    try {
+      // Send POST request to Render Deploy Hook
+      const hookResponse = await fetch(deployHookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          triggeredBy: 'in-app-smart-updater',
+          timestamp: new Date().toISOString(),
+        }),
+      });
+
+      if (!hookResponse.ok) {
+        throw new Error(`Render hook returned HTTP ${hookResponse.status}`);
+      }
+
+      // Return clean success response without exposing any URL or credentials
+      return res.json({
+        success: true,
+        message: 'Deployment triggered successfully on Render',
+      });
+    } catch (err: any) {
+      console.error('[Update Trigger] Failed to trigger deploy hook:', err?.message);
+      return res.status(502).json({
+        success: false,
+        error: 'Failed to contact Render Deploy Hook',
+      });
+    }
+  });
+
   // ==========================================
   // TELEGRAM BACKEND API & MTPROTO ENDPOINTS
   // ==========================================

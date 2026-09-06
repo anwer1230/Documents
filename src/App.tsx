@@ -45,6 +45,7 @@ import { ToastContainer } from './components/Interactions/ToastContainer';
 import { InAppNotificationBanner } from './components/Notifications/InAppNotificationBanner';
 import { AndroidNotificationShade } from './components/Notifications/AndroidNotificationShade';
 import { InstallAppBanner } from './components/Notifications/InstallAppBanner';
+import { UpdateNotification } from './components/Notifications/UpdateNotification';
 import { TelegramAuthScreen } from './components/Auth/TelegramAuthScreen';
 import { useMobileNavigation } from './hooks/useMobileNavigation';
 import { AppUpdateAlertDialog } from './components/Modals/AppUpdateAlertDialog';
@@ -124,6 +125,7 @@ const TelegramAppContent: React.FC = () => {
   if (!isAuthenticated) {
     return (
       <div id="tg-auth-wrapper" className="w-screen h-screen min-h-screen bg-[#0e1621] text-white overflow-hidden relative select-none flex flex-col">
+        <UpdateNotification />
         {isOffline && (
           <div
             id="tg-offline-top-strip-auth"
@@ -159,6 +161,9 @@ const TelegramAppContent: React.FC = () => {
         backgroundColor: 'var(--tg-theme-bg)',
       }}
     >
+      {/* Smart In-App Update Notification */}
+      <UpdateNotification />
+
       {/* Telegram Official Offline Top Strip (Non-intrusive, keeps rest of app fully live & readable) */}
       {isOffline && (
         <div

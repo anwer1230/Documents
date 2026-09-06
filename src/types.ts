@@ -852,3 +852,20 @@ export interface PlusConfig {
 }
 
 
+
+
+// ==========================================
+// APP UPDATE & DEPLOYMENT STATE
+// ==========================================
+export interface AppUpdateState {
+  hasUpdate: boolean;
+  showUpdateNotification: boolean;
+  isUpdating: boolean;
+  commitHash?: string;
+  fullCommitHash?: string;
+  commitMessage?: string;
+  commitAuthor?: string;
+  commitDate?: string;
+  currentCommitHash?: string;
+  error?: string;
+}

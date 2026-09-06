@@ -21,6 +21,7 @@ import {
   FcmDiagnosticInfo,
   FcmPushPacket,
   MonitorAlert,
+  AppUpdateState,
 } from '../types';
 import {
   CURRENT_USER,
@@ -291,6 +292,11 @@ interface TelegramContextType {
   setNetworkStatus: (status: 'online' | 'offline' | 'reconnecting' | 'updating') => void;
 
   // Local IndexedDB Message Cache
+  // Smart App Update & Render Deploy Hook
+  updateState: AppUpdateState;
+  checkForAppUpdates: () => Promise<void>;
+  triggerAppUpdate: () => Promise<boolean>;
+  dismissUpdateNotification: () => void;
   messageCache: typeof messageCache;
 }
 
@@ -4728,6 +4734,86 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
+  // Smart App Update & Render Deploy Hook state
+  const [updateState, setUpdateState] = useState<AppUpdateState>({
+    hasUpdate: false,
+    showUpdateNotification: false,
+    isUpdating: false,
+  });
+
+  const checkForAppUpdates = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/update/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.hasUpdate) {
+          setUpdateState((prev) => ({
+            ...prev,
+            hasUpdate: true,
+            showUpdateNotification: true,
+            commitHash: data.commitHash,
+            fullCommitHash: data.fullCommitHash,
+            commitMessage: data.commitMessage,
+            commitAuthor: data.commitAuthor,
+            commitDate: data.commitDate,
+            currentCommitHash: data.currentCommitHash,
+          }));
+        } else {
+          setUpdateState((prev) => ({
+            ...prev,
+            hasUpdate: false,
+            commitHash: data.commitHash || prev.commitHash,
+            currentCommitHash: data.currentCommitHash || prev.currentCommitHash,
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn('[TelegramContext] Failed to check for updates:', err);
+    }
+  }, []);
+
+  const triggerAppUpdate = React.useCallback(async (): Promise<boolean> => {
+    setUpdateState((prev) => ({ ...prev, isUpdating: true, error: undefined }));
+    try {
+      const res = await fetch('/api/update/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setUpdateState((prev) => ({ ...prev, isUpdating: false }));
+        return true;
+      } else {
+        setUpdateState((prev) => ({
+          ...prev,
+          isUpdating: false,
+          error: data.error || 'Failed to trigger deploy hook',
+        }));
+        return false;
+      }
+    } catch (err: any) {
+      setUpdateState((prev) => ({
+        ...prev,
+        isUpdating: false,
+        error: err?.message || 'Network error',
+      }));
+      return false;
+    }
+  }, []);
+
+  const dismissUpdateNotification = React.useCallback(() => {
+    setUpdateState((prev) => ({ ...prev, showUpdateNotification: false }));
+  }, []);
+
+  // Check for updates on startup and periodically every 5 minutes
+  useEffect(() => {
+    checkForAppUpdates();
+    const updateInterval = setInterval(() => {
+      checkForAppUpdates();
+    }, 5 * 60 * 1000);
+    return () => clearInterval(updateInterval);
+  }, [checkForAppUpdates]);
+
   return (
     <TelegramContext.Provider
       value={{
@@ -4856,6 +4942,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         networkStatus,
         setNetworkStatus,
         messageCache,
+        updateState,
+        checkForAppUpdates,
+        triggerAppUpdate,
+        dismissUpdateNotification,
       }}
     >
       {children}
