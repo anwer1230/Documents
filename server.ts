@@ -1607,12 +1607,15 @@ async function startServer() {
                 }
               }
 
-              // 3. Normalize text and check for compound sentences/phrases
+              // 3. Normalize text and check for compound sentences/phrases using persisted keywords from SQLite
               const rawMsgText = textSnippet.trim();
               const normalizedMsgText = normalizeArabicText(rawMsgText);
 
+              const savedKeywords = sqliteDatabase.getMonitorKeywords();
+              const activeKeywords = savedKeywords.length > 0 ? savedKeywords : MONITOR_KEYWORDS;
+
               let matchedKeyword: string | null = null;
-              for (const kw of MONITOR_KEYWORDS) {
+              for (const kw of activeKeywords) {
                 const trimmedKw = kw.trim();
                 if (!trimmedKw) continue;
                 const normalizedKw = normalizeArabicText(trimmedKw);
@@ -6512,6 +6515,215 @@ Please provide the concise summary.`;
     res.json({ success: true, message: 'تم مسح سجل نشاط السلام بنجاح' });
   });
 
+  // =========================================================================
+  // REAL SERVER-SIDE SCHEDULED SENDER FOR /api/send_now
+  // =========================================================================
+  let sendNowScheduledTimer: NodeJS.Timeout | null = null;
+  let sendNowScheduledTimeout: NodeJS.Timeout | null = null;
+  let sendNowScheduledState = {
+    active: false,
+    message: '',
+    groupsCount: 0,
+    schedule_time: '',
+    interval_minutes: 0,
+    nextRunTime: 0,
+    lastRunTime: 0,
+    roundsExecuted: 0,
+  };
+
+  async function executeSendNowTransmission(params: {
+    client: any;
+    targetEntities: any[];
+    resolvedLabels: string[];
+    message: string;
+    images: any[];
+    smart_wait_seconds: number;
+    smart_required_messages: number;
+  }): Promise<{
+    sentResults: Array<{ target: string; messageId: number; success: boolean; isProtected?: boolean; salamMode?: boolean }>;
+    failedResults: Array<{ target: string; error: string }>;
+  }> {
+    const { client, targetEntities, resolvedLabels, message, images, smart_wait_seconds, smart_required_messages } = params;
+    const sentResults: Array<{ target: string; messageId: number; success: boolean; isProtected?: boolean; salamMode?: boolean }> = [];
+    const failedResults: Array<{ target: string; error: string }> = [];
+
+    for (let i = 0; i < targetEntities.length; i++) {
+      const entity = targetEntities[i];
+      const label = resolvedLabels[i] || `entity_${i}`;
+      try {
+        const isProtected = await isGroupProtected(client, entity);
+        console.log(`[SendNow] Target "${label}" protection status: ${isProtected ? 'PROTECTED (محمية ببوتات حماية)' : 'UNPROTECTED (غير محمية)'}`);
+
+        if (!isProtected) {
+          const sent: any = await client.sendMessage(entity, {
+            message: message,
+            parseMode: 'md',
+          });
+          sentResults.push({
+            target: label,
+            messageId: sent?.id || 0,
+            success: true,
+            isProtected: false,
+            salamMode: false,
+          });
+          console.log(`[SendNow] Direct send to unprotected group ${label} (ID: ${sent?.id})`);
+        } else {
+          console.log(`[SendNow] [SalamMode] 1. Group ${label} is protected. Sending greeting "السلام عليكم"...`);
+          const greetingMsg: any = await client.sendMessage(entity, {
+            message: 'السلام عليكم',
+          });
+
+          recordSalamActivity({
+            chatId: label,
+            chatTitle: label,
+            greetingMsgId: greetingMsg.id,
+            status: 'greeting_sent',
+            statusLabel: 'تم إرسال السلام كتمويه أولي 🚀',
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: message,
+            details: `تم إرسال 'السلام عليكم' بنجاح (معرف: ${greetingMsg.id}) وبدء مهلة الانتظار الذكية`,
+          });
+
+          const liveIncomingMsgs: any[] = [];
+          const waitStartTime = Date.now();
+          recordSalamActivity({
+            chatId: label,
+            chatTitle: label,
+            greetingMsgId: greetingMsg.id,
+            status: 'waiting_interaction',
+            statusLabel: `في انتظار تفاعل الأعضاء (${smart_wait_seconds} ثانية)`,
+            interactionCount: 0,
+            requiredInteractions: smart_required_messages,
+            remainingSeconds: smart_wait_seconds,
+            totalWaitSeconds: smart_wait_seconds,
+            originalText: message,
+            details: `جاري رصد الرسائل الواردة من الأعضاء لحساب معدل النشاط المطلوب (${smart_required_messages}+)`,
+          });
+
+          const liveMsgHandler = (event: any) => {
+            try {
+              const incoming = event?.message;
+              if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
+                liveIncomingMsgs.push(incoming);
+                console.log(`[SendNow] [SalamMode] ⚡ Live event detected in ${label}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
+                const elapsed = Math.floor((Date.now() - waitStartTime) / 1000);
+                recordSalamActivity({
+                  chatId: label,
+                  chatTitle: label,
+                  greetingMsgId: greetingMsg.id,
+                  status: 'interaction_detected',
+                  statusLabel: `تفاعل وارد (${liveIncomingMsgs.length}/${smart_required_messages})`,
+                  interactionCount: liveIncomingMsgs.length,
+                  requiredInteractions: smart_required_messages,
+                  remainingSeconds: Math.max(0, smart_wait_seconds - elapsed),
+                  totalWaitSeconds: smart_wait_seconds,
+                  lastMessageSnippet: incoming.message ? String(incoming.message).slice(0, 70) : undefined,
+                  lastMessageSender: incoming.senderId ? String(incoming.senderId) : undefined,
+                  originalText: message,
+                  details: `وردت رسالة جديدة من عضو: "${(incoming.message || '').slice(0, 40)}"`,
+                });
+              }
+            } catch {}
+          };
+          try {
+            client.addEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
+          } catch {}
+
+          console.log(`[SendNow] [SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${label}...`);
+          await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
+
+          try {
+            client.removeEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
+          } catch {}
+
+          let interactionPassed = false;
+          let totalCount = liveIncomingMsgs.length;
+          try {
+            const recentMsgs: any = await client.getMessages(entity, {
+              limit: 20,
+              minId: greetingMsg.id,
+            });
+            const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
+            totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
+            console.log(`[SendNow] [SalamMode] 3. Monitored ${totalCount} new messages in ${label} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
+            if (totalCount >= smart_required_messages) {
+              interactionPassed = true;
+            }
+          } catch (chkErr: any) {
+            console.warn(`[SendNow] [SalamMode] Error checking messages in ${label}:`, chkErr?.message || chkErr);
+            if (liveIncomingMsgs.length >= smart_required_messages) {
+              interactionPassed = true;
+            } else {
+              interactionPassed = false;
+            }
+          }
+
+          if (interactionPassed) {
+            console.log(`[SendNow] [SalamMode] 4. Interaction passed (${smart_required_messages}+ msgs). Editing greeting to original message in ${label}...`);
+            await client.editMessage(entity, {
+              message: greetingMsg.id,
+              text: message,
+              parseMode: 'md',
+            });
+            recordSalamActivity({
+              chatId: label,
+              chatTitle: label,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_edited',
+              statusLabel: 'تم تعديل رسالة السلام إلى الرسالة الأصلية ✍️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: message,
+              decision: 'edit',
+              details: `المجموعة نشطة (${totalCount} تفاعلات >= ${smart_required_messages}). تم استبدال السلام بالمنشور الفعلي بنجاح.`,
+            });
+            sentResults.push({
+              target: label,
+              messageId: greetingMsg.id || 0,
+              success: true,
+              isProtected: true,
+              salamMode: true,
+            });
+          } else {
+            console.log(`[SendNow] [SalamMode] 5. Low interaction (<${smart_required_messages}). Deleting greeting message from ${label}...`);
+            await client.deleteMessages(entity, [greetingMsg.id], { revoke: true }).catch(() => {});
+            recordSalamActivity({
+              chatId: label,
+              chatTitle: label,
+              greetingMsgId: greetingMsg.id,
+              status: 'message_deleted',
+              statusLabel: 'تم حذف رسالة السلام لعدم وجود تفاعل كافٍ 🗑️',
+              interactionCount: totalCount,
+              requiredInteractions: smart_required_messages,
+              remainingSeconds: 0,
+              totalWaitSeconds: smart_wait_seconds,
+              originalText: message,
+              decision: 'delete',
+              details: `المجموعة صامتة أو خاملة (${totalCount}/${smart_required_messages} تفاعلات). تم حذف رسالة السلام لمنع كشف البوت وتأمين الحساب.`,
+            });
+            failedResults.push({
+              target: label,
+              error: `سحبت رسالة التمويه الذكية لعدم وجود تفاعل كافٍ من الأعضاء (${smart_required_messages} رسائل جديدة مطلوبة خلال ${smart_wait_seconds}ث)`,
+            });
+          }
+        }
+      } catch (sendErr: any) {
+        const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
+        console.warn(`[SendNow] Failed transmitting to ${label}:`, errMsg);
+        failedResults.push({
+          target: label,
+          error: errMsg,
+        });
+      }
+    }
+    return { sentResults, failedResults };
+  }
+
   app.post('/api/send_now', async (req, res) => {
     const data = req.body || {};
     const message = (data.message || '').trim();
@@ -6602,214 +6814,115 @@ Please provide the concise summary.`;
       });
     }
 
+    const smart_wait_seconds = Number(data.interval_seconds || data.smart_wait_seconds) || 30;
+    const smart_required_messages = Number(data.smart_required_messages) || 3;
+
+    // Real Scheduling Fix: If dispatch_type === 'scheduled', start real server timer!
     if (dispatch_type === 'scheduled') {
-      const timeLabel = schedule_time ? `في ${schedule_time}` : 'في الموعد المحدد';
-      const repeatLabel = interval_minutes > 0 ? ` (ويتكرر كل ${interval_minutes} دقيقة)` : '';
+      if (sendNowScheduledTimer) {
+        clearInterval(sendNowScheduledTimer);
+        sendNowScheduledTimer = null;
+      }
+      if (sendNowScheduledTimeout) {
+        clearTimeout(sendNowScheduledTimeout);
+        sendNowScheduledTimeout = null;
+      }
+
+      const parsedTargetTime = schedule_time ? new Date(schedule_time).getTime() : 0;
+      const initialDelayMs = (!isNaN(parsedTargetTime) && parsedTargetTime > Date.now())
+        ? (parsedTargetTime - Date.now())
+        : (interval_minutes > 0 ? 0 : 1000);
+
+      const repeatIntervalMs = interval_minutes > 0 ? interval_minutes * 60 * 1000 : 0;
+
+      sendNowScheduledState = {
+        active: true,
+        message,
+        groupsCount: targetEntities.length,
+        schedule_time,
+        interval_minutes,
+        nextRunTime: Date.now() + initialDelayMs,
+        lastRunTime: 0,
+        roundsExecuted: 0,
+      };
+
+      const executeRound = async () => {
+        if (!sendNowScheduledState.active) return;
+        console.log(`[SendNow Scheduler] ⏰ Executing scheduled transmission round #${sendNowScheduledState.roundsExecuted + 1}...`);
+        sendNowScheduledState.lastRunTime = Date.now();
+        sendNowScheduledState.roundsExecuted++;
+        if (repeatIntervalMs > 0) {
+          sendNowScheduledState.nextRunTime = Date.now() + repeatIntervalMs;
+        } else {
+          sendNowScheduledState.nextRunTime = 0;
+          sendNowScheduledState.active = false;
+        }
+
+        try {
+          const outcome = await executeSendNowTransmission({
+            client,
+            targetEntities,
+            resolvedLabels,
+            message,
+            images,
+            smart_wait_seconds,
+            smart_required_messages,
+          });
+          io.emit('send_now_scheduled_tick', {
+            state: sendNowScheduledState,
+            sentResults: outcome.sentResults,
+            failedResults: outcome.failedResults,
+          });
+        } catch (roundErr) {
+          console.error('[SendNow Scheduler] Error during transmission:', roundErr);
+        }
+      };
+
+      // Set up REAL server-side timer
+      if (initialDelayMs > 0) {
+        console.log(`[SendNow Scheduler] Setting up real timeout for ${Math.round(initialDelayMs / 1000)}s...`);
+        sendNowScheduledTimeout = setTimeout(async () => {
+          await executeRound();
+          if (repeatIntervalMs > 0 && sendNowScheduledState.active) {
+            sendNowScheduledTimer = setInterval(executeRound, repeatIntervalMs);
+          }
+        }, initialDelayMs);
+      } else {
+        executeRound();
+        if (repeatIntervalMs > 0) {
+          sendNowScheduledTimer = setInterval(executeRound, repeatIntervalMs);
+        }
+      }
+
+      const timeLabel = schedule_time ? `في ${schedule_time}` : (initialDelayMs > 0 ? `بعد ${Math.round(initialDelayMs / 1000)} ثانية` : 'فوراً');
+      const repeatLabel = interval_minutes > 0 ? ` (ويتكرر كل ${interval_minutes} دقيقة بمؤقت حقيقي)` : '';
+
       return res.json({
         success: true,
-        message: `تمت جدولة الإرسال التلقائي إلى ${targetEntities.length} مجموعة (${resolvedLabels.join(', ')}) ${timeLabel}${repeatLabel}`,
+        message: `تم تشغيل مؤقت الجدولة الفعلي في الخادم بنجاح إلى ${targetEntities.length} مجموعة (${resolvedLabels.join(', ')}) ${timeLabel}${repeatLabel}`,
         groupsCount: targetEntities.length,
         hasImages: images.length > 0,
         isScheduled: true,
         schedule_time,
         interval_minutes,
         identifiers: resolvedLabels,
+        scheduledState: sendNowScheduledState,
         timestamp: new Date().toISOString(),
       });
     }
 
-    // 3. Execute Real Send via client.sendMessage with Smart Salam & Protection Checking
+    // 3. Execute Real Immediate Send via client.sendMessage with Smart Salam & Protection Checking
     console.log(`[SendNow] Transmitting real MTProto message to ${targetEntities.length} entities:`, resolvedLabels);
 
-    const sentResults: Array<{ target: string; messageId: number; success: boolean; isProtected?: boolean; salamMode?: boolean }> = [];
-    const failedResults: Array<{ target: string; error: string }> = [];
-
-    const smart_wait_seconds = Number(data.interval_seconds || data.smart_wait_seconds) || 30;
-    const smart_required_messages = Number(data.smart_required_messages) || 3;
-
-    for (let i = 0; i < targetEntities.length; i++) {
-      const entity = targetEntities[i];
-      const label = resolvedLabels[i] || `entity_${i}`;
-      try {
-        // الخطوة 1: فحص الحماية لكل مجموعة قبل الإرسال
-        const isProtected = await isGroupProtected(client, entity);
-        console.log(`[SendNow] Target "${label}" protection status: ${isProtected ? 'PROTECTED (محمية ببوتات حماية)' : 'UNPROTECTED (غير محمية)'}`);
-
-        // الخطوة 2:
-        if (!isProtected) {
-          // إذا كانت النتيجة false (غير محمية): أرسل الرسالة الأصلية فوراً (ممنوع إرسال السلام عليكم)
-          const sent: any = await client.sendMessage(entity, {
-            message: message,
-            parseMode: 'md',
-          });
-          sentResults.push({
-            target: label,
-            messageId: sent?.id || 0,
-            success: true,
-            isProtected: false,
-            salamMode: false,
-          });
-          console.log(`[SendNow] Direct send to unprotected group ${label} (ID: ${sent?.id})`);
-        } else {
-          // إذا كانت النتيجة true (محمية): نفّذ السيناريو الذكي
-          // 1. أرسل "السلام عليكم"
-          console.log(`[SendNow] [SalamMode] 1. Group ${label} is protected. Sending greeting "السلام عليكم"...`);
-          const greetingMsg: any = await client.sendMessage(entity, {
-            message: 'السلام عليكم',
-          });
-
-          recordSalamActivity({
-            chatId: label,
-            chatTitle: label,
-            greetingMsgId: greetingMsg.id,
-            status: 'greeting_sent',
-            statusLabel: 'تم إرسال السلام كتمويه أولي 🚀',
-            interactionCount: 0,
-            requiredInteractions: smart_required_messages,
-            remainingSeconds: smart_wait_seconds,
-            totalWaitSeconds: smart_wait_seconds,
-            originalText: message,
-            details: `تم إرسال 'السلام عليكم' بنجاح (معرف: ${greetingMsg.id}) وبدء مهلة الانتظار الذكية`,
-          });
-
-          // 2. تفعيل مستمع الأحداث الحي (Event Listener) لمراقبة الرسائل الجديدة لحظياً خلال فترة الانتظار
-          const liveIncomingMsgs: any[] = [];
-          const waitStartTime = Date.now();
-          recordSalamActivity({
-            chatId: label,
-            chatTitle: label,
-            greetingMsgId: greetingMsg.id,
-            status: 'waiting_interaction',
-            statusLabel: `في انتظار تفاعل الأعضاء (${smart_wait_seconds} ثانية)`,
-            interactionCount: 0,
-            requiredInteractions: smart_required_messages,
-            remainingSeconds: smart_wait_seconds,
-            totalWaitSeconds: smart_wait_seconds,
-            originalText: message,
-            details: `جاري رصد الرسائل الواردة من الأعضاء لحساب معدل النشاط المطلوب (${smart_required_messages}+)`,
-          });
-
-          const liveMsgHandler = (event: any) => {
-            try {
-              const incoming = event?.message;
-              if (incoming && !incoming.out && Number(incoming.id) > Number(greetingMsg.id)) {
-                liveIncomingMsgs.push(incoming);
-                console.log(`[SendNow] [SalamMode] ⚡ Live event detected in ${label}: message ID ${incoming.id} (total: ${liveIncomingMsgs.length})`);
-                const elapsed = Math.floor((Date.now() - waitStartTime) / 1000);
-                recordSalamActivity({
-                  chatId: label,
-                  chatTitle: label,
-                  greetingMsgId: greetingMsg.id,
-                  status: 'interaction_detected',
-                  statusLabel: `تفاعل وارد (${liveIncomingMsgs.length}/${smart_required_messages})`,
-                  interactionCount: liveIncomingMsgs.length,
-                  requiredInteractions: smart_required_messages,
-                  remainingSeconds: Math.max(0, smart_wait_seconds - elapsed),
-                  totalWaitSeconds: smart_wait_seconds,
-                  lastMessageSnippet: incoming.message ? String(incoming.message).slice(0, 70) : undefined,
-                  lastMessageSender: incoming.senderId ? String(incoming.senderId) : undefined,
-                  originalText: message,
-                  details: `وردت رسالة جديدة من عضو: "${(incoming.message || '').slice(0, 40)}"`,
-                });
-              }
-            } catch {}
-          };
-          try {
-            client.addEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
-          } catch {}
-
-          console.log(`[SendNow] [SalamMode] 2. Waiting ${smart_wait_seconds}s for interactions in ${label}...`);
-          await new Promise((r) => setTimeout(r, smart_wait_seconds * 1000));
-
-          try {
-            client.removeEventHandler(liveMsgHandler, new NewMessage({ chats: [entity] }));
-          } catch {}
-
-          // 3. التحقق المزدوج من نشاط المجموعة عبر Event Listener و getMessages
-          let interactionPassed = false;
-          let totalCount = liveIncomingMsgs.length;
-          try {
-            const recentMsgs: any = await client.getMessages(entity, {
-              limit: 20,
-              minId: greetingMsg.id,
-            });
-            const othersMsgs = (recentMsgs || []).filter((m: any) => !m.out && m.id > greetingMsg.id);
-            totalCount = Math.max(othersMsgs.length, liveIncomingMsgs.length);
-            console.log(`[SendNow] [SalamMode] 3. Monitored ${totalCount} new messages in ${label} (live: ${liveIncomingMsgs.length}, fetched: ${othersMsgs.length}, required: ${smart_required_messages})`);
-            if (totalCount >= smart_required_messages) {
-              interactionPassed = true;
-            }
-          } catch (chkErr: any) {
-            console.warn(`[SendNow] [SalamMode] Error checking messages in ${label}:`, chkErr?.message || chkErr);
-            if (liveIncomingMsgs.length >= smart_required_messages) {
-              interactionPassed = true;
-            } else {
-              interactionPassed = false;
-            }
-          }
-
-          if (interactionPassed) {
-            // 4. إذا وصل عدد الرسائل الجديدة >= smart_required_messages: قم بتعديل رسالة "السلام" إلى الرسالة الأصلية
-            console.log(`[SendNow] [SalamMode] 4. Interaction passed (${smart_required_messages}+ msgs). Editing greeting to original message in ${label}...`);
-            await client.editMessage(entity, {
-              message: greetingMsg.id,
-              text: message,
-              parseMode: 'md',
-            });
-            recordSalamActivity({
-              chatId: label,
-              chatTitle: label,
-              greetingMsgId: greetingMsg.id,
-              status: 'message_edited',
-              statusLabel: 'تم تعديل رسالة السلام إلى الرسالة الأصلية ✍️',
-              interactionCount: totalCount,
-              requiredInteractions: smart_required_messages,
-              remainingSeconds: 0,
-              totalWaitSeconds: smart_wait_seconds,
-              originalText: message,
-              decision: 'edit',
-              details: `المجموعة نشطة (${totalCount} تفاعلات >= ${smart_required_messages}). تم استبدال السلام بالمنشور الفعلي بنجاح.`,
-            });
-            sentResults.push({
-              target: label,
-              messageId: greetingMsg.id || 0,
-              success: true,
-              isProtected: true,
-              salamMode: true,
-            });
-          } else {
-            // 5. إذا لم يصل العدد: قم بحذف رسالة "السلام" عبر client.deleteMessages
-            console.log(`[SendNow] [SalamMode] 5. Low interaction (<${smart_required_messages}). Deleting greeting message from ${label}...`);
-            await client.deleteMessages(entity, [greetingMsg.id], { revoke: true }).catch(() => {});
-            recordSalamActivity({
-              chatId: label,
-              chatTitle: label,
-              greetingMsgId: greetingMsg.id,
-              status: 'message_deleted',
-              statusLabel: 'تم حذف رسالة السلام لعدم وجود تفاعل كافٍ 🗑️',
-              interactionCount: totalCount,
-              requiredInteractions: smart_required_messages,
-              remainingSeconds: 0,
-              totalWaitSeconds: smart_wait_seconds,
-              originalText: message,
-              decision: 'delete',
-              details: `المجموعة صامتة أو خاملة (${totalCount}/${smart_required_messages} تفاعلات). تم حذف رسالة السلام لمنع كشف البوت وتأمين الحساب.`,
-            });
-            failedResults.push({
-              target: label,
-              error: `سحبت رسالة التمويه الذكية لعدم وجود تفاعل كافٍ من الأعضاء (${smart_required_messages} رسائل جديدة مطلوبة خلال ${smart_wait_seconds}ث)`,
-            });
-          }
-        }
-      } catch (sendErr: any) {
-        const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
-        console.warn(`[SendNow] Failed transmitting to ${label}:`, errMsg);
-        failedResults.push({
-          target: label,
-          error: errMsg,
-        });
-      }
-    }
+    const { sentResults, failedResults } = await executeSendNowTransmission({
+      client,
+      targetEntities,
+      resolvedLabels,
+      message,
+      images,
+      smart_wait_seconds,
+      smart_required_messages,
+    });
 
     // If zero messages succeeded, report real failure!
     if (sentResults.length === 0 && failedResults.length > 0) {
@@ -6843,6 +6956,32 @@ Please provide the concise summary.`;
       failedResults,
       identifiers: resolvedLabels,
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.post('/api/send_now/schedule/stop', (req, res) => {
+    if (sendNowScheduledTimer) {
+      clearInterval(sendNowScheduledTimer);
+      sendNowScheduledTimer = null;
+    }
+    if (sendNowScheduledTimeout) {
+      clearTimeout(sendNowScheduledTimeout);
+      sendNowScheduledTimeout = null;
+    }
+    sendNowScheduledState.active = false;
+    sendNowScheduledState.nextRunTime = 0;
+    io.emit('send_now_scheduled_tick', { state: sendNowScheduledState });
+    res.json({
+      success: true,
+      message: 'تم إيقاف مؤقت الجدولة الفعلي بنجاح',
+      scheduledState: sendNowScheduledState,
+    });
+  });
+
+  app.get('/api/send_now/schedule/status', (req, res) => {
+    res.json({
+      success: true,
+      scheduledState: sendNowScheduledState,
     });
   });
 
@@ -7310,15 +7449,90 @@ Please provide the concise summary.`;
 **نجاحك يبدأ بقرار... اتخذ قرارك الآن!** 📚✨`,
   ];
 
+  let rotatingPublisherTimer: NodeJS.Timeout | null = null;
+  let rotatingCountdownTimer: NodeJS.Timeout | null = null;
+  let rotatingDurationTimeout: NodeJS.Timeout | null = null;
+
   let rotatingConfigStore = {
     messages: [...MESSAGE_DRAFTS],
     groups: [] as string[],
     interval_minutes: 5,
+    duration_hours: 0,
+    startTime: 0,
+    endTime: 0,
     is_active: false,
     next_send_in: null as number | null,
     current_index: 0,
     total_sent: 0,
     is_persistent: true,
+    sessionString: '',
+    phone: '',
+  };
+
+  const stopRotatingPublisher = () => {
+    if (rotatingPublisherTimer) {
+      clearInterval(rotatingPublisherTimer);
+      rotatingPublisherTimer = null;
+    }
+    if (rotatingCountdownTimer) {
+      clearInterval(rotatingCountdownTimer);
+      rotatingCountdownTimer = null;
+    }
+    if (rotatingDurationTimeout) {
+      clearTimeout(rotatingDurationTimeout);
+      rotatingDurationTimeout = null;
+    }
+    rotatingConfigStore.is_active = false;
+    rotatingConfigStore.next_send_in = null;
+    io.emit('rotating_status', {
+      ...rotatingConfigStore,
+      active: false,
+      interval: rotatingConfigStore.interval_minutes,
+    });
+  };
+
+  const executeServerRotatingRound = async () => {
+    if (!rotatingConfigStore.is_active) return;
+    const validMsgs = rotatingConfigStore.messages.filter((m) => m && m.trim().length > 0);
+    if (validMsgs.length === 0 || rotatingConfigStore.groups.length === 0) {
+      console.warn('[Rotating Scheduler] Cannot execute round: No messages or groups specified');
+      return;
+    }
+
+    if (rotatingConfigStore.endTime > 0 && Date.now() >= rotatingConfigStore.endTime) {
+      console.log(`[Rotating Scheduler] ⏹️ Schedule duration reached (${rotatingConfigStore.duration_hours} hours). Stopping rotating publisher.`);
+      stopRotatingPublisher();
+      return;
+    }
+
+    const currentMsg = validMsgs[rotatingConfigStore.current_index % validMsgs.length];
+    const groupTargets = [...rotatingConfigStore.groups];
+    console.log(`[Rotating Scheduler] 🔄 Server executing round #${rotatingConfigStore.current_index + 1} (${groupTargets.length} groups)...`);
+
+    rotatingConfigStore.current_index = (rotatingConfigStore.current_index + 1) % validMsgs.length;
+    rotatingConfigStore.next_send_in = rotatingConfigStore.interval_minutes * 60;
+
+    try {
+      const outcome = await executeServerSendBatch({
+        text: currentMsg,
+        targetChatIds: groupTargets,
+        protectionMode: 'salam',
+        smart_required_messages: 3,
+        smart_wait_seconds: 30,
+        sessionString: rotatingConfigStore.sessionString,
+        phone: rotatingConfigStore.phone,
+      });
+      rotatingConfigStore.total_sent += (outcome?.totalSuccess || 0);
+    } catch (err) {
+      console.warn('[Rotating Scheduler] Round execution failed:', err);
+    }
+
+    io.emit('rotating_status', {
+      ...rotatingConfigStore,
+      active: rotatingConfigStore.is_active,
+      interval: rotatingConfigStore.interval_minutes,
+      interval_seconds: rotatingConfigStore.interval_minutes * 60,
+    });
   };
 
   app.get('/api/rotating/status', (req, res) => {
@@ -7328,6 +7542,7 @@ Please provide the concise summary.`;
       messages: rotatingConfigStore.messages,
       groups: rotatingConfigStore.groups,
       interval: rotatingConfigStore.interval_minutes,
+      duration_hours: rotatingConfigStore.duration_hours,
       next_send_in: rotatingConfigStore.next_send_in,
       interval_seconds: rotatingConfigStore.interval_minutes * 60,
       current_index: rotatingConfigStore.current_index,
@@ -7348,6 +7563,9 @@ Please provide the concise summary.`;
     if (data.interval_minutes) {
       rotatingConfigStore.interval_minutes = Math.max(1, Number(data.interval_minutes));
     }
+    if (data.duration_hours !== undefined) {
+      rotatingConfigStore.duration_hours = Math.max(0, Number(data.duration_hours) || 0);
+    }
     if (typeof data.is_persistent === 'boolean') {
       rotatingConfigStore.is_persistent = data.is_persistent;
     }
@@ -7362,7 +7580,14 @@ Please provide the concise summary.`;
     const data = req.body || {};
     if (Array.isArray(data.messages)) rotatingConfigStore.messages = data.messages;
     if (Array.isArray(data.groups)) rotatingConfigStore.groups = data.groups;
-    if (data.interval_minutes) rotatingConfigStore.interval_minutes = Number(data.interval_minutes);
+    if (data.interval_minutes) rotatingConfigStore.interval_minutes = Math.max(1, Number(data.interval_minutes));
+    if (data.sessionString) rotatingConfigStore.sessionString = data.sessionString;
+    if (data.phone) rotatingConfigStore.phone = data.phone;
+
+    const durationHours = Math.max(0, Number(data.durationHours || data.duration_hours) || 0);
+    rotatingConfigStore.duration_hours = durationHours;
+    rotatingConfigStore.startTime = Date.now();
+    rotatingConfigStore.endTime = durationHours > 0 ? Date.now() + durationHours * 3600 * 1000 : 0;
 
     const validMsgs = rotatingConfigStore.messages.filter((m) => m && m.trim().length > 0);
     if (validMsgs.length === 0) {
@@ -7372,18 +7597,43 @@ Please provide the concise summary.`;
       return res.status(400).json({ success: false, message: 'يرجى تحديد مجموعة واحدة على الأقل' });
     }
 
+    stopRotatingPublisher();
+
     rotatingConfigStore.is_active = true;
     rotatingConfigStore.next_send_in = rotatingConfigStore.interval_minutes * 60;
+
+    // Trigger first execution immediately in the background
+    executeServerRotatingRound();
+
+    // Start recurring interval on server
+    rotatingPublisherTimer = setInterval(async () => {
+      await executeServerRotatingRound();
+    }, rotatingConfigStore.interval_minutes * 60 * 1000);
+
+    // Live countdown ticker
+    rotatingCountdownTimer = setInterval(() => {
+      if (rotatingConfigStore.next_send_in !== null && rotatingConfigStore.next_send_in > 0) {
+        rotatingConfigStore.next_send_in--;
+      }
+    }, 1000);
+
+    // Auto-stop when duration expires
+    if (durationHours > 0) {
+      rotatingDurationTimeout = setTimeout(() => {
+        console.log(`[Rotating Scheduler] ⏹️ Duration of ${durationHours} hours completed. Auto-stopping.`);
+        stopRotatingPublisher();
+      }, durationHours * 3600 * 1000);
+    }
+
     res.json({
       success: true,
-      message: 'تم بدء النشر الدوري المجدول بنجاح',
+      message: `تم بدء النشر الدوري في الخادم كل ${rotatingConfigStore.interval_minutes} دقيقة${durationHours > 0 ? ` لمدة ${durationHours} ساعة` : ''}`,
       status: rotatingConfigStore,
     });
   });
 
   app.post('/api/rotating/stop', (req, res) => {
-    rotatingConfigStore.is_active = false;
-    rotatingConfigStore.next_send_in = null;
+    stopRotatingPublisher();
     res.json({
       success: true,
       message: 'تم إيقاف النشر الدوري',
@@ -7487,12 +7737,31 @@ Please provide the concise summary.`;
 
       // Fetch user's existing dialogs to skip already joined chats
       const existingPeerIds = new Set<string>();
+      const existingUsernames = new Set<string>();
       try {
-        const dialogs = await client.getDialogs({ limit: 150 }).catch(() => []);
+        const dialogs = await client.getDialogs({ limit: 300 }).catch(() => []);
         for (const d of dialogs) {
-          if (d.id) existingPeerIds.add(String(d.id).replace(/^-100/, '').replace(/^-/, ''));
+          if (d.id) {
+            const rawId = String(d.id).replace(/^-100/, '').replace(/^-/, '').trim();
+            existingPeerIds.add(rawId);
+            existingPeerIds.add(String(d.id).trim());
+          }
+          if (d.entity) {
+            const entityAny = d.entity as any;
+            if (entityAny.id) {
+              const entityRawId = String(entityAny.id).replace(/^-100/, '').replace(/^-/, '').trim();
+              existingPeerIds.add(entityRawId);
+              existingPeerIds.add(String(entityAny.id).trim());
+            }
+            if (entityAny.username) {
+              existingUsernames.add(String(entityAny.username).toLowerCase().trim());
+            }
+          }
         }
-      } catch (_) {}
+        console.log(`[AutoJoin] Pre-fetched ${existingPeerIds.size} dialog IDs and ${existingUsernames.size} usernames for duplicate avoidance`);
+      } catch (err) {
+        console.warn('[AutoJoin] getDialogs pre-fetch warning:', err);
+      }
 
       const delayMs = Math.max(3000, Number(data.delay_seconds || 6) * 1000);
 
@@ -7522,14 +7791,51 @@ Please provide the concise summary.`;
           if (task.type === 'private') {
             // Private invite link
             const hashMatch = task.url.match(/(?:\+|joinchat\/|invite=)([a-zA-Z0-9_-]+)/);
-            const hash = hashMatch ? hashMatch[1] : task.url.replace(/^.*[+/]/, '');
+            const hash = hashMatch ? hashMatch[1] : task.url.replace(/^.*[+/]/, '').split('?')[0].trim();
+
+            // Pre-check with CheckChatInvite before joining
+            let isAlreadyParticipant = false;
+            let inviteTitle = 'مجموعة خاصة';
+            try {
+              const checkRes: any = await client.invoke(new Api.messages.CheckChatInvite({ hash }));
+              if (checkRes.className === 'ChatInviteAlready' || checkRes._ === 'chatInviteAlready') {
+                isAlreadyParticipant = true;
+                inviteTitle = checkRes.chat?.title || inviteTitle;
+              } else if (checkRes.chat && checkRes.chat.id) {
+                const inviteChatId = String(checkRes.chat.id).replace(/^-100/, '').replace(/^-/, '').trim();
+                if (existingPeerIds.has(inviteChatId)) {
+                  isAlreadyParticipant = true;
+                  inviteTitle = checkRes.chat.title || inviteTitle;
+                }
+              }
+            } catch (checkErr: any) {
+              const checkErrMsg = checkErr?.errorMessage || checkErr?.message || '';
+              if (checkErrMsg.includes('USER_ALREADY_PARTICIPANT')) {
+                isAlreadyParticipant = true;
+              }
+            }
+
+            if (isAlreadyParticipant) {
+              console.log(`[AutoJoin] 📌 Private invite ${hash} is already joined. Skipping ImportChatInvite.`);
+              task.status = 'already_member';
+              task.title = inviteTitle;
+              autoJoinState.already++;
+              autoJoinState.done++;
+              autoJoinState.recentJoinsCount = autoJoinHistory.length;
+              io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
+              continue;
+            }
 
             try {
               const resJoin: any = await client.invoke(new Api.messages.ImportChatInvite({ hash }));
               task.status = 'joined';
-              task.title = resJoin?.chats?.[0]?.title || 'مجموعة خاصة';
+              task.title = resJoin?.chats?.[0]?.title || inviteTitle;
               autoJoinState.success++;
               autoJoinHistory.push(Date.now());
+              if (resJoin?.chats?.[0]?.id) {
+                const newId = String(resJoin.chats[0].id).replace(/^-100/, '').replace(/^-/, '').trim();
+                existingPeerIds.add(newId);
+              }
             } catch (invErr: any) {
               const errMsg = invErr?.errorMessage || invErr?.message || '';
               if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
@@ -7543,6 +7849,8 @@ Please provide the concise summary.`;
                 task.status = 'invalid';
                 task.error = `قيود تيليجرام (FloodWait): ${errMsg}`;
                 autoJoinState.fail++;
+                autoJoinState.done++;
+                io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
                 break; // Stop immediately on flood wait
               } else {
                 task.status = 'invalid';
@@ -7552,14 +7860,46 @@ Please provide the concise summary.`;
             }
           } else {
             // Public username or link
-            const cleanTarget = task.url.replace(/^(?:https?:\/\/)?(?:t\.me\/|telegram\.me\/)?@?/, '').split('/')[0];
+            const cleanTarget = task.url.replace(/^(?:https?:\/\/)?(?:t\.me\/|telegram\.me\/)?@?/, '').split('/')[0].split('?')[0].trim();
+            const targetUsername = cleanTarget.toLowerCase();
+
+            // Pre-check by username against pre-fetched user dialogs
+            if (existingUsernames.has(targetUsername)) {
+              console.log(`[AutoJoin] 📌 Group @${cleanTarget} is already in user dialogs. Skipping network join.`);
+              task.status = 'already_member';
+              task.title = cleanTarget;
+              autoJoinState.already++;
+              autoJoinState.done++;
+              autoJoinState.recentJoinsCount = autoJoinHistory.length;
+              io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
+              continue;
+            }
+
             const peer = await resolvePeerTarget(client, cleanTarget);
+            const peerIdStr = String(peer?.channelId || peer?.chatId || peer?.userId || '').replace(/^-100/, '').replace(/^-/, '').trim();
+
+            // Pre-check by resolved peer ID against pre-fetched user dialogs
+            if (peerIdStr && existingPeerIds.has(peerIdStr)) {
+              console.log(`[AutoJoin] 📌 Group ${cleanTarget} (ID: ${peerIdStr}) is already in user dialogs. Skipping network join.`);
+              task.status = 'already_member';
+              task.title = cleanTarget;
+              autoJoinState.already++;
+              autoJoinState.done++;
+              autoJoinState.recentJoinsCount = autoJoinHistory.length;
+              io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
+              continue;
+            }
+
             try {
               const resJoin: any = await client.invoke(new Api.channels.JoinChannel({ channel: peer }));
               task.status = 'joined';
               task.title = resJoin?.chats?.[0]?.title || cleanTarget;
               autoJoinState.success++;
               autoJoinHistory.push(Date.now());
+              if (resJoin?.chats?.[0]?.id) {
+                const newId = String(resJoin.chats[0].id).replace(/^-100/, '').replace(/^-/, '').trim();
+                existingPeerIds.add(newId);
+              }
             } catch (pubErr: any) {
               const pubErrMsg = pubErr?.errorMessage || pubErr?.message || '';
               if (pubErrMsg.includes('USER_ALREADY_PARTICIPANT')) {
@@ -7569,6 +7909,8 @@ Please provide the concise summary.`;
                 task.status = 'invalid';
                 task.error = `قيود تيليجرام (FloodWait): ${pubErrMsg}`;
                 autoJoinState.fail++;
+                autoJoinState.done++;
+                io.emit('auto_join_progress', { current: i + 1, total: tasks.length, task, state: autoJoinState });
                 break;
               } else {
                 task.status = 'invalid';
@@ -8122,11 +8464,15 @@ Please provide the concise summary.`;
   // REAL SERVER-SIDE SCHEDULED SENDER
   // =========================================================================
   let scheduledTimer: NodeJS.Timeout | null = null;
+  let scheduledDurationTimeout: NodeJS.Timeout | null = null;
   let scheduledState = {
     active: false,
     text: '',
     targetChatIds: [] as string[],
     intervalMinutes: 15,
+    durationHours: 0,
+    startTime: 0,
+    endTime: 0,
     protectionMode: 'salam',
     smart_required_messages: 3,
     smart_wait_seconds: 30,
@@ -8135,6 +8481,20 @@ Please provide the concise summary.`;
     nextRunTime: 0,
     sessionString: '',
     phone: '',
+  };
+
+  const stopScheduledSender = () => {
+    if (scheduledTimer) {
+      clearInterval(scheduledTimer);
+      scheduledTimer = null;
+    }
+    if (scheduledDurationTimeout) {
+      clearTimeout(scheduledDurationTimeout);
+      scheduledDurationTimeout = null;
+    }
+    scheduledState.active = false;
+    scheduledState.nextRunTime = 0;
+    io.emit('scheduled_sender_status', scheduledState);
   };
 
   app.post('/api/sender/schedule/start', async (req, res) => {
@@ -8154,17 +8514,19 @@ Please provide the concise summary.`;
       return res.status(400).json({ success: false, message: 'النص وقائمة المجموعات مطلوبة للجدولة' });
     }
 
-    if (scheduledTimer) {
-      clearInterval(scheduledTimer);
-      scheduledTimer = null;
-    }
-
+    const durationHours = Math.max(0, Number(data.durationHours || data.duration_hours) || 0);
     const intervalVal = Math.max(1, Number(intervalMinutes));
+
+    stopScheduledSender();
+
     scheduledState = {
       active: true,
       text,
       targetChatIds,
       intervalMinutes: intervalVal,
+      durationHours,
+      startTime: Date.now(),
+      endTime: durationHours > 0 ? Date.now() + durationHours * 3600 * 1000 : 0,
       protectionMode,
       smart_required_messages: Number(smart_required_messages) || 3,
       smart_wait_seconds: Number(smart_wait_seconds) || 30,
@@ -8194,6 +8556,12 @@ Please provide the concise summary.`;
 
     // Start persistent server interval
     scheduledTimer = setInterval(async () => {
+      if (scheduledState.endTime > 0 && Date.now() >= scheduledState.endTime) {
+        console.log(`[Scheduler] ⏰ Schedule duration reached (${scheduledState.durationHours} hours). Stopping scheduler.`);
+        stopScheduledSender();
+        return;
+      }
+
       console.log(`[Scheduler] ⏰ Executing scheduled round #${scheduledState.roundsExecuted + 1}...`);
       scheduledState.roundsExecuted++;
       scheduledState.lastRunTime = Date.now();
@@ -8211,22 +8579,23 @@ Please provide the concise summary.`;
       }).catch((e) => console.warn('[Scheduler] Scheduled round error:', e));
     }, intervalVal * 60 * 1000);
 
+    // Auto-stop after durationHours
+    if (durationHours > 0) {
+      scheduledDurationTimeout = setTimeout(() => {
+        console.log(`[Scheduler] ⏰ Auto-stopping timer after ${durationHours} hours duration.`);
+        stopScheduledSender();
+      }, durationHours * 3600 * 1000);
+    }
+
     res.json({
       success: true,
-      message: `تم تفعيل الجدولة الحقيقية في الخادم كل ${intervalVal} دقيقة بنجاح`,
+      message: `تم تفعيل الجدولة الحقيقية في الخادم كل ${intervalVal} دقيقة${durationHours > 0 ? ` لمدة ${durationHours} ساعة` : ''} بنجاح`,
       scheduledState,
     });
   });
 
   app.post('/api/sender/schedule/stop', (req, res) => {
-    if (scheduledTimer) {
-      clearInterval(scheduledTimer);
-      scheduledTimer = null;
-    }
-    scheduledState.active = false;
-    scheduledState.nextRunTime = 0;
-    io.emit('scheduled_sender_status', scheduledState);
-
+    stopScheduledSender();
     res.json({
       success: true,
       message: 'تم إيقاف الجدولة بنجاح',
@@ -8857,12 +9226,50 @@ Please provide the concise summary.`;
   // ==========================================
   // KEYWORD MONITORING ENDPOINTS
   // ==========================================
+  app.get(['/api/alerts/keywords', '/api/alerts/get-keywords'], (req, res) => {
+    const saved = sqliteDatabase.getMonitorKeywords();
+    const effective = saved.length > 0 ? saved : MONITOR_KEYWORDS;
+    res.json({
+      success: true,
+      keywords: effective,
+      count: effective.length,
+      isDefault: saved.length === 0,
+    });
+  });
+
+  app.post(['/api/alerts/keywords', '/api/alerts/save-keywords'], (req, res) => {
+    const body = req.body || {};
+    let rawKeywords: string[] = [];
+    if (Array.isArray(body.keywords)) {
+      rawKeywords = body.keywords;
+    } else if (typeof body.keywords === 'string') {
+      rawKeywords = body.keywords.split(/[\n,]+/).map((k: string) => k.trim()).filter(Boolean);
+    }
+
+    if (rawKeywords.length === 0) {
+      return res.status(400).json({ success: false, message: 'قائمة الكلمات المفتاحية لا يمكن أن تكون فارغة' });
+    }
+
+    const saved = sqliteDatabase.setMonitorKeywords(rawKeywords);
+    backupToDiskFiles();
+    io.emit('monitor_keywords_updated', { keywords: saved, count: saved.length });
+
+    res.json({
+      success: true,
+      message: `تم حفظ ${saved.length} كلمة مفتاحية للمراقبة في قاعدة البيانات بنجاح`,
+      keywords: saved,
+      count: saved.length,
+    });
+  });
+
   app.get('/api/alerts/history', (req, res) => {
+    const saved = sqliteDatabase.getMonitorKeywords();
+    const effective = saved.length > 0 ? saved : MONITOR_KEYWORDS;
     res.json({
       success: true,
       monitoringEnabled,
       count: USER_LOGS.length,
-      keywordsCount: MONITOR_KEYWORDS.length,
+      keywordsCount: effective.length,
       alerts: USER_LOGS,
     });
   });
@@ -8877,12 +9284,14 @@ Please provide the concise summary.`;
   });
 
   app.get('/api/alerts/status', (req, res) => {
+    const saved = sqliteDatabase.getMonitorKeywords();
+    const effective = saved.length > 0 ? saved : MONITOR_KEYWORDS;
     res.json({
       success: true,
       monitoringEnabled,
-      keywordsCount: MONITOR_KEYWORDS.length,
+      keywordsCount: effective.length,
       alertsCount: USER_LOGS.length,
-      keywords: MONITOR_KEYWORDS,
+      keywords: effective,
     });
   });
 

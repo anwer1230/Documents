@@ -550,6 +550,41 @@ export class SQLiteDatabaseService {
   }
 
   // =========================================================================
+  // MONITOR KEYWORDS PERSISTENCE (Keyword alerts)
+  // =========================================================================
+
+  public getMonitorKeywords(): string[] {
+    if (!this.db) return [];
+    try {
+      const row = this.db.get<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', ['monitor_keywords']);
+      if (row && row.value) {
+        const parsed = JSON.parse(row.value);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((k: any) => String(k).trim()).filter(Boolean);
+        }
+      }
+    } catch (e) {
+      console.error('[SQLite] getMonitorKeywords error:', e);
+    }
+    return [];
+  }
+
+  public setMonitorKeywords(keywords: string[]): string[] {
+    if (!this.db) return [];
+    try {
+      const cleaned = Array.from(new Set(keywords.map((k) => String(k).trim()).filter(Boolean)));
+      this.db.run(
+        'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+        ['monitor_keywords', JSON.stringify(cleaned)]
+      );
+      return cleaned;
+    } catch (e) {
+      console.error('[SQLite] setMonitorKeywords error:', e);
+      return [];
+    }
+  }
+
+  // =========================================================================
   // BATCH MESSAGES PERSISTENCE (Sent Batches in SQLite)
   // =========================================================================
 

@@ -346,6 +346,7 @@ export class NotificationsService {
           text: params.text,
           targetChatIds: targetObjs.map((t) => t.id),
           intervalMinutes: params.intervalMinutes || 15,
+          durationHours: (params as any).durationHours || 0,
           protectionMode: params.protectionMode,
           smart_required_messages: 3,
           smart_wait_seconds: 30,
@@ -994,7 +995,7 @@ export class NotificationsService {
     this.notifyStateChange();
   }
 
-  public startRotating(messages?: string[], groups?: string[], intervalMinutes?: number) {
+  public startRotating(messages?: string[], groups?: string[], intervalMinutes?: number, durationHours?: number) {
     if (messages) this.rotatingMessages = [...messages];
     if (groups) this.rotatingGroups = [...groups];
     if (intervalMinutes && intervalMinutes > 0) this.rotatingIntervalMinutes = intervalMinutes;
@@ -1009,13 +1010,30 @@ export class NotificationsService {
 
     this.isRotatingActive = true;
     this.rotatingCurrentIndex = 0;
-    this.scheduleNextRotatingRound(0); // execute first round immediately or with 1s delay
+    this.scheduleNextRotatingRound(0); // local timer fallback
     this.notifyStateChange();
+
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
+
+    // Invoke server-side rotating publisher (Backend-driven)
+    fetch('/api/rotating/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: validMessages,
+        groups: this.rotatingGroups,
+        interval_minutes: this.rotatingIntervalMinutes,
+        duration_hours: durationHours || 0,
+        sessionString,
+        phone,
+      }),
+    }).catch((err) => console.warn('[NotificationsService] Server rotating start error:', err));
 
     notificationsController.postNotification({
       category: 'message',
       title: 'تم بدء النشر الدوري المجدول 🔄',
-      body: `جاري تدوير ${validMessages.length} رسائل كل ${this.rotatingIntervalMinutes} دقائق`,
+      body: `جاري تدوير ${validMessages.length} رسائل كل ${this.rotatingIntervalMinutes} دقائق عبر الخادم`,
     });
   }
 
@@ -1027,6 +1045,11 @@ export class NotificationsService {
     }
     this.rotatingNextSendAt = null;
     this.notifyStateChange();
+
+    fetch('/api/rotating/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }).catch(() => {});
 
     notificationsController.postNotification({
       category: 'message',
