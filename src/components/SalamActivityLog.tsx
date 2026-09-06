@@ -20,6 +20,7 @@ import {
   AlertTriangle,
   Play,
   RotateCcw,
+  Activity,
 } from 'lucide-react';
 import { NotificationCenter } from '../core/NotificationCenter';
 import { SalamActivityItem, SalamActivityStatus } from '../types';
@@ -503,6 +504,15 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setActiveModal('telemetry-log')}
+            className="px-2.5 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
+            title="فتح سجل بيانات القياس وتشخيص المزامنة (Telemetry Logs)"
+          >
+            <Activity className="w-3.5 h-3.5 animate-pulse text-cyan-400" />
+            <span className="hidden sm:inline">سجل القياس والمزامنة</span>
+          </button>
           <button
             type="button"
             onClick={fetchServerActivities}

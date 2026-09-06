@@ -38,6 +38,8 @@ import { ScheduledRotatorModal } from './components/Modals/ScheduledRotatorModal
 import { LiveLinkDiscoverModal } from './components/Modals/LiveLinkDiscoverModal';
 import { UserProfileModal } from './components/Modals/UserProfileModal';
 import { SalamActivityLog } from './components/SalamActivityLog';
+import { TelemetryLogModal } from './components/Modals/TelemetryLogModal';
+import { logTelemetry, isTelemetryEnabled } from './utils/telemetry';
 import { ForwardModal } from './components/Interactions/ForwardModal';
 import { ChatContextMenuView } from './components/Interactions/ChatContextMenu';
 import { MessageContextMenuView } from './components/Interactions/MessageContextMenu';
@@ -71,22 +73,62 @@ const TelegramAppContent: React.FC = () => {
   const [showUpdateActivity, setShowUpdateActivity] = React.useState(false);
   const isArabic = settings.language === 'ar';
 
-  // Offline-First: Automatic reconnect & background re-sync on network restoration
+  // Offline-First: Automatic reconnect & background re-sync on network restoration + Telemetry Listener
   React.useEffect(() => {
     const handleOnline = () => {
+      // Telemetry log for network restoration
+      logTelemetry({
+        type: 'network_online',
+        category: 'network',
+        reason: 'Browser online event triggered',
+        details: { onLine: true },
+      });
       // Reconnected automatically: refresh data from cloud without user intervention
       refreshDialogs();
     };
     const handleOffline = () => {
+      // Telemetry log for network loss
+      logTelemetry({
+        type: 'network_offline',
+        category: 'network',
+        reason: 'Browser offline event triggered',
+        details: { onLine: false },
+      });
       // Offline mode: non-intrusive strip is displayed automatically via isOffline state
     };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Initial telemetry check when enabled
+    if (isTelemetryEnabled()) {
+      logTelemetry({
+        type: typeof navigator !== 'undefined' && navigator.onLine ? 'network_online' : 'network_offline',
+        category: 'network',
+        reason: `Initial connection state: ${typeof navigator !== 'undefined' && navigator.onLine ? 'Online' : 'Offline'}`,
+        details: { onLine: typeof navigator !== 'undefined' ? navigator.onLine : true },
+      });
+    }
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
   }, [refreshDialogs]);
+
+  // Secret trigger: Toggle Telemetry Log Modal with Alt+T or Ctrl+Shift+T
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        (e.altKey && (e.key === 't' || e.key === 'T' || e.key === 'd' || e.key === 'D')) ||
+        (e.ctrlKey && e.shiftKey && (e.key === 't' || e.key === 'T'))
+      ) {
+        e.preventDefault();
+        setActiveModal(activeModal === 'telemetry-log' ? 'none' : 'telemetry-log');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeModal, setActiveModal]);
 
   // Replicate LaunchActivity.java NotificationCenter observer
   React.useEffect(() => {
@@ -256,6 +298,12 @@ const TelegramAppContent: React.FC = () => {
       {/* Salam Mode Real-Time Activity Log */}
       <SalamActivityLog
         isOpen={activeModal === 'salam-activity-log'}
+        onClose={() => setActiveModal('none')}
+      />
+
+      {/* Telemetry Diagnostics & Latency Log Modal */}
+      <TelemetryLogModal
+        isOpen={activeModal === 'telemetry-log'}
         onClose={() => setActiveModal('none')}
       />
 

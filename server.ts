@@ -773,9 +773,10 @@ async function startServer() {
   });
 
   // 3. Ping Latency Tester (ping_delay_disconnect RPC)
-  app.post('/api/telegram/ping', (req, res) => {
+  app.all('/api/telegram/ping', (req, res) => {
+    const perfBefore = performance.now();
     const startTime = Date.now();
-    const dcId = Number(req.body.dcId) || 4;
+    const dcId = Number(req.body?.dcId || req.query?.dcId) || 4;
     const targetDc = DC_CLUSTERS.find((d) => d.id === dcId) || DC_CLUSTERS[3];
 
     // Compute synthetic latency + cryptographic verification
@@ -783,6 +784,8 @@ async function startServer() {
     const latency = Math.floor(28 + Math.random() * 20);
 
     setTimeout(() => {
+      const perfAfter = performance.now();
+      const serverLatency = Math.round((perfAfter - perfBefore) * 100) / 100;
       res.json({
         success: true,
         pingMs: latency,
@@ -790,6 +793,11 @@ async function startServer() {
         nonce,
         responseAck: `mtproto_ack_${Date.now()}`,
         time: Date.now() - startTime,
+        serverLatency,
+        serverDurationMs: serverLatency,
+        perfBefore,
+        perfAfter,
+        timestamp: new Date().toISOString(),
       });
     }, latency);
   });

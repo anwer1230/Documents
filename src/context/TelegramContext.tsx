@@ -43,6 +43,7 @@ import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { storageSyncManager } from '../utils/StorageSyncManager';
 import { draftSyncService } from '../services/DraftSyncService';
 import { themeController } from '../core/ThemeController';
+import { logTelemetry } from '../utils/telemetry';
 import { PinnedAndForwardHelper } from '../core/PinnedAndForwardHelper';
 import { OpenTelegramLink } from '../core/OpenTelegramLink';
 import {
@@ -110,7 +111,8 @@ interface TelegramContextType {
     | 'user-profile'
     | 'android-notification-shade'
     | 'restricted-content'
-    | 'salam-activity-log';
+    | 'salam-activity-log'
+    | 'telemetry-log';
   selectedProfileUser: ProfileUserInfo | null;
   setSelectedProfileUser: (user: ProfileUserInfo | null) => void;
   openUserProfile: (user: ProfileUserInfo) => void;
@@ -199,6 +201,7 @@ interface TelegramContextType {
       | 'android-notification-shade'
       | 'restricted-content'
       | 'salam-activity-log'
+      | 'telemetry-log'
   ) => void;
   setViewerMedia: (media: { url: string; title?: string; sender?: string; timestamp?: string } | null) => void;
   setReplyingTo: (reply: ReplyInfo | null) => void;
@@ -554,6 +557,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     | 'android-notification-shade'
     | 'restricted-content'
     | 'salam-activity-log'
+    | 'telemetry-log'
   >('none');
   const [selectedProfileUser, setSelectedProfileUser] = useState<ProfileUserInfo | null>(null);
 
@@ -877,6 +881,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Complete cleanup on auth_key revocation to prevent background automation stalls
   const performSessionPurge = (reason: string = 'AUTH_KEY_UNREGISTERED') => {
     console.warn(`[TelegramContext] Performing full session purge due to ${reason}`);
+    logTelemetry({
+      type: 'sync_error',
+      category: 'sync',
+      reason,
+      details: { action: 'performSessionPurge' },
+    });
     setIsAuthenticated(false);
     setActiveModal('none');
     setActiveChatId(null);
@@ -955,6 +965,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Crucial: If server signals AUTH_KEY_UNREGISTERED or session revocation, purge immediately
       if (checkResult.revoked || (!checkResult.valid && checkResult.reason === 'AUTH_KEY_UNREGISTERED')) {
         console.warn('[SessionValidator] MTProto server confirmed session revocation / AUTH_KEY_UNREGISTERED.');
+        logTelemetry({
+          type: 'sync_error',
+          category: 'sync',
+          reason: checkResult.reason || 'AUTH_KEY_UNREGISTERED',
+          details: { action: 'validateSessionProactively' },
+        });
         performSessionPurge('AUTH_KEY_UNREGISTERED');
         showToast(
           settings.language === 'ar'
@@ -2557,6 +2573,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     setIsSyncing(true);
+    const syncStartTime = performance.now();
+    logTelemetry({
+      type: 'sync_start',
+      category: 'sync',
+      reason: 'MTProto sync initiated (messages.getDialogs)',
+    });
     try {
       const activeSessionStr = sessionStringOverride || SecureSessionStorage.getItem<string>('tg_session_string') || '';
       const activePhone = phoneOverride || currentUser.phone || '';
@@ -2573,7 +2595,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       const data = await res.json();
 
-      if (data.sessionRevoked || data.error === 'SESSION_REVOKED') {
+      if (data.sessionRevoked || data.error === 'SESSION_REVOKED' || data.error === 'AUTH_KEY_UNREGISTERED') {
+        const revokedReason = data.reason || data.error || 'AUTH_KEY_UNREGISTERED';
+        logTelemetry({
+          type: 'sync_error',
+          category: 'sync',
+          reason: revokedReason === 'SESSION_REVOKED' ? 'AUTH_KEY_UNREGISTERED' : revokedReason,
+          durationMs: performance.now() - syncStartTime,
+          details: { code: data.error },
+        });
         console.warn('[MTProto Sync] Session was revoked or expired on Telegram server.');
         SecureSessionStorage.removeItem('tg_session_string');
         setAccounts((prev) =>
@@ -2591,7 +2621,33 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
 
+      if (data.error && !data.success && !data.sessionRevoked && data.error !== 'SESSION_REVOKED') {
+        let errCode = data.error;
+        const errReasonStr = String(data.reason || data.message || data.error);
+        if (errReasonStr.includes('AUTH_KEY_UNREGISTERED') || data.error === 'AUTH_KEY_UNREGISTERED') {
+          errCode = 'AUTH_KEY_UNREGISTERED';
+        } else if (errReasonStr.includes('FLOOD_WAIT') || data.error === 'FLOOD_WAIT') {
+          errCode = 'FLOOD_WAIT';
+        } else if (errReasonStr.includes('CHANNEL_PRIVATE') || data.error === 'CHANNEL_PRIVATE') {
+          errCode = 'CHANNEL_PRIVATE';
+        }
+        logTelemetry({
+          type: 'sync_error',
+          category: 'sync',
+          reason: errCode,
+          durationMs: performance.now() - syncStartTime,
+          details: { code: errCode },
+        });
+      }
+
       if (data.success && data.user) {
+        logTelemetry({
+          type: 'sync_success',
+          category: 'sync',
+          reason: 'MTProto sync succeeded',
+          durationMs: performance.now() - syncStartTime,
+          details: { chatsCount: Array.isArray(data.chats) ? data.chats.length : 0, layer: data.layer || 184 },
+        });
         setIsOffline(false);
         setNetworkStatus('online');
 
@@ -2708,7 +2764,22 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         );
         telegramAudio.playSentPop();
       }
-    } catch (err) {
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      let detectedReason = 'SYNC_ERROR';
+      if (errMsg.includes('AUTH_KEY_UNREGISTERED')) detectedReason = 'AUTH_KEY_UNREGISTERED';
+      else if (errMsg.includes('FLOOD_WAIT')) detectedReason = 'FLOOD_WAIT';
+      else if (errMsg.includes('CHANNEL_PRIVATE')) detectedReason = 'CHANNEL_PRIVATE';
+      else if (errMsg.includes('TIMEOUT') || errMsg.includes('timeout') || errMsg.includes('NetworkError')) detectedReason = 'TIMEOUT';
+
+      logTelemetry({
+        type: 'sync_error',
+        category: 'sync',
+        reason: detectedReason,
+        durationMs: performance.now() - syncStartTime,
+        details: { snippet: errMsg.slice(0, 80) },
+      });
+
       console.warn('[Sync] Cloud sync error (Cache-First offline fallback):', err);
       setIsOffline(true);
       setNetworkStatus('offline');
