@@ -2044,8 +2044,23 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setInAppNotifications(notifs);
     });
 
+    const unsubscribeNotifController = notificationsController.subscribe((notif) => {
+      notificationEngine.showNotification({
+        category: notif.category,
+        title: notif.title,
+        body: notif.body,
+        chatId: notif.chatId || '',
+        chatTitle: notif.chatTitle,
+        senderName: notif.senderName,
+        avatar: notif.avatar,
+        isSilent: notif.isSilent,
+        replyAction: notif.replyAction,
+      });
+    });
+
     return () => {
       unsubscribe();
+      unsubscribeNotifController();
     };
   }, []);
 

@@ -692,6 +692,20 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     Promise.all([
       self.registration.showNotification(title, options),
+      persistIncomingPushMessage({
+        dialog_id: targetChatId,
+        chatId: targetChatId,
+        messageId: notifData.messageId || notifData.id || `push_${Date.now()}`,
+        title,
+        text: body,
+        senderName: notifData.senderName || title,
+        avatar: notifData.avatar || icon,
+        timestamp: notifData.timestamp || Date.now(),
+        isSilent: notifData.isSilent || false,
+        raw: notifData,
+      }).catch((err) => {
+        console.warn('[SW Push] persistIncomingPushMessage warning:', err);
+      }),
       self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
         clients.forEach((client) => {
           client.postMessage({

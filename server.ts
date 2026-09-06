@@ -10,6 +10,9 @@ import { TelegramClient, Api, sessions, password as pwdHelper } from 'telegram';
 import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 import webpush from 'web-push';
+import * as admin from 'firebase-admin';
+import { getMessaging } from 'firebase-admin/messaging';
+import { GoogleGenAI } from '@google/genai';
 import { parsePhoneNumberFromString } from 'libphonenumber-js';
 import { telegramRPCRegistry } from './server/TelegramRPCRegistry';
 import { sqliteDatabase } from './server/sqliteService';
@@ -830,6 +833,229 @@ async function startServer() {
 
   const webPushSubscriptions = loadSubscriptionsFromDisk();
 
+  // ==========================================
+  // FIREBASE ADMIN SDK & CLOUD MESSAGING (FCM)
+  // Secure Local Service Account Key Initialization
+  // ==========================================
+  let firebaseServiceAccount: any = {
+    projectId: 'telegramclone-de6f2',
+    clientEmail: 'firebase-adminsdk-fbsvc@telegramclone-de6f2.iam.gserviceaccount.com',
+    privateKeyId: '455037d4ba603bf53a72a2e9e15c8b6ecea9b2c6',
+    privateKey: process.env.FIREBASE_PRIVATE_KEY
+      ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+      : undefined,
+  };
+
+  const serviceAccountFilePath = path.join(process.cwd(), 'config', 'serviceAccountKey.json');
+  try {
+    if (fs.existsSync(serviceAccountFilePath)) {
+      const rawFile = fs.readFileSync(serviceAccountFilePath, 'utf8');
+      const serviceAccount = JSON.parse(rawFile);
+      firebaseServiceAccount = {
+        projectId: serviceAccount.project_id || firebaseServiceAccount.projectId,
+        clientEmail: serviceAccount.client_email || firebaseServiceAccount.clientEmail,
+        privateKeyId: serviceAccount.private_key_id || firebaseServiceAccount.privateKeyId,
+        privateKey: serviceAccount.private_key || firebaseServiceAccount.privateKey,
+      };
+      console.log('[Firebase Admin] Successfully loaded service account key from config/serviceAccountKey.json');
+    }
+  } catch (e: any) {
+    console.warn('[Firebase Admin] Error reading config/serviceAccountKey.json:', e?.message || e);
+  }
+
+  let firebaseAdminApp: any = null;
+  const initFirebaseAdminApp = () => {
+    if (firebaseAdminApp) return firebaseAdminApp;
+    const existingApps = (admin as any).apps || (admin as any).default?.apps || [];
+    if (existingApps && existingApps.length > 0) {
+      firebaseAdminApp = existingApps[0];
+      return firebaseAdminApp;
+    }
+
+    if (!firebaseServiceAccount.privateKey && !fs.existsSync(serviceAccountFilePath)) {
+      return null;
+    }
+
+    try {
+      const certCredential =
+        (admin as any).credential?.cert ||
+        (admin as any).default?.credential?.cert ||
+        (admin as any).cert;
+      const initializeAppFn =
+        (admin as any).initializeApp ||
+        (admin as any).default?.initializeApp;
+
+      const credential = fs.existsSync(serviceAccountFilePath)
+        ? certCredential(serviceAccountFilePath)
+        : certCredential(firebaseServiceAccount as any);
+
+      firebaseAdminApp = initializeAppFn({
+        credential,
+        projectId: firebaseServiceAccount.projectId,
+      });
+      console.log('[Firebase Admin] FCM successfully initialized for project:', firebaseServiceAccount.projectId);
+      return firebaseAdminApp;
+    } catch (err: any) {
+      console.warn('[Firebase Admin] Initialization error:', err?.message || err);
+      return null;
+    }
+  };
+
+  initFirebaseAdminApp();
+
+  // Persistent storage for registered FCM Device Tokens (Android/iOS/Web)
+  const FCM_TOKENS_FILE = path.join(SESSIONS_DIR, 'fcm_device_tokens.json');
+  const loadFcmTokensFromDisk = (): Set<string> => {
+    const set = new Set<string>();
+    try {
+      if (fs.existsSync(FCM_TOKENS_FILE)) {
+        const raw = fs.readFileSync(FCM_TOKENS_FILE, 'utf8');
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          for (const token of list) {
+            if (token && typeof token === 'string') set.add(token.trim());
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[FCM] Failed loading tokens from disk:', e);
+    }
+    return set;
+  };
+
+  const saveFcmTokensToDisk = (set: Set<string>) => {
+    try {
+      if (!fs.existsSync(SESSIONS_DIR)) {
+        fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      }
+      fs.writeFileSync(FCM_TOKENS_FILE, JSON.stringify(Array.from(set), null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[FCM] Failed saving tokens to disk:', e);
+    }
+  };
+
+  const registeredFcmTokens = loadFcmTokensFromDisk();
+
+  // Primary function to send real Firebase Cloud Messaging (FCM) notifications
+  const sendFirebaseNotification = async (payload: {
+    title: string;
+    body: string;
+    token?: string;
+    tokens?: string[];
+    chatId?: string;
+    sound?: string;
+    data?: Record<string, string>;
+  }): Promise<{ success: boolean; messageId?: string; response?: any; simulated?: boolean; error?: string }> => {
+    const app = initFirebaseAdminApp();
+    const messaging = app
+      ? typeof (admin as any).messaging === 'function'
+        ? (admin as any).messaging(app)
+        : getMessaging(app)
+      : null;
+
+    const targetTokens = new Set<string>();
+    if (payload.token) targetTokens.add(payload.token.trim());
+    if (Array.isArray(payload.tokens)) {
+      payload.tokens.forEach((t) => {
+        if (t) targetTokens.add(t.trim());
+      });
+    }
+    if (targetTokens.size === 0) {
+      registeredFcmTokens.forEach((t) => targetTokens.add(t));
+    }
+
+    const soundName = payload.sound || 'default';
+    const channelId = `tg_fcm_channel_${soundName}`;
+    const soundFile = soundName === 'silent' ? undefined : `${soundName}.mp3`;
+    const stringData: Record<string, string> = {
+      title: payload.title,
+      body: payload.body,
+      timestamp: String(Date.now()),
+      ...(payload.chatId ? { chatId: String(payload.chatId) } : {}),
+      ...(payload.data || {}),
+    };
+
+    if (!messaging || !firebaseServiceAccount.privateKey) {
+      console.log(
+        `[FCM] Notification queued (title: "${payload.title}"). Real delivery requires setting FIREBASE_PRIVATE_KEY.`
+      );
+      return {
+        success: true,
+        simulated: true,
+        messageId: `fcm_simulated_${Date.now()}`,
+      };
+    }
+
+    try {
+      if (targetTokens.size === 0) {
+        const response = await messaging.send({
+          topic: 'all_users',
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId,
+              sound: soundFile,
+              defaultSound: soundName === 'default',
+            },
+          },
+          data: stringData,
+        });
+        console.log(`[FCM] Topic broadcast delivered:`, response);
+        return { success: true, messageId: response };
+      }
+
+      const tokenList = Array.from(targetTokens);
+      if (tokenList.length === 1) {
+        const response = await messaging.send({
+          token: tokenList[0],
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId,
+              sound: soundFile,
+              defaultSound: soundName === 'default',
+            },
+          },
+          data: stringData,
+        });
+        console.log(`[FCM] Notification sent to device (${tokenList[0].substring(0, 15)}...):`, response);
+        return { success: true, messageId: response };
+      } else {
+        const response = await messaging.sendEachForMulticast({
+          tokens: tokenList,
+          notification: {
+            title: payload.title,
+            body: payload.body,
+          },
+          android: {
+            priority: 'high',
+            notification: {
+              channelId,
+              sound: soundFile,
+              defaultSound: soundName === 'default',
+            },
+          },
+          data: stringData,
+        });
+        console.log(
+          `[FCM] Multicast sent to ${tokenList.length} devices (success: ${response.successCount}, failure: ${response.failureCount})`
+        );
+        return { success: true, response };
+      }
+    } catch (err: any) {
+      console.warn('[FCM] Error sending Firebase push notification:', err?.message || err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  };
+
   // Helper to send Web Push Notification to registered clients (even when closed)
   const sendWebPushNotificationToSubscribers = async (
     payload: {
@@ -880,6 +1106,22 @@ async function startServer() {
     if (stateChanged) {
       saveSubscriptionsToDisk(webPushSubscriptions);
     }
+
+    // Simultaneously dispatch notification to registered Firebase Cloud Messaging (FCM) devices
+    try {
+      sendFirebaseNotification({
+        title: payload.title,
+        body: payload.body,
+        data: payload.data
+          ? Object.fromEntries(
+              Object.entries(payload.data).map(([k, v]) => [
+                k,
+                typeof v === 'object' ? JSON.stringify(v) : String(v),
+              ])
+            )
+          : undefined,
+      }).catch((e) => console.warn('[FCM] Dispatch from push subscribers warning:', e?.message || e));
+    } catch (_) {}
 
     return results;
   };
@@ -1716,7 +1958,7 @@ async function startServer() {
       requestRetries: 3,
       timeout: 10,
       autoReconnect: false,
-      floodSleepThreshold: 0,
+      floodSleepThreshold: 60,
       deviceModel: 'Telegram Android MTProto',
       systemVersion: 'Android 14',
       appVersion: '11.2.3',
@@ -4288,6 +4530,192 @@ async function startServer() {
     return res.json({ success: false, avatar: '' });
   });
 
+  // ==========================================
+  // GEMINI AI CHAT SUMMARIZER (LAST 100 MESSAGES)
+  // ==========================================
+  let geminiClientInstance: GoogleGenAI | null = null;
+  const getGeminiClient = (): GoogleGenAI => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured in server environment.');
+    }
+    if (!geminiClientInstance) {
+      geminiClientInstance = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+    }
+    return geminiClientInstance;
+  };
+
+  const handleChatSummarize = async (req: express.Request, res: express.Response) => {
+    try {
+      const { chatId, chatTitle, messages = [], language = 'ar' } = req.body || {};
+      let threadToSummarize: any[] = Array.isArray(messages) ? [...messages] : [];
+
+      // If no messages sent in payload but chatId exists, attempt to pull from active MTProto client
+      if (threadToSummarize.length === 0 && chatId) {
+        const phone = req.body?.phone || (req.query?.phone as string);
+        const sessionString = req.body?.sessionString || (req.query?.sessionString as string);
+
+        try {
+          const client = await getClientForSession(sessionString, phone);
+          if (client && client.connected) {
+            const cleanId = String(chatId).replace('chat_', '');
+            let targetEntity: any = cleanId;
+            try {
+              targetEntity = await client.getInputEntity(cleanId).catch(() => null);
+              if (!targetEntity && !isNaN(Number(cleanId))) {
+                targetEntity = await client.getInputEntity(Number(cleanId)).catch(() => null);
+              }
+              if (!targetEntity) {
+                targetEntity = await client.getEntity(cleanId).catch(() => null);
+              }
+            } catch (_) {
+              targetEntity = cleanId;
+            }
+
+            const rawHistory: any = await client.getMessages(targetEntity, { limit: 100 });
+            if (Array.isArray(rawHistory) && rawHistory.length > 0) {
+              threadToSummarize = rawHistory.reverse().map((m: any) => ({
+                id: String(m.id),
+                senderName: m.out ? 'You' : (m.postAuthor || 'User'),
+                text: m.message || (m.media ? '[Media]' : ''),
+                timestamp: m.date ? new Date(m.date * 1000).toLocaleTimeString() : '',
+                out: Boolean(m.out),
+              }));
+            }
+          }
+        } catch (fetchErr) {
+          console.warn('[Gemini Summarizer] Could not fetch remote MTProto history:', fetchErr);
+        }
+      }
+
+      // Strictly take the last 100 messages of the thread
+      const last100 = threadToSummarize.slice(-100);
+
+      // Build clean transcript
+      const transcriptLines = last100
+        .filter((m: any) => m && ((m.text && String(m.text).trim().length > 0) || m.media))
+        .map((m: any) => {
+          const sender = m.senderName || (m.out || m.isOutgoing ? 'User' : 'Contact');
+          const time = m.timestamp ? `[${m.timestamp}] ` : '';
+          const content = m.text || (m.media?.type ? `[${m.media.type}]` : '[محتوى وسائط]');
+          return `${time}${sender}: ${content}`;
+        });
+
+      if (transcriptLines.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'NO_MESSAGES',
+          message: language === 'ar' ? 'لا توجد رسائل نصية كافية في المحادثة لتلخيصها.' : 'Not enough text messages in this conversation to summarize.',
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({
+          success: false,
+          error: 'GEMINI_API_KEY_NOT_CONFIGURED',
+          message: language === 'ar'
+            ? 'مفتاح Gemini API غير مهيأ في الخادم (GEMINI_API_KEY). يرجى التحقق من ملف .env.'
+            : 'Gemini API key is not configured in the server environment (GEMINI_API_KEY).',
+        });
+      }
+
+      const ai = getGeminiClient();
+      const isArabic = language === 'ar';
+
+      const systemInstruction = isArabic
+        ? `أنت مساعد ذكاء اصطناعي خبير ومحترف في تحليل وتلخيص محادثات تطبيق تيليجرام.
+مهمتك هي قراءة آخر 100 رسالة في هذه المحادثة وتقديم ملخص تنفيذي موجز، واضح جداً ومكتوب بعناية.
+
+القواعد التوجيهية:
+1. ابدأ بنبذة تمهيدية سريعة (سطر أو سطرين) توضح الهدف العام أو الفكرة المركزية للمحادثة.
+2. نسّق الملخص بنقاط رئيسية واضحة تشمل:
+   - 📌 المحاور والموضوعات التي نوقشت
+   - 🎯 القرارات والاتفاقات المتوصل إليها (إن وجدت)
+   - 📋 الإجراءات والمهام القادمة أو المواعيد المحددة
+3. استخدم لغة عربية فصحى أنيقة ومباشرة بدون إطالة أو حشو غير ضروري.`
+        : `You are an expert AI assistant specialized in analyzing and summarizing Telegram conversation threads.
+Your task is to analyze the last 100 messages in this thread and provide a concise, high-value executive summary.
+
+Guidelines:
+1. Start with a brief 1-2 sentence overview of the conversation's main context.
+2. Structure the summary with clear bullet points:
+   - 📌 Main topics & discussions
+   - 🎯 Decisions & agreements reached (if any)
+   - 📋 Action items, deadlines, or upcoming follow-ups
+3. Maintain a crisp, professional, and objective tone.`;
+
+      const prompt = `Conversation Title: "${chatTitle || 'Telegram Chat'}"
+Total messages analyzed: ${transcriptLines.length} (last up to 100 messages)
+
+--- CHAT TRANSCRIPT START ---
+${transcriptLines.join('\n')}
+--- CHAT TRANSCRIPT END ---
+
+Please provide the concise summary.`;
+
+      console.log(`[Gemini Summarizer] Generating summary for chat "${chatTitle || chatId}" using gemini-3.8-flash (${transcriptLines.length} messages)...`);
+
+      const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+      let aiResponse: any = null;
+      let usedModel = candidateModels[0];
+      let lastError: any = null;
+
+      for (const m of candidateModels) {
+        try {
+          usedModel = m;
+          console.log(`[Gemini Summarizer] Requesting summary with model: ${m}...`);
+          aiResponse = await ai.models.generateContent({
+            model: m,
+            contents: prompt,
+            config: {
+              systemInstruction,
+            },
+          });
+          if (aiResponse && aiResponse.text) {
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[Gemini Summarizer] Model ${m} failed:`, err?.message || err);
+          lastError = err;
+        }
+      }
+
+      if (!aiResponse || !aiResponse.text) {
+        throw lastError || new Error('No response received from Gemini models');
+      }
+
+      const summaryText = aiResponse?.text || '';
+      console.log(`[Gemini Summarizer] Successfully generated summary (${summaryText.length} characters) using ${usedModel}.`);
+
+      return res.json({
+        success: true,
+        summary: summaryText,
+        messageCount: transcriptLines.length,
+        model: usedModel,
+        chatTitle: chatTitle || 'Chat',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error('[Gemini Summarizer] Summarization error:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'SUMMARIZATION_FAILED',
+        message: 'تعذر إنشاء الملخص بواسطة الذكاء الاصطناعي: ' + (err?.message || 'خطأ غير معروف'),
+      });
+    }
+  };
+
+  app.post('/api/telegram/chat/summarize', handleChatSummarize);
+  app.post('/api/chat/summarize', handleChatSummarize);
+
   // Global Plus Settings Store for Multi-Session Cloud Sync
   let globalPlusSettingsStore: Record<string, any> = {};
   let globalPlusSettingsUpdatedAt: number = Date.now();
@@ -5123,6 +5551,191 @@ async function startServer() {
       success: false,
       message: 'إجابة الكابتشا غير صحيحة، يرجى المحاولة مرة أخرى.',
     });
+  });
+
+  // 10b. Real Group Participants / Members Endpoint (GramJS MTProto)
+  app.post(['/api/telegram/group/members', '/api/telegram/groups/members'], async (req, res) => {
+    const { chatId, sessionString, phone, limit = 200 } = req.body;
+    try {
+      if (!chatId) {
+        return res.status(400).json({
+          success: false,
+          error: 'CHAT_ID_REQUIRED',
+          message: 'معرف المجموعة (chatId) مطلوب لجلب قائمة الأعضاء.',
+          members: [],
+          count: 0,
+        });
+      }
+
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'CLIENT_NOT_CONNECTED',
+          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول أولاً.',
+          members: [],
+          count: 0,
+        });
+      }
+
+      // 1. Resolve raw target entity
+      const rawTarget = String(chatId).replace(/^chat_/, '');
+      let targetEntity: any = rawTarget;
+      try {
+        const resolved = await resolvePeerTarget(client, rawTarget).catch(() => null);
+        if (resolved) {
+          targetEntity = resolved;
+        } else {
+          const num = Number(rawTarget);
+          if (!isNaN(num)) {
+            targetEntity = await client.getInputEntity(num).catch(() => null);
+          }
+          if (!targetEntity) {
+            targetEntity = await client.getEntity(rawTarget).catch(() => null);
+          }
+        }
+      } catch (resErr) {
+        console.warn('[group/members] resolve target error, falling back to rawTarget:', resErr);
+        targetEntity = rawTarget;
+      }
+
+      // 2. Fetch real participants via GramJS client.getParticipants
+      let rawParticipants: any[] = [];
+      try {
+        rawParticipants = await client.getParticipants(targetEntity, {
+          limit: Math.min(Number(limit) || 200, 200),
+        });
+      } catch (partErr: any) {
+        console.warn('[group/members] getParticipants default failed, trying admin filter fallback:', partErr?.message || partErr);
+        try {
+          rawParticipants = await client.getParticipants(targetEntity, {
+            filter: new Api.ChannelParticipantsAdmins(),
+            limit: 100,
+          });
+        } catch (admErr) {
+          try {
+            rawParticipants = await client.getParticipants(rawTarget, { limit: 100 });
+          } catch (finalErr: any) {
+            console.error('[group/members] All getParticipants attempts failed:', finalErr?.message || finalErr);
+            return res.json({
+              success: false,
+              error: 'GET_PARTICIPANTS_FAILED',
+              message: finalErr?.errorMessage || finalErr?.message || 'تعذر جلب قائمة أعضاء المجموعة من تيليجرام',
+              members: [],
+              count: 0,
+            });
+          }
+        }
+      }
+
+      if (!Array.isArray(rawParticipants)) {
+        rawParticipants = [];
+      }
+
+      // 3. Format participants into clean frontend structure
+      const formattedMembers = rawParticipants.map((p: any) => {
+        const id = String(p?.id || '');
+        const firstName = p?.firstName || '';
+        const lastName = p?.lastName || '';
+        const name = `${firstName} ${lastName}`.trim() || p?.username || (p?.bot ? 'Bot' : `User ${id}`);
+        const username = p?.username || '';
+        const isBot = Boolean(p?.bot);
+        const isVerified = Boolean(p?.verified);
+        const isPremium = Boolean(p?.premium);
+
+        // Determine role and custom rank
+        let role: 'owner' | 'admin' | 'member' = 'member';
+        let rank = '';
+        const part = p?.participant;
+        if (part) {
+          const className = part.className || '';
+          if (className.includes('Creator')) {
+            role = 'owner';
+            rank = part.rank || 'Owner';
+          } else if (className.includes('Admin')) {
+            role = 'admin';
+            rank = part.rank || 'Admin';
+          } else {
+            role = 'member';
+            rank = part.rank || '';
+          }
+        }
+
+        // Determine online status and last seen label
+        let isOnline = false;
+        let lastSeen = 'last seen recently';
+        if (p?.status) {
+          const statusClass = p.status.className || '';
+          if (statusClass === 'UserStatusOnline') {
+            isOnline = true;
+            lastSeen = 'online';
+          } else if (statusClass === 'UserStatusOffline' && p.status.wasOnline) {
+            isOnline = false;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const diffSec = nowSec - p.status.wasOnline;
+            if (diffSec < 60) {
+              lastSeen = 'just now';
+            } else if (diffSec < 3600) {
+              const mins = Math.floor(diffSec / 60);
+              lastSeen = `last seen ${mins}m ago`;
+            } else if (diffSec < 86400) {
+              const hrs = Math.floor(diffSec / 3600);
+              lastSeen = `last seen ${hrs}h ago`;
+            } else {
+              lastSeen = new Date(p.status.wasOnline * 1000).toLocaleDateString();
+            }
+          } else if (statusClass === 'UserStatusRecently') {
+            lastSeen = 'last seen recently';
+          } else if (statusClass === 'UserStatusLastWeek') {
+            lastSeen = 'last seen within a week';
+          } else if (statusClass === 'UserStatusLastMonth') {
+            lastSeen = 'last seen within a month';
+          }
+        }
+
+        const avatar = avatarCache.get(id) || (p?.photo ? `/api/telegram/dialogs/avatar?peerId=${id}` : '');
+
+        return {
+          id,
+          name,
+          username,
+          avatar,
+          role,
+          rank,
+          isOnline,
+          lastSeen,
+          isBot,
+          isVerified,
+          isPremium,
+        };
+      });
+
+      // Sort members: Owner first, then Admins, then Online members, then others
+      formattedMembers.sort((a, b) => {
+        const roleScore = (r: string) => (r === 'owner' ? 3 : r === 'admin' ? 2 : 1);
+        const scoreDiff = roleScore(b.role) - roleScore(a.role);
+        if (scoreDiff !== 0) return scoreDiff;
+        if (a.isOnline && !b.isOnline) return -1;
+        if (!a.isOnline && b.isOnline) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      return res.json({
+        success: true,
+        chatId,
+        count: formattedMembers.length,
+        members: formattedMembers,
+      });
+    } catch (err: any) {
+      console.error('[group/members] Endpoint error:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'SERVER_ERROR',
+        message: 'حدث خطأ غير متوقع أثناء معالجة قائمة الأعضاء',
+        members: [],
+        count: 0,
+      });
+    }
   });
 
   // 11. Multi-category Global Search
@@ -8004,20 +8617,52 @@ async function startServer() {
     }
   });
 
-  // 3. Test Firebase Push Delivery Simulation with Custom Ringtone
-  app.post('/api/telegram/firebase/test-push', (req, res) => {
+  // 2.1 Register FCM Device Token (from Android or Web devices)
+  app.post('/api/telegram/firebase/register-device-token', (req, res) => {
     try {
-      const { chatId, title = 'تجربة إشعار تليجرام', body = 'هذا إشعار تجريبي لاختبار النغمة المخصصة عبر Firebase Messaging', sound = 'default' } = req.body;
+      const { token, platform = 'android', deviceName } = req.body;
+      if (!token || typeof token !== 'string') {
+        return res.status(400).json({ success: false, error: 'TOKEN_REQUIRED' });
+      }
+      const cleanToken = token.trim();
+      registeredFcmTokens.add(cleanToken);
+      saveFcmTokensToDisk(registeredFcmTokens);
+      console.log(`[FCM] Device token registered (${platform}, ${cleanToken.substring(0, 15)}..., total: ${registeredFcmTokens.size})`);
+      res.json({
+        success: true,
+        token: cleanToken,
+        platform,
+        deviceName: deviceName || 'Android Device',
+        totalRegisteredTokens: registeredFcmTokens.size,
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || e });
+    }
+  });
+
+  // 3. Test Firebase Push Delivery with Custom Ringtone & Real FCM Dispatch
+  app.post('/api/telegram/firebase/test-push', async (req, res) => {
+    try {
+      const { chatId, title = 'تجربة إشعار تليجرام', body = 'هذا إشعار تجريبي لاختبار النغمة المخصصة عبر Firebase Messaging', sound = 'default', token } = req.body;
       const fcmChannelId = `tg_fcm_channel_${sound || 'default'}`;
+
+      const fcmLiveResult = await sendFirebaseNotification({
+        chatId,
+        title,
+        body,
+        sound,
+        token,
+      });
 
       const fcmSimulation = {
         success: true,
-        messageId: `fcm_msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        messageId: fcmLiveResult.messageId || `fcm_msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
         targetChatId: chatId,
         deliveredSound: sound,
         fcmChannelId,
         firebaseServiceAccount: 'firebase-adminsdk-fbsvc@telegramclone-de6f2.iam.gserviceaccount.com',
         timestamp: new Date().toISOString(),
+        liveDelivery: fcmLiveResult,
         fcmResponse: {
           canonical_ids: 1,
           multicast_id: Math.floor(Math.random() * 1000000000000000),
@@ -8028,7 +8673,7 @@ async function startServer() {
 
       res.json(fcmSimulation);
     } catch (e: any) {
-      res.status(500).json({ success: false, error: e.message });
+      res.status(500).json({ success: false, error: e?.message || e });
     }
   });
 

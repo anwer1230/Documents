@@ -646,6 +646,11 @@ export class NotificationsService {
             hash,
           });
           task.status = 'joined';
+          notificationsController.postNotification({
+            category: 'channel_post',
+            title: 'تم الانضمام إلى المجموعة بنجاح 🎉',
+            body: `تم الانضمام بنجاح عبر الرابط: ${task.url}`,
+          });
         } catch (e: any) {
           const errText = e?.text || e?.message || '';
           if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
@@ -665,6 +670,11 @@ export class NotificationsService {
             channel: username,
           });
           task.status = 'joined';
+          notificationsController.postNotification({
+            category: 'channel_post',
+            title: 'تم الانضمام إلى المجموعة/القناة بنجاح 🎉',
+            body: `تم الانضمام بنجاح: @${username}`,
+          });
         } catch (e: any) {
           const errText = e?.text || e?.message || '';
           if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
