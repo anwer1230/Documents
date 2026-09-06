@@ -554,6 +554,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             {/* MEDIA: Voice note with real audio waves */}
             {message.media?.type === 'voice' && (
               <AudioPlayerWaveform
+                messageId={message.id}
+                chatId={message.chatId}
+                senderName={message.senderName}
                 audioUrl={message.media.url}
                 duration={message.media.duration || 12}
                 waveform={message.media.waveform}

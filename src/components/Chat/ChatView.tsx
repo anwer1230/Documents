@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Send, ShieldAlert, Lock, Info } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { ChatHeader } from './ChatHeader';
+import { VoicePlaybackTopBar } from './VoicePlaybackTopBar';
 import { PinnedMessageBar } from './PinnedMessageBar';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
@@ -116,6 +117,7 @@ export const ChatView: React.FC = () => {
       }}
     >
       <ChatHeader />
+      <VoicePlaybackTopBar />
       <PinnedMessageBar />
       <MessageList />
       <ChatInput />
