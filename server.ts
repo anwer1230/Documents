@@ -1356,8 +1356,9 @@ async function startServer() {
                   }
                 } catch (_) {}
 
-                const messageDate = new Date(event.message.date * 1000);
-                const formattedTime = messageDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                // استخدام وقت الرسالة الفعلي القادم من تيليجرام (event.message.date أو msg.date برقم الثواني)
+                const messageDate = new Date((event?.message?.date ?? msg?.date ?? event.message.date) * 1000);
+                const formattedTime = messageDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
                 const alertId = `alert_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
                 const alertItem: AlertLogItem = {
