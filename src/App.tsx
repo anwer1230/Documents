@@ -55,10 +55,37 @@ import { NotificationCenter } from './core/NotificationCenter';
 import { appUpdateController } from './core/messenger/AppUpdateController';
 
 const TelegramAppContent: React.FC = () => {
-  const { isAuthenticated, inAppNotifications, dismissNotification, activeModal, setActiveModal, showToast, settings } = useTelegram();
+  const {
+    isAuthenticated,
+    inAppNotifications,
+    dismissNotification,
+    activeModal,
+    setActiveModal,
+    showToast,
+    settings,
+    isOffline,
+    refreshDialogs,
+  } = useTelegram();
   const [showUpdateDialog, setShowUpdateDialog] = React.useState(false);
   const [showUpdateActivity, setShowUpdateActivity] = React.useState(false);
   const isArabic = settings.language === 'ar';
+
+  // Offline-First: Automatic reconnect & background re-sync on network restoration
+  React.useEffect(() => {
+    const handleOnline = () => {
+      // Reconnected automatically: refresh data from cloud without user intervention
+      refreshDialogs();
+    };
+    const handleOffline = () => {
+      // Offline mode: non-intrusive strip is displayed automatically via isOffline state
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [refreshDialogs]);
 
   // Replicate LaunchActivity.java NotificationCenter observer
   React.useEffect(() => {
@@ -96,8 +123,30 @@ const TelegramAppContent: React.FC = () => {
 
   if (!isAuthenticated) {
     return (
-      <div id="tg-auth-wrapper" className="w-screen h-screen min-h-screen bg-[#0e1621] text-white overflow-hidden relative select-none">
-        <TelegramAuthScreen />
+      <div id="tg-auth-wrapper" className="w-screen h-screen min-h-screen bg-[#0e1621] text-white overflow-hidden relative select-none flex flex-col">
+        {isOffline && (
+          <div
+            id="tg-offline-top-strip-auth"
+            role="status"
+            aria-live="polite"
+            className="w-full bg-[#182533] border-b border-amber-500/30 px-3 py-1.5 flex items-center justify-between text-xs text-amber-200 select-none z-50 shrink-0"
+          >
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+              </span>
+              <span className="font-medium text-[11px] sm:text-xs">
+                {isArabic
+                  ? 'في انتظار الاتصال بالشبكة... (وضع عدم الاتصال)'
+                  : 'Waiting for network... (Offline mode)'}
+              </span>
+            </div>
+          </div>
+        )}
+        <div className="flex-1 w-full h-full relative overflow-hidden">
+          <TelegramAuthScreen />
+        </div>
         <ToastContainer />
       </div>
     );
@@ -105,14 +154,45 @@ const TelegramAppContent: React.FC = () => {
 
   return (
     <div
-      id="tg-app-root"
-      className="fixed inset-0 w-full h-full h-[100dvh] flex overflow-hidden font-sans select-none"
+      className="fixed inset-0 w-full h-full h-[100dvh] flex flex-col overflow-hidden font-sans select-none"
       style={{
         backgroundColor: 'var(--tg-theme-bg)',
       }}
     >
-      {/* Left Sidebar (Chats, Folders, Search) */}
-      <Sidebar />
+      {/* Telegram Official Offline Top Strip (Non-intrusive, keeps rest of app fully live & readable) */}
+      {isOffline && (
+        <div
+          id="tg-offline-top-strip"
+          role="status"
+          aria-live="polite"
+          className="w-full bg-[#182533] border-b border-amber-500/40 px-3 py-1.5 flex items-center justify-between text-xs text-amber-200 select-none z-50 transition-all duration-300 shadow-sm shrink-0"
+        >
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+            </span>
+            <span className="font-medium text-[11px] sm:text-xs">
+              {isArabic
+                ? 'في انتظار الاتصال بالشبكة... (وضع عدم الاتصال: عرض المحادثات والرسائل المحفوظة محلياً)'
+                : 'Waiting for network... (Offline mode: viewing locally cached chats & messages)'}
+            </span>
+          </div>
+          <button
+            onClick={() => refreshDialogs()}
+            className="px-2.5 py-0.5 rounded-full bg-white/10 hover:bg-white/20 active:bg-white/30 text-[10px] sm:text-[11px] font-semibold text-white transition-colors cursor-pointer"
+          >
+            {isArabic ? 'إعادة المحاولة' : 'Retry'}
+          </button>
+        </div>
+      )}
+
+      <div
+        id="tg-app-root"
+        className="flex-1 w-full h-full flex overflow-hidden relative"
+      >
+        {/* Left Sidebar (Chats, Folders, Search) */}
+        <Sidebar />
 
       {/* Center Chat Feed / Message View */}
       <ChatView />
@@ -221,6 +301,7 @@ const TelegramAppContent: React.FC = () => {
 
       {/* Android FLAG_SECURE Screenshot Blocked Alert */}
       <ScreenshotBlockedToast />
+      </div>
     </div>
   );
 };

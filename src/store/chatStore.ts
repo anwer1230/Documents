@@ -9,6 +9,9 @@
  * - Live update on scroll: updates lastReadMessageId and scroll position dynamically
  */
 
+import { Chat, Message } from '../types';
+import { telegramDB } from '../utils/sqliteStorage';
+
 export interface ChatReadPosition {
   chatId: string;
   lastReadMessageId?: string;
@@ -40,6 +43,16 @@ export class ChatStore {
   private readonly STORAGE_KEY = 'tg_last_read_positions';
   private readonly SCROLL_POSITIONS_KEY = 'tg_scroll_positions';
 
+  // Offline-First Cache storage keys
+  private readonly CHATS_STORAGE_KEY = 'tg_offline_cached_chats_v1';
+  private readonly MESSAGES_STORAGE_PREFIX = 'tg_offline_cached_msgs_';
+  private readonly MESSAGES_INDEX_KEY = 'tg_offline_cached_chat_ids_v1';
+
+  // Synchronous in-memory caches to guarantee ZERO white screens on startup
+  private cachedChats: Chat[] = [];
+  private cachedMessages: Map<string, Message[]> = new Map();
+  private cachedChatIds: Set<string> = new Set();
+
   constructor() {
     this.initFromStorage();
   }
@@ -52,7 +65,7 @@ export class ChatStore {
   }
 
   /**
-   * Load persistent scroll positions from localStorage (both tg_scroll_positions & tg_last_read_positions)
+   * Load persistent scroll positions & offline-cached chats and messages from localStorage
    */
   private initFromStorage(): void {
     if (typeof window === 'undefined') return;
@@ -86,6 +99,45 @@ export class ChatStore {
           });
         }
       }
+
+      // 3. Load offline-cached chats
+      const storedChats = localStorage.getItem(this.CHATS_STORAGE_KEY);
+      if (storedChats) {
+        try {
+          const parsedChats = JSON.parse(storedChats);
+          if (Array.isArray(parsedChats) && parsedChats.length > 0) {
+            this.cachedChats = parsedChats;
+          }
+        } catch (e) {
+          console.warn('[chatStore] Error parsing cached chats:', e);
+        }
+      }
+
+      // 4. Load offline-cached chat message IDs index
+      const storedIndex = localStorage.getItem(this.MESSAGES_INDEX_KEY);
+      if (storedIndex) {
+        try {
+          const parsedIndex = JSON.parse(storedIndex);
+          if (Array.isArray(parsedIndex)) {
+            this.cachedChatIds = new Set(parsedIndex);
+            // Pre-load cached messages for quick access
+            for (const cId of parsedIndex) {
+              const msgKey = this.MESSAGES_STORAGE_PREFIX + cId;
+              const rawMsgs = localStorage.getItem(msgKey);
+              if (rawMsgs) {
+                try {
+                  const msgs = JSON.parse(rawMsgs);
+                  if (Array.isArray(msgs)) {
+                    this.cachedMessages.set(cId, msgs);
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[chatStore] Error parsing cached message index:', e);
+        }
+      }
     } catch (err) {
       console.warn('[chatStore] Error reading positions from localStorage:', err);
     }
@@ -102,6 +154,151 @@ export class ChatStore {
     } catch (err) {
       console.warn('[chatStore] Error saving positions to localStorage:', err);
     }
+  }
+
+  // ==========================================
+  // OFFLINE-FIRST CACHE OPS FOR CHATS & MESSAGES
+  // ==========================================
+
+  /**
+   * Save chats list immediately to memory, localStorage, and IndexedDB SQLite
+   */
+  public saveChats(chats: Chat[]): void {
+    if (!Array.isArray(chats) || chats.length === 0) return;
+    this.cachedChats = chats;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.CHATS_STORAGE_KEY, JSON.stringify(chats));
+      } catch (e) {
+        console.warn('[chatStore] Error saving cached chats to localStorage:', e);
+      }
+    }
+    try {
+      telegramDB.saveChats(chats);
+    } catch {}
+  }
+
+  /**
+   * Retrieve cached chats synchronously (Zero-latency cache first)
+   */
+  public getCachedChats(): Chat[] {
+    if (this.cachedChats && this.cachedChats.length > 0) {
+      return this.cachedChats;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(this.CHATS_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this.cachedChats = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    try {
+      const sqliteChats = telegramDB.getChats();
+      if (sqliteChats && sqliteChats.length > 0) {
+        this.cachedChats = sqliteChats;
+        return sqliteChats;
+      }
+    } catch {}
+    return [];
+  }
+
+  /**
+   * Save messages list for a chat immediately to memory, localStorage, and IndexedDB SQLite
+   */
+  public saveMessages(chatId: string, messages: Message[]): void {
+    if (!chatId || !Array.isArray(messages)) return;
+    this.cachedMessages.set(chatId, messages);
+    this.cachedChatIds.add(chatId);
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(this.MESSAGES_STORAGE_PREFIX + chatId, JSON.stringify(messages));
+        localStorage.setItem(this.MESSAGES_INDEX_KEY, JSON.stringify(Array.from(this.cachedChatIds)));
+      } catch (e) {
+        console.warn(`[chatStore] Error saving cached messages for ${chatId}:`, e);
+      }
+    }
+    try {
+      telegramDB.saveMessages(messages);
+    } catch {}
+  }
+
+  /**
+   * Save or update a single message immediately to memory, localStorage, and IndexedDB SQLite
+   */
+  public saveMessage(chatId: string, message: Message): void {
+    if (!chatId || !message || !message.id) return;
+    const existing = this.getCachedMessages(chatId);
+    const existsIndex = existing.findIndex((m) => m.id === message.id);
+    let updated: Message[];
+    if (existsIndex >= 0) {
+      updated = [...existing];
+      updated[existsIndex] = message;
+    } else {
+      updated = [...existing, message];
+    }
+    this.saveMessages(chatId, updated);
+    try {
+      telegramDB.saveMessage(message);
+    } catch {}
+  }
+
+  /**
+   * Retrieve cached messages for a chat synchronously (Zero-latency cache first)
+   */
+  public getCachedMessages(chatId: string): Message[] {
+    if (!chatId) return [];
+    if (this.cachedMessages.has(chatId)) {
+      const msgs = this.cachedMessages.get(chatId)!;
+      if (msgs.length > 0) return msgs;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(this.MESSAGES_STORAGE_PREFIX + chatId);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            this.cachedMessages.set(chatId, parsed);
+            this.cachedChatIds.add(chatId);
+            return parsed;
+          }
+        }
+      } catch {}
+    }
+    try {
+      const sqliteMsgs = telegramDB.getMessagesForChat(chatId);
+      if (sqliteMsgs && sqliteMsgs.length > 0) {
+        this.cachedMessages.set(chatId, sqliteMsgs);
+        return sqliteMsgs;
+      }
+    } catch {}
+    return [];
+  }
+
+  /**
+   * Get all cached messages across all chats synchronously
+   */
+  public getAllCachedMessages(): Record<string, Message[]> {
+    const result: Record<string, Message[]> = {};
+    for (const [cId, msgs] of this.cachedMessages.entries()) {
+      if (msgs && msgs.length > 0) {
+        result[cId] = msgs;
+      }
+    }
+    for (const cId of this.cachedChatIds) {
+      if (!result[cId]) {
+        const msgs = this.getCachedMessages(cId);
+        if (msgs.length > 0) {
+          result[cId] = msgs;
+        }
+      }
+    }
+    return result;
   }
 
   /**

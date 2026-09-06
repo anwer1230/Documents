@@ -618,3 +618,5 @@ class TelegramSQLiteDatabase {
 }
 
 export const telegramDB = new TelegramSQLiteDatabase();
+export const sqliteStorage = telegramDB;
+export { TelegramSQLiteDatabase };

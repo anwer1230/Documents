@@ -14,11 +14,13 @@ import {
   Trash2,
   MailCheck,
   ShieldAlert,
+  Edit3,
 } from 'lucide-react';
 import { Chat } from '../../types';
 import { useTelegram } from '../../context/TelegramContext';
 import { useLongPress, useChatSwipeActions } from '../../hooks/useTouchGestures';
 import { formatChatListTime } from '../../utils/dateUtils';
+import { draftSyncService } from '../../services/DraftSyncService';
 
 interface ChatListItemProps {
   chat: Chat;
@@ -42,6 +44,7 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
 
   const isSavedMessages = chat.type === 'saved';
   const isRtl = settings.language === 'ar';
+  const effectiveDraft = chat.draft || draftSyncService.getDraftText(chat.id);
 
   const renderStatusCheck = (status?: string) => {
     if (!status) return null;
@@ -239,9 +242,9 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
               )}
             </div>
 
-            <span className="text-[12px] text-gray-400 shrink-0 whitespace-nowrap font-mono">
-              {chat.draft
-                ? chat.draftTimestamp || 'مسودة'
+            <span className={`text-[12px] shrink-0 whitespace-nowrap font-mono ${effectiveDraft ? 'text-[#e53935] font-medium' : 'text-gray-400'}`}>
+              {effectiveDraft
+                ? chat.draftTimestamp || (settings.language === 'ar' ? 'مسودة' : 'Draft')
                 : chat.lastMessage
                 ? formatChatListTime(chat.lastMessage.rawDate || chat.lastMessage.epoch || chat.lastMessage.date) || chat.lastMessage.timestamp
                 : ''}
@@ -269,13 +272,14 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
 
           {/* Bottom Row: Last Message Snippet OR Draft + Status + Unread / Pin */}
           <div className="flex items-center justify-between gap-2">
-            {chat.draft ? (
+            {effectiveDraft ? (
               <div className="flex items-center gap-1 min-w-0 text-[15px] truncate">
+                <Edit3 className="w-3.5 h-3.5 text-[#e53935] shrink-0" />
                 <span className="text-[#e53935] font-semibold shrink-0">
                   {settings.language === 'ar' ? 'مسودة:' : 'Draft:'}
                 </span>
-                <span className="text-gray-300 truncate">
-                  {chat.draft}
+                <span className="text-gray-300 truncate font-normal">
+                  {effectiveDraft}
                 </span>
               </div>
             ) : (

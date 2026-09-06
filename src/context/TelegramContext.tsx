@@ -72,6 +72,9 @@ interface TelegramContextType {
   activeFolderId: string;
   folders: Folder[];
   searchQuery: string;
+  searchFilter: 'all' | 'drafts' | 'channels' | 'groups' | 'bots' | 'private';
+  isSearchActive: boolean;
+  chatsWithDraftsCount: number;
   refreshDialogs: () => Promise<void>;
   isDrawerOpen: boolean;
   isRightPanelOpen: boolean;
@@ -158,6 +161,8 @@ interface TelegramContextType {
   setActiveChatId: (id: string | null) => void;
   setActiveFolderId: (id: string) => void;
   setSearchQuery: (q: string) => void;
+  setSearchFilter: (filter: 'all' | 'drafts' | 'channels' | 'groups' | 'bots' | 'private') => void;
+  setIsSearchActive: (active: boolean) => void;
   setIsDrawerOpen: (open: boolean) => void;
   setIsRightPanelOpen: (open: boolean) => void;
   setActiveModal: (
@@ -280,6 +285,11 @@ interface TelegramContextType {
   // Screenshot Protection & FLAG_SECURE
   triggerScreenshotBlocked: (reason?: string) => void;
 
+  // Offline-First Network Status & Cache
+  isOffline: boolean;
+  networkStatus: 'online' | 'offline' | 'reconnecting' | 'updating';
+  setNetworkStatus: (status: 'online' | 'offline' | 'reconnecting' | 'updating') => void;
+
   // Local IndexedDB Message Cache
   messageCache: typeof messageCache;
 }
@@ -393,8 +403,52 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     avatar: '',
     isOnline: false,
   });
-  const [chats, setChats] = useState<Chat[]>(() => (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0 ? initialActiveAcc.chats : []));
-  const [messages, setMessages] = useState<Record<string, Message[]>>(() => (initialActiveAcc?.messages && Object.keys(initialActiveAcc.messages).length > 0 ? initialActiveAcc.messages : {}));
+
+  // Offline-First Network Status
+  const [isOffline, setIsOffline] = useState<boolean>(() => {
+    if (typeof navigator !== 'undefined') {
+      return !navigator.onLine;
+    }
+    return false;
+  });
+  const [networkStatus, setNetworkStatus] = useState<'online' | 'offline' | 'reconnecting' | 'updating'>(() => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return 'offline';
+    }
+    return 'online';
+  });
+
+  // Cache-First Immediate Loading: Guarantee ZERO blank/white screen on startup or offline
+  const [chats, setChats] = useState<Chat[]>(() => {
+    if (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0) {
+      chatStore.saveChats(initialActiveAcc.chats);
+      return initialActiveAcc.chats;
+    }
+    const cachedFromStore = chatStore.getCachedChats();
+    if (cachedFromStore && cachedFromStore.length > 0) {
+      return cachedFromStore;
+    }
+    chatStore.saveChats(INITIAL_CHATS);
+    return INITIAL_CHATS;
+  });
+
+  const [messages, setMessages] = useState<Record<string, Message[]>>(() => {
+    if (initialActiveAcc?.messages && Object.keys(initialActiveAcc.messages).length > 0) {
+      Object.entries(initialActiveAcc.messages).forEach(([cId, mList]) => {
+        chatStore.saveMessages(cId, mList);
+      });
+      return initialActiveAcc.messages;
+    }
+    const cachedMsgs = chatStore.getAllCachedMessages();
+    if (cachedMsgs && Object.keys(cachedMsgs).length > 0) {
+      return cachedMsgs;
+    }
+    Object.entries(INITIAL_MESSAGES).forEach(([cId, mList]) => {
+      chatStore.saveMessages(cId, mList);
+    });
+    return INITIAL_MESSAGES;
+  });
+
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
     // Only open a chat if explicitly requested via URL parameter or notification route
@@ -453,6 +507,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchFilter, setSearchFilter] = useState<'all' | 'drafts' | 'channels' | 'groups' | 'bots' | 'private'>('all');
+  const [isSearchActive, setIsSearchActive] = useState<boolean>(false);
+
+  const chatsWithDraftsCount = chats.filter((chat) => {
+    const d = chat.draft || draftSyncService.getDraftText(chat.id);
+    return Boolean(d && d.trim().length > 0);
+  }).length;
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState<boolean>(false);
   const [activeModal, setActiveModal] = useState<
@@ -706,9 +767,69 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, []);
 
-  // When active chat changes, hydrate its full conversation history from IndexedDB
+  // Offline-First Auto-Persistence: Ensure every chat and message is persisted to chatStore (localStorage + SQLite) immediately
+  useEffect(() => {
+    if (chats && chats.length > 0) {
+      chatStore.saveChats(chats);
+    }
+  }, [chats]);
+
+  useEffect(() => {
+    if (messages && Object.keys(messages).length > 0) {
+      for (const [chatId, msgs] of Object.entries(messages)) {
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          chatStore.saveMessages(chatId, msgs);
+        }
+      }
+    }
+  }, [messages]);
+
+  // Online / Offline Global Network Listeners for Auto Reconnect & Re-sync
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleOnline = () => {
+      console.log('[Offline-First] Browser is online. Auto-resyncing with Telegram cloud...');
+      setIsOffline(false);
+      setNetworkStatus('updating');
+      // Trigger background sync without interrupting user interaction
+      syncInitializationRoutine().finally(() => {
+        setNetworkStatus('online');
+      });
+    };
+
+    const handleOffline = () => {
+      console.warn('[Offline-First] Browser is offline. Operating in Cache-First mode.');
+      setIsOffline(true);
+      setNetworkStatus('offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // When active chat changes, hydrate its conversation history: Cache-First immediate display, then IndexedDB
   useEffect(() => {
     if (!activeChatId) return;
+
+    // 0. Instant Cache-First synchronous lookup (ZERO white screen, instant display from localStorage/RAM)
+    const instantCached = chatStore.getCachedMessages(activeChatId);
+    if (instantCached && instantCached.length > 0) {
+      setMessages((prev) => {
+        const current = prev[activeChatId] || [];
+        if (current.length >= instantCached.length) return prev;
+        return {
+          ...prev,
+          [activeChatId]: instantCached,
+        };
+      });
+    }
+
     let isCancelled = false;
     (async () => {
       try {
@@ -2403,6 +2524,17 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // MTProto Cloud Synchronization & Initialization Routine (messages.getDialogs & users.getUsers)
   const syncInitializationRoutine = async (phoneOverride?: string, sessionStringOverride?: string) => {
+    // Offline Resilience Guard: If browser is currently offline, maintain local cache gracefully
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setIsOffline(true);
+      setNetworkStatus('offline');
+      const cached = chatStore.getCachedChats();
+      if (cached && cached.length > 0) {
+        setChats((prev) => (prev && prev.length > 0 ? prev : cached));
+      }
+      return;
+    }
+
     setIsSyncing(true);
     try {
       const activeSessionStr = sessionStringOverride || SecureSessionStorage.getItem<string>('tg_session_string') || '';
@@ -2434,11 +2566,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             : 'Telegram session expired or revoked. Please log in again.',
           '⚠️'
         );
-        setChats((prev) => (prev && prev.length > 0 ? prev : INITIAL_CHATS));
+        setChats((prev) => (prev && prev.length > 0 ? prev : chatStore.getCachedChats()));
         return;
       }
 
       if (data.success && data.user) {
+        setIsOffline(false);
+        setNetworkStatus('online');
+
         const updatedUser: User = {
           id: data.user.id || currentUser.id,
           name: data.user.name || currentUser.name,
@@ -2458,7 +2593,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (data.chats && Array.isArray(data.chats) && data.chats.length > 0) {
           finalChats = data.chats;
         } else {
-          finalChats = INITIAL_CHATS;
+          finalChats = chatStore.getCachedChats();
+          if (!finalChats || finalChats.length === 0) {
+            finalChats = INITIAL_CHATS;
+          }
         }
 
         // Guarantee Saved Messages exists and has user avatar
@@ -2489,6 +2627,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
 
         setChats(finalChats);
+        chatStore.saveChats(finalChats);
 
         // Preserve active chat if user already selected one, otherwise remain on Chat List (null)
         setActiveChatId((prev) => {
@@ -2504,9 +2643,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             ...prev,
             ...data.messages,
           }));
-          // Asynchronously persist all synced messages to local IndexedDB
+          // Persist all synced messages to chatStore and local IndexedDB
           for (const [cId, msgList] of Object.entries(data.messages)) {
             if (Array.isArray(msgList) && msgList.length > 0) {
+              chatStore.saveMessages(cId, msgList as Message[]);
               messageCache.putMessages(cId, msgList as Message[], { isNetworkFetch: true }).catch(() => {});
             }
           }
@@ -2547,10 +2687,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         telegramAudio.playSentPop();
       }
     } catch (err) {
-      console.warn('[Sync] Cloud sync error:', err);
+      console.warn('[Sync] Cloud sync error (Cache-First offline fallback):', err);
+      setIsOffline(true);
+      setNetworkStatus('offline');
       // Guarantee chat store is never empty
-      setChats((prev) => (prev && prev.length > 0 ? prev : INITIAL_CHATS));
-      showToast('تم تحميل البيانات المحلية للمحادثات', 'ℹ️');
+      const localCached = chatStore.getCachedChats();
+      setChats((prev) => (prev && prev.length > 0 ? prev : (localCached && localCached.length > 0 ? localCached : INITIAL_CHATS)));
+      showToast(settings.language === 'ar' ? 'وضع عدم الاتصال: تم تحميل المحادثات المحفوظة محلياً' : 'Offline mode: viewing locally cached chats', 'ℹ️');
     } finally {
       setIsSyncing(false);
     }
@@ -4595,6 +4738,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         activeFolderId,
         folders,
         searchQuery,
+        searchFilter,
+        isSearchActive,
+        chatsWithDraftsCount,
         isDrawerOpen,
         isRightPanelOpen,
         activeModal,
@@ -4637,6 +4783,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setActiveChatId,
         setActiveFolderId,
         setSearchQuery,
+        setSearchFilter,
+        setIsSearchActive,
         setIsDrawerOpen,
         setIsRightPanelOpen,
         setActiveModal,
@@ -4703,6 +4851,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         testSimulateFcmPush,
         clearFcmDiagnosticHistory,
         triggerScreenshotBlocked,
+        isOffline,
+        networkStatus,
+        setNetworkStatus,
         messageCache,
       }}
     >

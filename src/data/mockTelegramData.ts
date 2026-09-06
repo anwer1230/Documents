@@ -94,6 +94,8 @@ export const INITIAL_CHATS: Chat[] = [
     isPinned: false,
     isVerified: true,
     description: 'Founder and CEO of Telegram.',
+    draft: 'مرحباً بافل، نود مناقشة خطة التحديثات القادمة لتيليجرام.',
+    draftTimestamp: '10:45 AM',
     lastMessage: {
       id: 'm_dur_1',
       senderName: 'Pavel Durov',
