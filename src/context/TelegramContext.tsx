@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ActiveCall,
@@ -61,7 +61,7 @@ import { io as createSocketIO, Socket } from 'socket.io-client';
 import { getTelegramEpoch, parseTelegramDate, formatTelegramTime } from '../utils/dateUtils';
 import { messageCache } from '../services/IndexedDBMessageCache';
 import { telegramDB } from '../utils/sqliteStorage';
-import { chatStore, ChatReadPosition } from '../store/chatStore';
+import { chatStore, ChatStore, ChatReadPosition } from '../store/chatStore';
 
 interface TelegramContextType {
   currentUser: User;
@@ -245,6 +245,7 @@ interface TelegramContextType {
   createNewChat: (type: 'private' | 'group' | 'channel', title: string, username?: string, description?: string) => void;
   jumpToMessage: (chatId: string, messageId: string) => void;
   openPrivateChat: (senderId: string, senderName: string, senderAvatar?: string, senderUsername?: string) => void;
+  chatStore: ChatStore;
   lastReadPositions: Record<string, ChatReadPosition>;
   ScrollPositions: Record<string, number>;
   getLastReadPosition: (chatId: string) => ChatReadPosition | undefined;
@@ -407,6 +408,47 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Default to null so the user always sees the Chat List (Dialogs) screen
     return null;
   });
+
+  const activeChatIdRef = useRef<string | null>(activeChatId);
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId;
+  }, [activeChatId]);
+
+  /**
+   * Updates lastReadMessageId in chatStore if the user is currently viewing this chat
+   * and is scrolled to the bottom of the list.
+   */
+  const checkAndUpdateLastReadIfAtBottom = (targetChatId: string, messageId: string | number) => {
+    if (!targetChatId || !messageId) return;
+
+    const currentActiveId = activeChatIdRef.current;
+    if (!currentActiveId) return;
+
+    // Verify chat matches the active chat
+    const isTargetActive =
+      targetChatId === currentActiveId ||
+      targetChatId.replace(/^chat_/, '') === currentActiveId.replace(/^chat_/, '');
+
+    if (!isTargetActive) return;
+
+    const scrollContainer = typeof document !== 'undefined' ? document.getElementById('tg-messages-scroll-area') : null;
+    const isBottom = scrollContainer
+      ? chatStore.isNearBottom(scrollContainer)
+      : (chatStore.getLastReadPosition(currentActiveId)?.isNearBottom ?? true);
+
+    if (isBottom) {
+      const strId = String(messageId);
+      chatStore.saveLastReadPosition(currentActiveId, {
+        lastReadMessageId: strId,
+        isNearBottom: true,
+        scrollTop: scrollContainer ? scrollContainer.scrollTop : undefined,
+        scrollHeight: scrollContainer ? scrollContainer.scrollHeight : undefined,
+      });
+
+      const numId = Number(strId);
+      chatStore.setScrollPosition(currentActiveId, !isNaN(numId) ? numId : (scrollContainer?.scrollTop || 0));
+    }
+  };
   const [typingChatId, setTypingChatId] = useState<string | null>(null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
@@ -2127,6 +2169,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     setReplyingTo(null);
 
+    // Update lastReadMessageId if user sent message while at bottom
+    if (activeChatId && messageId) {
+      checkAndUpdateLastReadIfAtBottom(activeChatId, messageId);
+    }
+
     // Persist to local IndexedDB Message Cache
     messageCache.putMessage(activeChatId, newMessage).catch(() => {});
 
@@ -2285,6 +2332,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         );
 
         telegramAudio.playMessageChime();
+
+        // Update lastReadMessageId if user is at the bottom of the active chat
+        if (incomingMsg.id) {
+          checkAndUpdateLastReadIfAtBottom(targetChatId, incomingMsg.id);
+        }
 
         if (activeChatId !== targetChatId) {
           triggerNotification({
@@ -3654,6 +3706,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           messageCache.putMessage(cId, { ...msg, isOutgoing: isOut }, update).catch(() => {});
         });
 
+        // Update lastReadMessageId if user is viewing this chat and at the bottom
+        if (isCurrentChat && msg.id) {
+          checkAndUpdateLastReadIfAtBottom(activeChatId || targetChatId, msg.id);
+        }
+
         return modified ? nextState : prev;
       });
 
@@ -4033,6 +4090,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
           const lastMsg = data.messages[data.messages.length - 1];
           if (lastMsg) {
+            if (lastMsg.id) {
+              checkAndUpdateLastReadIfAtBottom(activeChatId, lastMsg.id);
+            }
             setChats((prev) =>
               prev.map((c) =>
                 c.id === activeChatId
@@ -4621,6 +4681,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         createNewChat,
         jumpToMessage,
         openPrivateChat,
+        chatStore,
         lastReadPositions: chatStore.lastReadPositions,
         ScrollPositions: chatStore.ScrollPositions,
         getLastReadPosition: (chatId: string) => chatStore.getLastReadPosition(chatId),
