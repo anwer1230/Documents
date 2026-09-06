@@ -32,8 +32,8 @@ export const UpdateNotification: React.FC = () => {
         setLocalError(
           updateState.error ||
             (isArabic
-              ? 'تعذر إرسال طلب التحديث. تأكد من إعداد RENDER_DEPLOY_HOOK_URL على الخادم.'
-              : 'Failed to trigger update. Please ensure RENDER_DEPLOY_HOOK_URL is configured on server.')
+              ? 'تعذر إرسال طلب التحديث إلى Render. يرجى المحاولة مرة أخرى.'
+              : 'Failed to send deploy request to Render. Please try again.')
         );
       }
     } catch (err: any) {

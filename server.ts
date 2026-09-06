@@ -481,6 +481,7 @@ async function startServer() {
       sessionSecretConfigured: Boolean(SESSION_SECRET),
       hasGeminiApiKey: Boolean(GEMINI_API_KEY),
       hasGroqApiKey: Boolean(GROQ_API_KEY),
+      hasRenderDeployHook: true,
       nodeEnv: process.env.NODE_ENV || 'development',
       port: PORT,
     });
@@ -491,6 +492,9 @@ async function startServer() {
   // ==========================================
   // SMART IN-APP UPDATE & RENDER DEPLOY HOOK
   // ==========================================
+
+  // Permanent Render Deploy Hook URL built directly into server backend
+  const PERMANENT_RENDER_DEPLOY_HOOK_URL = 'https://api.render.com/deploy/srv-da843ujtqb8s73b52ho0?key=IRLl8JQiTBs';
 
   // Determine current server commit hash (set by Render RENDER_GIT_COMMIT or local git HEAD)
   let serverCurrentCommit: string = process.env.RENDER_GIT_COMMIT || '';
@@ -587,14 +591,14 @@ async function startServer() {
    * STRICT SECURITY: RENDER_DEPLOY_HOOK_URL is NEVER returned in response or exposed to client.
    */
   app.post('/api/update/trigger', async (req, res) => {
-    // Read strictly from server environment variables
-    const deployHookUrl = process.env.RENDER_DEPLOY_HOOK_URL;
+    // Read from environment variable or fallback to permanently built-in URL
+    const deployHookUrl = process.env.RENDER_DEPLOY_HOOK_URL || PERMANENT_RENDER_DEPLOY_HOOK_URL;
 
     if (!deployHookUrl) {
-      console.warn('[Update Trigger] Request received but RENDER_DEPLOY_HOOK_URL is not set in environment.');
+      console.warn('[Update Trigger] Request received but deploy hook URL is not set.');
       return res.status(500).json({
         success: false,
-        error: 'Render Deploy Hook is not configured on the server (missing RENDER_DEPLOY_HOOK_URL)',
+        error: 'Render Deploy Hook is not configured on the server',
       });
     }
 
