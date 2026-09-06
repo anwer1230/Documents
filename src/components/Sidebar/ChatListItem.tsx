@@ -17,6 +17,7 @@ import {
   Edit3,
 } from 'lucide-react';
 import { Chat } from '../../types';
+import { chatStore, PartialSyncIcon } from '../../store/chatStore';
 import { useTelegram } from '../../context/TelegramContext';
 import { useLongPress, useChatSwipeActions } from '../../hooks/useTouchGestures';
 import { formatChatListTime } from '../../utils/dateUtils';
@@ -48,6 +49,13 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
 
   const renderStatusCheck = (status?: string) => {
     if (!status) return null;
+    if (chat.lastMessage && !chatStore.isMessageVerified(chat.id, chat.lastMessage.id) && chatStore.getSyncStatus(chat.id) === 'partial') {
+      return (
+        <span title="Locally cached — Pending cloud verification (partial)">
+          <PartialSyncIcon className="w-3.5 h-3.5 text-amber-400" />
+        </span>
+      );
+    }
     if (status === 'read') return <CheckCheck className="w-3.5 h-3.5 text-[#4fae4e]" />;
     if (status === 'delivered' || status === 'sent') return <Check className="w-3.5 h-3.5 text-gray-400" />;
     return null;

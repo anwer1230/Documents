@@ -17,6 +17,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { Message } from '../../types';
+import { chatStore, PartialSyncIcon } from '../../store/chatStore';
 import { useTelegram } from '../../context/TelegramContext';
 import { AudioPlayerWaveform } from './AudioPlayerWaveform';
 import { LottieSticker } from './LottieSticker';
@@ -119,6 +120,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   };
 
   const renderStatus = () => {
+    const chatId = message.chatId || activeChat?.id || '';
+    const isUnverified =
+      (message as any).syncStatus === 'partial' ||
+      (!chatStore.isMessageVerified(chatId, message.id) &&
+        (chatStore.getSyncStatus(chatId) === 'partial' || !(message as any).isCloudVerified));
+
+    if (isUnverified) {
+      return (
+        <span
+          title={isArabic ? 'محفوظ محلياً - بانتظار التأكيد السحابي (جزئي)' : 'Locally cached — Pending cloud verification (partial)'}
+          className="inline-flex items-center text-amber-400 select-none"
+          data-testid="partial-sync-icon"
+        >
+          <PartialSyncIcon className="w-3.5 h-3.5 text-amber-400" />
+        </span>
+      );
+    }
+
     if (!isOutgoing) return null;
     if (message.status === 'read') return <CheckCheck className="w-3.5 h-3.5 text-[#4fae4e]" />;
     if (message.status === 'delivered' || message.status === 'sent')

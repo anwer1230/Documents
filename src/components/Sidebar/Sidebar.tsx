@@ -38,6 +38,7 @@ export const Sidebar: React.FC = () => {
     setIsDrawerOpen,
     setActiveModal,
     syncCloudData,
+    refreshDialogs,
     isSyncing,
     showToast,
   } = useTelegram();
@@ -55,10 +56,10 @@ export const Sidebar: React.FC = () => {
   // Pull to refresh cloud sync
   const { pullProgress, isRefreshing, pullHandlers } = usePullToRefresh(async () => {
     try {
-      await syncCloudData();
-      showToast(isArabic ? 'تم تحديث البيانات السحابية' : 'Cloud sync completed', '☁️');
+      await refreshDialogs();
+      showToast(isArabic ? 'تم تحديث المحادثات' : 'Conversations refreshed', '🔄');
     } catch {
-      showToast(isArabic ? 'فشل التحديث السحابي' : 'Sync failed', '⚠️');
+      showToast(isArabic ? 'فشل تحديث المحادثات' : 'Refresh failed', '⚠️');
     }
   });
 
@@ -183,6 +184,8 @@ export const Sidebar: React.FC = () => {
 
       {/* Chat List Scrollable Feed */}
       <div
+        id="conversation-list-container"
+        data-conversation-list="true"
         {...pullHandlers}
         className="flex-1 overflow-y-auto divide-y divide-white/5 py-1"
       >

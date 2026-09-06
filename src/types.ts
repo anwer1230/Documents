@@ -133,11 +133,14 @@ export interface Message {
   epoch?: number;
   out?: boolean;
   peerId?: string;
+  syncStatus?: "synced" | "partial" | "syncing";
+  isCloudVerified?: boolean;
 }
 
 export interface Chat {
   id: string;
   type: ChatType;
+  syncStatus?: "synced" | "partial" | "syncing";
   title: string;
   username?: string;
   avatar: string;

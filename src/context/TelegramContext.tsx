@@ -2646,7 +2646,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           // Persist all synced messages to chatStore and local IndexedDB
           for (const [cId, msgList] of Object.entries(data.messages)) {
             if (Array.isArray(msgList) && msgList.length > 0) {
-              chatStore.saveMessages(cId, msgList as Message[]);
+              chatStore.saveMessages(cId, msgList as Message[], { isCloudVerified: true });
+              chatStore.markConversationSynced(cId, (msgList as Message[]).map((m) => m.id));
               messageCache.putMessages(cId, msgList as Message[], { isNetworkFetch: true }).catch(() => {});
             }
           }

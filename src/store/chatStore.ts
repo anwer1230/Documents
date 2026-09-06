@@ -7,8 +7,11 @@
  * - When returning to a chat: navigates to lastReadMessageId / last saved reading position, never jumping to top
  * - Smart scroll on new messages: smooth scroll to bottom if near bottom or outgoing, preserve reading offset if scrolled up
  * - Live update on scroll: updates lastReadMessageId and scroll position dynamically
+ * - Conversation sync status: tracks whether conversation is fully synced with server ('synced' | 'partial' | 'syncing')
+ * - Displays a 'partial' icon for locally-cached messages that haven't been verified by the cloud yet
  */
 
+import React from 'react';
 import { Chat, Message } from '../types';
 import { telegramDB } from '../utils/sqliteStorage';
 
@@ -23,20 +26,31 @@ export interface ChatReadPosition {
 
 export interface InSessionScrollState extends ChatReadPosition {}
 
+export type ConversationSyncStatus = 'synced' | 'partial' | 'syncing';
+
 export class ChatStore {
   private static instance: ChatStore;
 
-  // Persistent Record<string, number> for last read message IDs / scroll positions (as requested)
+  // Persistent Record<string, number> for last read message IDs / scroll positions
   public ScrollPositions: Record<string, number> = {};
 
   // Persistent rich last read positions per chat (chatId -> ChatReadPosition)
   public lastReadPositions: Record<string, ChatReadPosition> = {};
+
+  // Tracks whether a conversation is fully synced with the server ('synced' | 'partial' | 'syncing')
+  public syncStatus: Record<string, ConversationSyncStatus> = {};
+
+  // Tracks message IDs that have been verified by the cloud per chat
+  private verifiedMessageIds: Map<string, Set<string>> = new Map();
 
   // In-memory session scroll map
   private sessionScrollMap: Map<string, InSessionScrollState> = new Map();
 
   // Tracks chats visited during the current session
   private visitedChatsInCurrentSession: Set<string> = new Set();
+
+  // Listeners for store subscriptions
+  private listeners: Set<() => void> = new Set();
 
   // Threshold in pixels to consider user "at bottom"
   private readonly NEAR_BOTTOM_THRESHOLD = 140;
@@ -47,6 +61,8 @@ export class ChatStore {
   private readonly CHATS_STORAGE_KEY = 'tg_offline_cached_chats_v1';
   private readonly MESSAGES_STORAGE_PREFIX = 'tg_offline_cached_msgs_';
   private readonly MESSAGES_INDEX_KEY = 'tg_offline_cached_chat_ids_v1';
+  private readonly SYNC_STATUS_KEY = 'tg_conversation_sync_status_v1';
+  private readonly VERIFIED_MSGS_KEY = 'tg_verified_messages_v1';
 
   // Synchronous in-memory caches to guarantee ZERO white screens on startup
   private cachedChats: Chat[] = [];
@@ -65,7 +81,27 @@ export class ChatStore {
   }
 
   /**
-   * Load persistent scroll positions & offline-cached chats and messages from localStorage
+   * Subscribe to chat store changes (syncStatus, messages, positions)
+   */
+  public subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    this.listeners.forEach((listener) => {
+      try {
+        listener();
+      } catch (err) {
+        console.warn('[chatStore] Error in listener:', err);
+      }
+    });
+  }
+
+  /**
+   * Load persistent scroll positions, sync status & offline-cached chats and messages from localStorage
    */
   private initFromStorage(): void {
     if (typeof window === 'undefined') return;
@@ -138,6 +174,36 @@ export class ChatStore {
           console.warn('[chatStore] Error parsing cached message index:', e);
         }
       }
+
+      // 5. Load syncStatus mapping
+      const storedSync = localStorage.getItem(this.SYNC_STATUS_KEY);
+      if (storedSync) {
+        try {
+          const parsedSync = JSON.parse(storedSync);
+          if (parsedSync && typeof parsedSync === 'object') {
+            this.syncStatus = parsedSync;
+          }
+        } catch (e) {
+          console.warn('[chatStore] Error parsing syncStatus:', e);
+        }
+      }
+
+      // 6. Load verified message IDs
+      const storedVerified = localStorage.getItem(this.VERIFIED_MSGS_KEY);
+      if (storedVerified) {
+        try {
+          const parsedVerified = JSON.parse(storedVerified);
+          if (parsedVerified && typeof parsedVerified === 'object') {
+            for (const [cId, ids] of Object.entries(parsedVerified)) {
+              if (Array.isArray(ids)) {
+                this.verifiedMessageIds.set(cId, new Set(ids as string[]));
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[chatStore] Error parsing verified messages:', e);
+        }
+      }
     } catch (err) {
       console.warn('[chatStore] Error reading positions from localStorage:', err);
     }
@@ -154,6 +220,140 @@ export class ChatStore {
     } catch (err) {
       console.warn('[chatStore] Error saving positions to localStorage:', err);
     }
+  }
+
+  /**
+   * Persist syncStatus to localStorage
+   */
+  private persistSyncStatus(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(this.SYNC_STATUS_KEY, JSON.stringify(this.syncStatus));
+    } catch (err) {
+      console.warn('[chatStore] Error saving syncStatus:', err);
+    }
+  }
+
+  /**
+   * Persist verified message IDs to localStorage
+   */
+  private persistVerifiedMessages(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const serialized: Record<string, string[]> = {};
+      for (const [cId, set] of this.verifiedMessageIds.entries()) {
+        serialized[cId] = Array.from(set);
+      }
+      localStorage.setItem(this.VERIFIED_MSGS_KEY, JSON.stringify(serialized));
+    } catch (err) {
+      console.warn('[chatStore] Error saving verified messages:', err);
+    }
+  }
+
+  // ==========================================
+  // SYNC STATUS & VERIFICATION STATE
+  // ==========================================
+
+  /**
+   * Get sync status for a conversation ('synced' | 'partial' | 'syncing')
+   */
+  public getSyncStatus(chatId: string): ConversationSyncStatus {
+    if (!chatId) return 'synced';
+    if (this.syncStatus[chatId]) {
+      return this.syncStatus[chatId];
+    }
+    const cached = this.getCachedMessages(chatId);
+    if (cached.length === 0) return 'synced';
+    const verified = this.verifiedMessageIds.get(chatId);
+    if (!verified || verified.size === 0) return 'partial';
+    const allVerified = cached.every((m) => verified.has(m.id));
+    return allVerified ? 'synced' : 'partial';
+  }
+
+  /**
+   * Set sync status for a conversation
+   */
+  public setSyncStatus(chatId: string, status: ConversationSyncStatus): void {
+    if (!chatId) return;
+    this.syncStatus[chatId] = status;
+    this.persistSyncStatus();
+    this.notifyListeners();
+  }
+
+  /**
+   * Check whether a conversation is fully synced with the server
+   */
+  public isConversationSynced(chatId: string): boolean {
+    return this.getSyncStatus(chatId) === 'synced';
+  }
+
+  /**
+   * Mark conversation as fully synced with the server
+   */
+  public markConversationSynced(chatId: string, messageIds?: string[]): void {
+    if (!chatId) return;
+    this.syncStatus[chatId] = 'synced';
+    if (messageIds && messageIds.length > 0) {
+      this.markMessagesVerified(chatId, messageIds);
+    } else {
+      const cached = this.getCachedMessages(chatId);
+      if (cached.length > 0) {
+        this.markMessagesVerified(chatId, cached.map((m) => m.id));
+      }
+    }
+    this.persistSyncStatus();
+    this.notifyListeners();
+  }
+
+  /**
+   * Mark conversation as partially synced (having locally-cached unverified items)
+   */
+  public markConversationPartial(chatId: string): void {
+    if (!chatId) return;
+    this.syncStatus[chatId] = 'partial';
+    this.persistSyncStatus();
+    this.notifyListeners();
+  }
+
+  /**
+   * Mark specific message IDs as verified by the cloud
+   */
+  public markMessagesVerified(chatId: string, messageIds: string[]): void {
+    if (!chatId || !Array.isArray(messageIds) || messageIds.length === 0) return;
+    let set = this.verifiedMessageIds.get(chatId);
+    if (!set) {
+      set = new Set();
+      this.verifiedMessageIds.set(chatId, set);
+    }
+    messageIds.forEach((id) => set!.add(id));
+    this.persistVerifiedMessages();
+    this.notifyListeners();
+  }
+
+  /**
+   * Mark a single message as verified by the cloud
+   */
+  public markMessageVerified(chatId: string, messageId: string): void {
+    if (!chatId || !messageId) return;
+    this.markMessagesVerified(chatId, [messageId]);
+  }
+
+  /**
+   * Check whether a message has been verified by the cloud
+   */
+  public isMessageVerified(chatId: string, messageId: string): boolean {
+    if (!chatId || !messageId) return true;
+    const verified = this.verifiedMessageIds.get(chatId);
+    if (verified && verified.has(messageId)) return true;
+    if (this.syncStatus[chatId] === 'synced') return true;
+    return false;
+  }
+
+  /**
+   * Check whether a message is locally-cached and hasn't been verified by the cloud yet
+   */
+  public isLocallyCachedOnly(chatId: string, messageId: string): boolean {
+    return !this.isMessageVerified(chatId, messageId);
   }
 
   // ==========================================
@@ -210,17 +410,27 @@ export class ChatStore {
   /**
    * Save messages list for a chat immediately to memory, localStorage, and IndexedDB SQLite
    */
-  public saveMessages(chatId: string, messages: Message[]): void {
+  public saveMessages(chatId: string, messages: Message[], options?: { isCloudVerified?: boolean }): void {
     if (!chatId || !Array.isArray(messages)) return;
     this.cachedMessages.set(chatId, messages);
     this.cachedChatIds.add(chatId);
+
+    if (options?.isCloudVerified) {
+      this.markMessagesVerified(chatId, messages.map((m) => m.id));
+      this.syncStatus[chatId] = 'synced';
+    } else {
+      if (!this.syncStatus[chatId]) {
+        this.syncStatus[chatId] = 'partial';
+      }
+    }
+    this.persistSyncStatus();
 
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(this.MESSAGES_STORAGE_PREFIX + chatId, JSON.stringify(messages));
         localStorage.setItem(this.MESSAGES_INDEX_KEY, JSON.stringify(Array.from(this.cachedChatIds)));
       } catch (e) {
-        console.warn(`[chatStore] Error saving cached messages for ${chatId}:`, e);
+        console.warn("[chatStore] Error saving cached messages for " + chatId, e);
       }
     }
     try {
@@ -231,7 +441,7 @@ export class ChatStore {
   /**
    * Save or update a single message immediately to memory, localStorage, and IndexedDB SQLite
    */
-  public saveMessage(chatId: string, message: Message): void {
+  public saveMessage(chatId: string, message: Message, options?: { isCloudVerified?: boolean }): void {
     if (!chatId || !message || !message.id) return;
     const existing = this.getCachedMessages(chatId);
     const existsIndex = existing.findIndex((m) => m.id === message.id);
@@ -242,7 +452,7 @@ export class ChatStore {
     } else {
       updated = [...existing, message];
     }
-    this.saveMessages(chatId, updated);
+    this.saveMessages(chatId, updated, options);
     try {
       telegramDB.saveMessage(message);
     } catch {}
@@ -369,7 +579,6 @@ export class ChatStore {
     }
   ): void {
     if (!chatId) return;
-
     const existing = this.lastReadPositions[chatId];
     const isNearBottom = data.isNearBottom !== undefined ? data.isNearBottom : (existing?.isNearBottom ?? true);
     const scrollTop = data.scrollTop !== undefined ? data.scrollTop : (existing?.scrollTop ?? 0);
@@ -491,3 +700,50 @@ export class ChatStore {
 
 export const chatStore = ChatStore.getInstance();
 
+/**
+ * Partial Sync Icon displayed for locally-cached messages that haven't been verified by the cloud yet.
+ * Follows Telegram mobile UI specifications: delicate dashed cloud indicator with subtle pending clock/mark.
+ */
+export const PartialSyncIcon = ({
+  className = 'w-3.5 h-3.5',
+  title = 'Locally cached — Pending cloud verification (partial)',
+}: {
+  className?: string;
+  title?: string;
+}) => {
+  return React.createElement(
+    'span',
+    {
+      title,
+      className: 'inline-flex items-center justify-center text-amber-400 select-none',
+      'data-testid': 'partial-sync-icon',
+      'aria-label': title,
+    },
+    React.createElement(
+      'svg',
+      {
+        className,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '2',
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      React.createElement('path', {
+        d: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z',
+        strokeDasharray: '3 2',
+      }),
+      React.createElement('circle', {
+        cx: '12',
+        cy: '13',
+        r: '2',
+        stroke: 'currentColor',
+        fill: 'none',
+      }),
+      React.createElement('polyline', {
+        points: '12 12 12 13 13 13',
+      })
+    )
+  );
+};
