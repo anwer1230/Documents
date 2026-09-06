@@ -802,6 +802,78 @@ async function startServer() {
     }, latency);
   });
 
+  // 3.1 Persistent Server-Side Telemetry Logging Endpoint
+  const TELEMETRY_FILE = path.join(process.cwd(), 'telemetry_logs.json');
+  let serverTelemetryCache: Array<{
+    id: string;
+    timestamp: string;
+    errorType: string;
+    message?: string;
+    retryAfter?: number;
+    details?: any;
+    source?: string;
+    ip?: string;
+  }> = [];
+
+  try {
+    if (fs.existsSync(TELEMETRY_FILE)) {
+      const savedData = fs.readFileSync(TELEMETRY_FILE, 'utf-8');
+      serverTelemetryCache = JSON.parse(savedData);
+      if (!Array.isArray(serverTelemetryCache)) serverTelemetryCache = [];
+    }
+  } catch (_) {
+    serverTelemetryCache = [];
+  }
+
+  app.post('/api/telemetry/log', (req, res) => {
+    try {
+      const body = req.body || {};
+      const errorType = body.errorType || body.type || 'UNKNOWN_ERROR';
+      const timestamp = body.timestamp || new Date().toISOString();
+      const message = body.message || body.reason || '';
+      const retryAfter = typeof body.retryAfter === 'number' ? body.retryAfter : undefined;
+
+      const logEntry = {
+        id: `srv_tel_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp,
+        errorType,
+        message,
+        retryAfter,
+        details: body.details || {},
+        source: body.source || 'client',
+        ip: (req.headers['x-forwarded-for'] as string) || req.ip || '127.0.0.1',
+      };
+
+      console.warn(`[Telemetry Log Server] [${timestamp}] ${errorType}${retryAfter ? ` (retry_after: ${retryAfter}s)` : ''}: ${message}`);
+
+      serverTelemetryCache.unshift(logEntry);
+      if (serverTelemetryCache.length > 500) {
+        serverTelemetryCache = serverTelemetryCache.slice(0, 500);
+      }
+
+      // Persist to disk
+      try {
+        fs.writeFileSync(TELEMETRY_FILE, JSON.stringify(serverTelemetryCache, null, 2), 'utf-8');
+      } catch (writeErr) {
+        console.warn('[Telemetry Log Server] Could not write to file:', writeErr);
+      }
+
+      return res.json({ success: true, logged: true, id: logEntry.id });
+    } catch (err: any) {
+      console.error('[Telemetry Log Server] Error storing log:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Server error' });
+    }
+  });
+
+  app.get('/api/telemetry/logs', (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    return res.json({
+      success: true,
+      count: serverTelemetryCache.length,
+      logs: serverTelemetryCache.slice(0, limit),
+    });
+  });
+
   // 4. MTProto Authentication & Real Telegram Code Dispatcher (auth.sendCode, auth.resendCode, auth.signIn)
   interface ActiveTelegramSession {
     client?: TelegramClient;
@@ -4320,6 +4392,18 @@ async function startServer() {
           sessionRevoked: true,
           error: 'SESSION_REVOKED',
           message: 'انتهت صلاحية جلسة تيليجرام أو تم تسجيل الخروج من أجهزة أخرى. يرجى تسجيل الدخول مجدداً.',
+        });
+      }
+
+      if (errMsg.includes('FLOOD_WAIT') || syncErr?.code === 'FLOOD_WAIT') {
+        const match = errMsg.match(/FLOOD_WAIT_?(\d+)/i) || errMsg.match(/wait of (\d+)/i);
+        const retryAfter = syncErr?.seconds || (match ? parseInt(match[1], 10) : 15);
+        return res.status(429).json({
+          success: false,
+          error: 'FLOOD_WAIT',
+          retryAfter,
+          retry_after: retryAfter,
+          message: `تم تجاوز حد طلبات تيليجرام (FLOOD_WAIT). يرجى الانتظار ${retryAfter} ثانية.`,
         });
       }
     }

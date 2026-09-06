@@ -273,6 +273,10 @@ interface TelegramContextType {
   validateSessionProactively: (force?: boolean) => Promise<boolean>;
   isSyncing: boolean;
   isSessionValidating: boolean;
+  telemetryLogs: string[];
+  recordTelemetry: (errorType: string, details?: any) => void;
+  isFloodWaitActive: boolean;
+  floodWaitRemainingSeconds: number;
   solveChatCaptcha: (chatId: string, answer: string) => Promise<boolean>;
   forwardToSavedMessages: (message: Message) => void;
   // Incremental Pagination & Stream Sync
@@ -325,7 +329,73 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   streamingEnabled: true,
 };
 
+// Global in-memory Telemetry error log collector
+export const telemetryLogs: string[] = [];
+
+/**
+ * Global function to record telemetry error and forward asynchronously to /api/telemetry/log
+ */
+export function recordContextTelemetry(
+  errorType: 'AUTH_KEY_UNREGISTERED' | 'FLOOD_WAIT' | 'CHAT_WRITE_FORBIDDEN' | 'USER_BANNED_IN_CHANNEL' | string,
+  details?: { message?: string; retryAfter?: number; [key: string]: any }
+) {
+  const timestamp = new Date().toISOString();
+  const entry = `[${timestamp}] ${errorType}${details?.retryAfter ? ` (Wait: ${details.retryAfter}s)` : ''}: ${details?.message || ''}`;
+  
+  telemetryLogs.unshift(entry);
+  if (telemetryLogs.length > 200) {
+    telemetryLogs.pop();
+  }
+
+  // Also log into internal telemetry diagnostic service
+  logTelemetry({
+    type: 'sync_error',
+    category: 'sync',
+    reason: errorType,
+    durationMs: details?.durationMs,
+    details: {
+      ...details,
+      rawLog: entry,
+    },
+  });
+
+  // Transmit to backend POST /api/telemetry/log
+  try {
+    fetch('/api/telemetry/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timestamp,
+        errorType,
+        message: details?.message || '',
+        retryAfter: details?.retryAfter,
+        details: details || {},
+        source: 'TelegramContext',
+      }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Smart Retry & Flood Wait rate-limiting guards
+  const floodWaitUntilRef = useRef<number>(0);
+  const floodRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSyncAttemptTimeRef = useRef<number>(0);
+  const [floodWaitRemaining, setFloodWaitRemaining] = useState<number>(0);
+
+  // Active countdown timer for FLOOD_WAIT status display
+  useEffect(() => {
+    if (floodWaitRemaining <= 0) return;
+    const interval = setInterval(() => {
+      const remainingSec = Math.max(0, Math.ceil((floodWaitUntilRef.current - Date.now()) / 1000));
+      setFloodWaitRemaining(remainingSec);
+      if (remainingSec <= 0) {
+        clearInterval(interval);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [floodWaitRemaining]);
+
   // 1. Resilient Multi-Tier Encrypted Session Persistence & State
   const [accounts, setAccounts] = useState<UserAccount[]>(() => {
     try {
@@ -881,12 +951,22 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Complete cleanup on auth_key revocation to prevent background automation stalls
   const performSessionPurge = (reason: string = 'AUTH_KEY_UNREGISTERED') => {
     console.warn(`[TelegramContext] Performing full session purge due to ${reason}`);
-    logTelemetry({
-      type: 'sync_error',
-      category: 'sync',
+    
+    // Stop any active flood retry timers to prevent infinite reconnect loops
+    if (floodRetryTimerRef.current) {
+      clearTimeout(floodRetryTimerRef.current);
+      floodRetryTimerRef.current = null;
+    }
+    floodWaitUntilRef.current = 0;
+    setFloodWaitRemaining(0);
+
+    // Telemetry log for session expiration
+    recordContextTelemetry('AUTH_KEY_UNREGISTERED', {
       reason,
-      details: { action: 'performSessionPurge' },
+      action: 'performSessionPurge',
+      message: 'Session revoked or unregistered on Telegram server',
     });
+
     setIsAuthenticated(false);
     setActiveModal('none');
     setActiveChatId(null);
@@ -925,6 +1005,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       CoreNotificationCenter.appDidLogout,
       0,
       reason
+    );
+
+    // Display required user notification
+    showToast(
+      settings.language === 'ar'
+        ? 'انتهت الجلسة، يرجى تسجيل الدخول مرة أخرى'
+        : 'Session expired. Please log in again.',
+      '⚠️'
     );
   };
 
@@ -2383,11 +2471,74 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               };
             });
           }
+          // Auto-refresh dialogs after message transmission
+          await syncInitializationRoutine().catch(() => {});
+        } else if (data && !data.success) {
+          const errCode = String(data.error || 'SEND_ERROR');
+          const errMsg = String(data.message || data.details || errCode);
+
+          if (errCode === 'CHAT_WRITE_FORBIDDEN' || errMsg.includes('CHAT_WRITE_FORBIDDEN')) {
+            recordContextTelemetry('CHAT_WRITE_FORBIDDEN', {
+              chatId: activeChatId,
+              message: errMsg,
+            });
+            showToast(
+              settings.language === 'ar'
+                ? 'النشر في هذه المحادثة أو القناة مقتصر على المشرفين فقط (CHAT_WRITE_FORBIDDEN)'
+                : 'Posting in this chat is restricted to administrators (CHAT_WRITE_FORBIDDEN)',
+              '🚫'
+            );
+          } else if (errCode === 'USER_BANNED_IN_CHANNEL' || errMsg.includes('USER_BANNED_IN_CHANNEL')) {
+            recordContextTelemetry('USER_BANNED_IN_CHANNEL', {
+              chatId: activeChatId,
+              message: errMsg,
+            });
+            showToast(
+              settings.language === 'ar'
+                ? 'أنت محظور من إرسال الرسائل في هذه القناة أو المجموعة (USER_BANNED_IN_CHANNEL)'
+                : 'You are banned from posting in this channel/group (USER_BANNED_IN_CHANNEL)',
+              '🚫'
+            );
+          } else if (errCode === 'FLOOD_WAIT' || errMsg.includes('FLOOD_WAIT')) {
+            let waitSeconds = 15;
+            const match = errMsg.match(/FLOOD_WAIT_?(\d+)/i) || errMsg.match(/wait of (\d+)/i) || errMsg.match(/(\d+)/);
+            if (match && match[1]) waitSeconds = parseInt(match[1], 10) || 15;
+            waitSeconds = Math.max(5, Math.min(waitSeconds, 300));
+            floodWaitUntilRef.current = Date.now() + (waitSeconds * 1000);
+            setFloodWaitRemaining(waitSeconds);
+
+            recordContextTelemetry('FLOOD_WAIT', {
+              chatId: activeChatId,
+              retryAfter: waitSeconds,
+              message: errMsg,
+            });
+            showToast(
+              settings.language === 'ar'
+                ? `تم تجاوز حد طلبات الإرسال (FLOOD_WAIT). يرجى الانتظار ${waitSeconds} ثانية.`
+                : `Send rate limited (FLOOD_WAIT). Please wait ${waitSeconds} seconds.`,
+              '⏳'
+            );
+          } else if (errCode === 'AUTH_KEY_UNREGISTERED' || errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+            recordContextTelemetry('AUTH_KEY_UNREGISTERED', {
+              chatId: activeChatId,
+              message: errMsg,
+            });
+            performSessionPurge('AUTH_KEY_UNREGISTERED');
+          }
         }
-        // Auto-refresh dialogs after message transmission
-        await syncInitializationRoutine().catch(() => {});
       })
       .catch((err) => {
+        const errMsg = err?.message || String(err);
+        if (errMsg.includes('CHAT_WRITE_FORBIDDEN')) {
+          recordContextTelemetry('CHAT_WRITE_FORBIDDEN', { chatId: activeChatId, message: errMsg });
+        } else if (errMsg.includes('USER_BANNED_IN_CHANNEL')) {
+          recordContextTelemetry('USER_BANNED_IN_CHANNEL', { chatId: activeChatId, message: errMsg });
+        } else if (errMsg.includes('FLOOD_WAIT')) {
+          recordContextTelemetry('FLOOD_WAIT', { chatId: activeChatId, message: errMsg });
+        } else if (errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+          recordContextTelemetry('AUTH_KEY_UNREGISTERED', { chatId: activeChatId, message: errMsg });
+          performSessionPurge('AUTH_KEY_UNREGISTERED');
+        }
         console.warn('[MTProto] Send message background error:', err);
       });
 
@@ -2572,6 +2723,21 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
 
+    // Smart Retry Guard: If currently under FLOOD_WAIT cooldown, pause sync without calling server
+    const now = Date.now();
+    if (now < floodWaitUntilRef.current) {
+      const remainingSec = Math.max(1, Math.ceil((floodWaitUntilRef.current - now) / 1000));
+      console.warn(`[Smart Retry] Server sync paused during FLOOD_WAIT cooldown (${remainingSec}s remaining).`);
+      return;
+    }
+
+    // Throttle duplicate rapid sync calls (< 2500ms)
+    if (now - lastSyncAttemptTimeRef.current < 2500) {
+      console.log('[Smart Retry] Sync call throttled.');
+      return;
+    }
+    lastSyncAttemptTimeRef.current = now;
+
     setIsSyncing(true);
     const syncStartTime = performance.now();
     logTelemetry({
@@ -2597,27 +2763,20 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       if (data.sessionRevoked || data.error === 'SESSION_REVOKED' || data.error === 'AUTH_KEY_UNREGISTERED') {
         const revokedReason = data.reason || data.error || 'AUTH_KEY_UNREGISTERED';
-        logTelemetry({
-          type: 'sync_error',
-          category: 'sync',
-          reason: revokedReason === 'SESSION_REVOKED' ? 'AUTH_KEY_UNREGISTERED' : revokedReason,
+        recordContextTelemetry('AUTH_KEY_UNREGISTERED', {
+          message: 'MTProto sync confirmed session revoked on Telegram server',
+          details: { code: data.error, reason: revokedReason },
           durationMs: performance.now() - syncStartTime,
-          details: { code: data.error },
         });
         console.warn('[MTProto Sync] Session was revoked or expired on Telegram server.');
-        SecureSessionStorage.removeItem('tg_session_string');
-        setAccounts((prev) =>
-          prev.map((acc) =>
-            acc.id === activeAccountId ? { ...acc, sessionString: undefined } : acc
-          )
-        );
-        showToast(
-          settings.language === 'ar'
-            ? 'انتهت صلاحية جلسة تيليجرام أو تم تسجيل الخروج من أجهزة أخرى. يرجى تسجيل الدخول مجدداً.'
-            : 'Telegram session expired or revoked. Please log in again.',
-          '⚠️'
-        );
-        setChats((prev) => (prev && prev.length > 0 ? prev : chatStore.getCachedChats()));
+        if (floodRetryTimerRef.current) {
+          clearTimeout(floodRetryTimerRef.current);
+          floodRetryTimerRef.current = null;
+        }
+        floodWaitUntilRef.current = 0;
+        setFloodWaitRemaining(0);
+        performSessionPurge('AUTH_KEY_UNREGISTERED');
+        setIsSyncing(false);
         return;
       }
 
@@ -2628,16 +2787,82 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           errCode = 'AUTH_KEY_UNREGISTERED';
         } else if (errReasonStr.includes('FLOOD_WAIT') || data.error === 'FLOOD_WAIT') {
           errCode = 'FLOOD_WAIT';
+        } else if (errReasonStr.includes('CHAT_WRITE_FORBIDDEN') || data.error === 'CHAT_WRITE_FORBIDDEN') {
+          errCode = 'CHAT_WRITE_FORBIDDEN';
+        } else if (errReasonStr.includes('USER_BANNED_IN_CHANNEL') || data.error === 'USER_BANNED_IN_CHANNEL') {
+          errCode = 'USER_BANNED_IN_CHANNEL';
         } else if (errReasonStr.includes('CHANNEL_PRIVATE') || data.error === 'CHANNEL_PRIVATE') {
           errCode = 'CHANNEL_PRIVATE';
         }
-        logTelemetry({
-          type: 'sync_error',
-          category: 'sync',
-          reason: errCode,
-          durationMs: performance.now() - syncStartTime,
-          details: { code: errCode },
-        });
+
+        if (errCode === 'AUTH_KEY_UNREGISTERED') {
+          recordContextTelemetry('AUTH_KEY_UNREGISTERED', {
+            message: errReasonStr,
+            durationMs: performance.now() - syncStartTime,
+          });
+          performSessionPurge('AUTH_KEY_UNREGISTERED');
+          setIsSyncing(false);
+          return;
+        }
+
+        if (errCode === 'FLOOD_WAIT') {
+          let waitSeconds = 15;
+          if (typeof data.retryAfter === 'number' && data.retryAfter > 0) {
+            waitSeconds = data.retryAfter;
+          } else if (typeof data.retry_after === 'number' && data.retry_after > 0) {
+            waitSeconds = data.retry_after;
+          } else {
+            const match = errReasonStr.match(/FLOOD_WAIT_?(\d+)/i) || String(data.error).match(/FLOOD_WAIT_?(\d+)/i) || errReasonStr.match(/wait of (\d+)/i);
+            if (match && match[1]) {
+              waitSeconds = parseInt(match[1], 10) || 15;
+            }
+          }
+          waitSeconds = Math.max(5, Math.min(waitSeconds, 300));
+          floodWaitUntilRef.current = Date.now() + (waitSeconds * 1000);
+          setFloodWaitRemaining(waitSeconds);
+
+          recordContextTelemetry('FLOOD_WAIT', {
+            retryAfter: waitSeconds,
+            message: `Rate limited by Telegram MTProto. Cooldown for ${waitSeconds}s`,
+            durationMs: performance.now() - syncStartTime,
+          });
+
+          showToast(
+            settings.language === 'ar'
+              ? `تم تجاوز حد طلبات تيليجرام (FLOOD_WAIT). سيتم إيقاف المزامنة مؤقتاً لمدة ${waitSeconds} ثانية ثم إعادة المحاولة تلقائياً.`
+              : `Telegram rate limit (FLOOD_WAIT). Pausing sync for ${waitSeconds}s; auto-retrying shortly.`,
+            '⏳'
+          );
+
+          if (floodRetryTimerRef.current) {
+            clearTimeout(floodRetryTimerRef.current);
+          }
+          floodRetryTimerRef.current = setTimeout(() => {
+            floodWaitUntilRef.current = 0;
+            setFloodWaitRemaining(0);
+            floodRetryTimerRef.current = null;
+            console.log('[Smart Retry] FLOOD_WAIT cooldown elapsed. Resuming auto-sync...');
+            syncInitializationRoutine();
+          }, waitSeconds * 1000);
+
+          setIsSyncing(false);
+          return;
+        }
+
+        if (errCode === 'CHAT_WRITE_FORBIDDEN' || errCode === 'USER_BANNED_IN_CHANNEL') {
+          recordContextTelemetry(errCode, {
+            message: errReasonStr,
+            durationMs: performance.now() - syncStartTime,
+          });
+        } else {
+          logTelemetry({
+            type: 'sync_error',
+            category: 'sync',
+            reason: errCode,
+            durationMs: performance.now() - syncStartTime,
+            details: { code: errCode },
+          });
+        }
       }
 
       if (data.success && data.user) {
@@ -2769,16 +2994,52 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       let detectedReason = 'SYNC_ERROR';
       if (errMsg.includes('AUTH_KEY_UNREGISTERED')) detectedReason = 'AUTH_KEY_UNREGISTERED';
       else if (errMsg.includes('FLOOD_WAIT')) detectedReason = 'FLOOD_WAIT';
+      else if (errMsg.includes('CHAT_WRITE_FORBIDDEN')) detectedReason = 'CHAT_WRITE_FORBIDDEN';
+      else if (errMsg.includes('USER_BANNED_IN_CHANNEL')) detectedReason = 'USER_BANNED_IN_CHANNEL';
       else if (errMsg.includes('CHANNEL_PRIVATE')) detectedReason = 'CHANNEL_PRIVATE';
       else if (errMsg.includes('TIMEOUT') || errMsg.includes('timeout') || errMsg.includes('NetworkError')) detectedReason = 'TIMEOUT';
 
-      logTelemetry({
-        type: 'sync_error',
-        category: 'sync',
-        reason: detectedReason,
-        durationMs: performance.now() - syncStartTime,
-        details: { snippet: errMsg.slice(0, 80) },
-      });
+      if (detectedReason === 'AUTH_KEY_UNREGISTERED') {
+        recordContextTelemetry('AUTH_KEY_UNREGISTERED', {
+          message: errMsg,
+          durationMs: performance.now() - syncStartTime,
+        });
+        performSessionPurge('AUTH_KEY_UNREGISTERED');
+      } else if (detectedReason === 'FLOOD_WAIT') {
+        let waitSeconds = 15;
+        const match = errMsg.match(/FLOOD_WAIT_?(\d+)/i) || errMsg.match(/wait of (\d+)/i) || errMsg.match(/(\d+)/);
+        if (match && match[1]) waitSeconds = parseInt(match[1], 10) || 15;
+        waitSeconds = Math.max(5, Math.min(waitSeconds, 300));
+        floodWaitUntilRef.current = Date.now() + (waitSeconds * 1000);
+        setFloodWaitRemaining(waitSeconds);
+
+        recordContextTelemetry('FLOOD_WAIT', {
+          retryAfter: waitSeconds,
+          message: errMsg,
+          durationMs: performance.now() - syncStartTime,
+        });
+
+        if (floodRetryTimerRef.current) clearTimeout(floodRetryTimerRef.current);
+        floodRetryTimerRef.current = setTimeout(() => {
+          floodWaitUntilRef.current = 0;
+          setFloodWaitRemaining(0);
+          floodRetryTimerRef.current = null;
+          syncInitializationRoutine();
+        }, waitSeconds * 1000);
+      } else if (detectedReason === 'CHAT_WRITE_FORBIDDEN' || detectedReason === 'USER_BANNED_IN_CHANNEL') {
+        recordContextTelemetry(detectedReason, {
+          message: errMsg,
+          durationMs: performance.now() - syncStartTime,
+        });
+      } else {
+        logTelemetry({
+          type: 'sync_error',
+          category: 'sync',
+          reason: detectedReason,
+          durationMs: performance.now() - syncStartTime,
+          details: { snippet: errMsg.slice(0, 80) },
+        });
+      }
 
       console.warn('[Sync] Cloud sync error (Cache-First offline fallback):', err);
       setIsOffline(true);
@@ -5048,6 +5309,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         validateSessionProactively,
         isSyncing,
         isSessionValidating,
+        telemetryLogs,
+        recordTelemetry: recordContextTelemetry,
+        isFloodWaitActive: floodWaitRemaining > 0,
+        floodWaitRemainingSeconds: floodWaitRemaining,
         solveChatCaptcha,
         forwardToSavedMessages,
         loadMoreChatMessages,
