@@ -155,6 +155,13 @@ export function logTelemetry(
 
       localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(updated));
 
+      // If we reach or exceed 50 events, archive to IndexedDB and local JSON backup
+      if (updated.length >= MAX_TELEMETRY_LOGS) {
+        import('./telemetryIndexedDB').then(({ backupTelemetryToIndexedDB }) => {
+          backupTelemetryToIndexedDB([newEntry, ...existing]);
+        }).catch(() => {});
+      }
+
       // Dispatch non-blocking event for live telemetry UI updates
       window.dispatchEvent(
         new CustomEvent('tg_telemetry_updated', {

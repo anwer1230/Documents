@@ -5285,6 +5285,361 @@ Please provide the concise summary.`;
     }
   });
 
+  // =========================================================================
+  // 8.11b Real Account Settings Sync Endpoints (GramJS MTProto API Integration)
+  // =========================================================================
+
+  // GET /api/account/settings/state: Reads current profile, 2FA password info, and privacy settings from Telegram
+  app.get('/api/account/settings/state', async (req, res) => {
+    const sessionString = (req.query?.sessionString as string) || '';
+    const phone = (req.query?.phone as string) || '';
+    const accountIndex = req.query?.accountIndex !== undefined ? Number(req.query.accountIndex) : undefined;
+
+    try {
+      const client = await getClientForSession(sessionString, phone, accountIndex);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION', message: 'لا توجد جلسة تيليجرام نشطة' });
+      }
+
+      // 1. Get Me & FullUser via Api.users.GetFullUser({ id: new Api.InputUserSelf() })
+      const me: any = await client.getMe();
+      if (!me) {
+        return res.status(401).json({ success: false, error: 'AUTH_KEY_UNREGISTERED' });
+      }
+
+      let about = '';
+      try {
+        const fullUserRes: any = await withTimeout(
+          client.invoke(new Api.users.GetFullUser({ id: new Api.InputUserSelf() })),
+          3500,
+          null
+        );
+        if (fullUserRes?.fullUser?.about) {
+          about = fullUserRes.fullUser.about;
+        }
+      } catch (fullUserErr: any) {
+        console.warn('[MTProto] GetFullUser error:', fullUserErr?.message || fullUserErr);
+      }
+
+      // Profile photo download
+      let avatar = '';
+      try {
+        const photoBuf: any = await withTimeout(client.downloadProfilePhoto('me', { isBig: false }), 2500, null);
+        if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+          avatar = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
+        }
+      } catch (_) {}
+
+      // 2. Read 2FA Password state from Telegram
+      let twoFactor = {
+        hasPassword: false,
+        hint: '',
+        hasRecovery: false,
+        emailPattern: '',
+      };
+      try {
+        const pwdRes: any = await withTimeout(client.invoke(new Api.account.GetPassword()), 3000, null);
+        if (pwdRes) {
+          twoFactor = {
+            hasPassword: Boolean(pwdRes.hasPassword),
+            hint: pwdRes.hint || '',
+            hasRecovery: Boolean(pwdRes.hasRecovery),
+            emailPattern: pwdRes.loginEmailPattern || pwdRes.emailUnconfirmedPattern || '',
+          };
+        }
+      } catch (pwdErr: any) {
+        console.warn('[MTProto] GetPassword error:', pwdErr?.message || pwdErr);
+      }
+
+      // 3. Read Privacy Settings via Api.account.GetPrivacy
+      const keysToFetch: { key: any; target: string }[] = [
+        { key: new Api.InputPrivacyKeyStatusTimestamp(), target: 'lastSeen' },
+        { key: new Api.InputPrivacyKeyPhoneNumber(), target: 'phoneNumber' },
+        { key: new Api.InputPrivacyKeyProfilePhoto(), target: 'profilePhotos' },
+        { key: new Api.InputPrivacyKeyForwards(), target: 'forwards' },
+        { key: new Api.InputPrivacyKeyPhoneCall(), target: 'calls' },
+        { key: new Api.InputPrivacyKeyVoiceMessages(), target: 'voiceMessages' },
+        { key: new Api.InputPrivacyKeyAbout(), target: 'bio' },
+      ];
+
+      const privacy: Record<string, 'everybody' | 'contacts' | 'nobody'> = {};
+      for (const item of keysToFetch) {
+        try {
+          const resPriv: any = await client.invoke(new Api.account.GetPrivacy({ key: item.key }));
+          const rules = resPriv?.rules || [];
+          const hasDisallowAll = rules.some((r: any) => r._ === 'privacyValueDisallowAll');
+          const hasAllowContacts = rules.some((r: any) => r._ === 'privacyValueAllowContacts');
+          if (hasDisallowAll && hasAllowContacts) {
+            privacy[item.target] = 'contacts';
+          } else if (hasDisallowAll) {
+            privacy[item.target] = 'nobody';
+          } else {
+            privacy[item.target] = 'everybody';
+          }
+        } catch (_) {
+          privacy[item.target] = 'everybody';
+        }
+      }
+
+      const firstName = me.firstName || me.first_name || '';
+      const lastName = me.lastName || me.last_name || '';
+      const fullName = [firstName, lastName].filter(Boolean).join(' ') || 'Telegram User';
+
+      return res.json({
+        success: true,
+        account: {
+          id: String(me.id),
+          firstName,
+          lastName,
+          name: fullName,
+          username: me.username ? (me.username.startsWith('@') ? me.username : `@${me.username}`) : '',
+          phone: me.phone ? (me.phone.startsWith('+') ? me.phone : `+${me.phone}`) : phone,
+          about,
+          avatar,
+          isPremium: Boolean(me.premium),
+          isVerified: Boolean(me.verified),
+        },
+        twoFactor,
+        privacy,
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] GET /api/account/settings/state error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  // POST /api/account/settings/update: Executes official GramJS calls to mutate profile, photo, 2FA password, or privacy
+  app.post('/api/account/settings/update', async (req, res) => {
+    const {
+      sessionString,
+      phone,
+      accountIndex,
+      // Profile updates
+      firstName,
+      lastName,
+      about,
+      username,
+      // Photo upload
+      photoBase64,
+      // 2FA Password updates
+      currentPassword,
+      newPassword,
+      hint,
+      email,
+      // Privacy updates
+      privacyTarget,
+      privacyOption,
+    } = req.body;
+
+    try {
+      const client = await getClientForSession(sessionString, phone, accountIndex);
+      if (!client || !client.connected) {
+        return res.status(401).json({ success: false, error: 'NO_SESSION', message: 'لا توجد جلسة تيليجرام نشطة' });
+      }
+
+      const actionsDone: string[] = [];
+
+      // 1. Update Profile (firstName, lastName, about) via Api.account.UpdateProfile
+      if (firstName !== undefined || lastName !== undefined || about !== undefined) {
+        await client.invoke(
+          new Api.account.UpdateProfile({
+            firstName: firstName !== undefined ? String(firstName).trim() : undefined,
+            lastName: lastName !== undefined ? String(lastName).trim() : undefined,
+            about: about !== undefined ? String(about).trim() : undefined,
+          })
+        );
+        actionsDone.push('profile');
+      }
+
+      // 2. Update Username via Api.account.UpdateUsername
+      if (username !== undefined) {
+        const cleanUsername = String(username).replace(/^@/, '').trim();
+        await client.invoke(
+          new Api.account.UpdateUsername({
+            username: cleanUsername,
+          })
+        );
+        actionsDone.push('username');
+      }
+
+      // 3. Upload Profile Photo via client.uploadFile() then Api.photos.UploadProfilePhoto
+      let uploadedAvatarUrl = '';
+      if (photoBase64 && typeof photoBase64 === 'string') {
+        try {
+          const base64Clean = photoBase64.replace(/^data:image\/\w+;base64,/, '');
+          const photoBuffer = Buffer.from(base64Clean, 'base64');
+          const uploadedFile: any = await client.uploadFile({
+            file: new CustomFile('profile_avatar.jpg', photoBuffer.length, '', photoBuffer),
+            workers: 1,
+          });
+          if (uploadedFile) {
+            await client.invoke(
+              new Api.photos.UploadProfilePhoto({
+                file: uploadedFile,
+              })
+            );
+            uploadedAvatarUrl = photoBase64;
+            actionsDone.push('photo');
+          }
+        } catch (photoErr: any) {
+          console.warn('[MTProto] Upload photo error in /api/account/settings/update:', photoErr?.message || photoErr);
+          return res.status(400).json({ success: false, error: 'PHOTO_UPLOAD_FAILED', message: photoErr?.message || 'فشل رفع الصورة الشخصية' });
+        }
+      }
+
+      // 4. Update 2FA Password via Api.account.UpdatePasswordSettings (SRP)
+      if (newPassword !== undefined || (currentPassword && hint !== undefined)) {
+        try {
+          const pwd: any = await client.invoke(new Api.account.GetPassword());
+          let checkPassword: any = new Api.InputCheckPasswordEmpty();
+          if (pwd.hasPassword) {
+            if (!currentPassword) {
+              return res.status(400).json({
+                success: false,
+                error: 'PASSWORD_HASH_INVALID',
+                message: 'كلمة المرور الحالية مطلوبة للتعديل.',
+              });
+            }
+            checkPassword = await pwdHelper.computeCheck(pwd, currentPassword);
+          }
+
+          let inputSettings: any;
+          if (newPassword) {
+            const newAlgo = pwd.newAlgo;
+            const newPasswordHash = await pwdHelper.computeDigest(newAlgo, newPassword);
+            inputSettings = new Api.account.PasswordInputSettings({
+              newAlgo,
+              newPasswordHash,
+              hint: hint !== undefined ? hint : (pwd.hint || ''),
+              email: email ? email.trim() : undefined,
+            });
+          } else if (newPassword === '') {
+            // Disable 2FA password
+            inputSettings = new Api.account.PasswordInputSettings({
+              newPasswordHash: Buffer.alloc(0),
+              hint: '',
+              email: undefined,
+            });
+          } else {
+            inputSettings = new Api.account.PasswordInputSettings({
+              hint: hint !== undefined ? hint : (pwd.hint || ''),
+              email: email !== undefined ? (email ? email.trim() : '') : undefined,
+            });
+          }
+
+          await client.invoke(
+            new Api.account.UpdatePasswordSettings({
+              password: checkPassword,
+              newSettings: inputSettings,
+            })
+          );
+          actionsDone.push('2fa_password');
+        } catch (pwdErr: any) {
+          console.warn('[MTProto] UpdatePasswordSettings error:', pwdErr?.message || pwdErr);
+          return res.status(400).json({
+            success: false,
+            error: pwdErr?.errorMessage || pwdErr?.message || 'PASSWORD_UPDATE_FAILED',
+            message: pwdErr?.errorMessage || 'فشل تحديث كلمة المرور الثنائية (تحقق من كلمة المرور الحالية)',
+          });
+        }
+      }
+
+      // 5. Update Privacy Setting via Api.account.SetPrivacy
+      if (privacyTarget && privacyOption) {
+        let inputKey: any = null;
+        switch (privacyTarget) {
+          case 'last_seen':
+          case 'lastSeen':
+            inputKey = new Api.InputPrivacyKeyStatusTimestamp();
+            break;
+          case 'phone_number':
+          case 'phoneNumber':
+            inputKey = new Api.InputPrivacyKeyPhoneNumber();
+            break;
+          case 'profile_photos':
+          case 'profilePhotos':
+            inputKey = new Api.InputPrivacyKeyProfilePhoto();
+            break;
+          case 'forwards':
+            inputKey = new Api.InputPrivacyKeyForwards();
+            break;
+          case 'calls':
+            inputKey = new Api.InputPrivacyKeyPhoneCall();
+            break;
+          case 'voice_messages':
+          case 'voiceMessages':
+            inputKey = new Api.InputPrivacyKeyVoiceMessages();
+            break;
+          case 'bio':
+            inputKey = new Api.InputPrivacyKeyAbout();
+            break;
+          default:
+            inputKey = new Api.InputPrivacyKeyStatusTimestamp();
+        }
+
+        let inputRules: any[] = [];
+        if (privacyOption === 'contacts') {
+          inputRules = [new Api.InputPrivacyValueAllowContacts(), new Api.InputPrivacyValueDisallowAll()];
+        } else if (privacyOption === 'nobody') {
+          inputRules = [new Api.InputPrivacyValueDisallowAll()];
+        } else {
+          inputRules = [new Api.InputPrivacyValueAllowAll()];
+        }
+
+        await client.invoke(
+          new Api.account.SetPrivacy({
+            key: inputKey,
+            rules: inputRules,
+          })
+        );
+        actionsDone.push('privacy');
+      }
+
+      // Fetch fresh profile state to return updated snapshot
+      const me: any = await client.getMe();
+      let latestAbout = about;
+      if (latestAbout === undefined) {
+        try {
+          const fullUserRes: any = await withTimeout(
+            client.invoke(new Api.users.GetFullUser({ id: new Api.InputUserSelf() })),
+            2500,
+            null
+          );
+          if (fullUserRes?.fullUser?.about) {
+            latestAbout = fullUserRes.fullUser.about;
+          }
+        } catch (_) {}
+      }
+
+      const updatedFirstName = me.firstName || me.first_name || '';
+      const updatedLastName = me.lastName || me.last_name || '';
+      const updatedFullName = [updatedFirstName, updatedLastName].filter(Boolean).join(' ') || 'Telegram User';
+
+      const userProfile = {
+        id: String(me.id),
+        name: updatedFullName,
+        firstName: updatedFirstName,
+        lastName: updatedLastName,
+        username: me.username ? (me.username.startsWith('@') ? me.username : `@${me.username}`) : undefined,
+        phone: me.phone ? (me.phone.startsWith('+') ? me.phone : `+${me.phone}`) : phone,
+        avatar: uploadedAvatarUrl || undefined,
+        bio: latestAbout,
+        isPremium: Boolean(me.premium),
+        isVerified: Boolean(me.verified),
+      };
+
+      return res.json({
+        success: true,
+        actionsDone,
+        user: userProfile,
+        message: 'تمت مزامنة إعدادات الحساب مع خوادم تيليجرام بنجاح',
+      });
+    } catch (err: any) {
+      console.warn('[MTProto] POST /api/account/settings/update error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // 8.12 Real Profile Settings (getMe / users.getFullUser / account.updateProfile / account.updateUsername / photos.uploadProfilePhoto)
   app.get('/api/telegram/account/profile', async (req, res) => {
     const sessionString = (req.query?.sessionString as string) || '';

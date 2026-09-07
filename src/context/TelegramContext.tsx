@@ -2093,7 +2093,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         lastName = parts.length > 1 ? parts.slice(1).join(' ') : '';
       }
 
-      const resp = await fetch('/api/telegram/account/update-profile', {
+      const resp = await fetch('/api/account/settings/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

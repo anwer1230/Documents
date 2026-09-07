@@ -109,6 +109,8 @@ import { ChannelBoostsView } from './ChannelBoostsView';
 import { MemberRequestsView } from './MemberRequestsView';
 import { CacheByChatsView } from './CacheByChatsView';
 import { AppUpdateSettingsView } from './AppUpdateSettingsView';
+import { AccountSettingsView } from './AccountSettingsView';
+import { AccountProfileSettings } from '../Settings/AccountProfileSettings';
 
 export const SettingsModal: React.FC = () => {
   const {
@@ -194,7 +196,13 @@ export const SettingsModal: React.FC = () => {
                   />
                 )}
 
-                {settingsSubPage === 'account' && <AccountEditView onBack={goBack} />}
+                {settingsSubPage === 'account' && (
+                  <AccountProfileSettings
+                    onBack={goBack}
+                    onNavigateTo2FA={() => setSettingsSubPage('two_step_verification')}
+                    onNavigateToPrivacy={() => setSettingsSubPage('privacy_security')}
+                  />
+                )}
                 {settingsSubPage === 'plus_settings' && (
                   <PlusSettingsView
                     onBack={goBack}
