@@ -370,12 +370,22 @@ export class ChatStore {
       try {
         localStorage.setItem(this.CHATS_STORAGE_KEY, JSON.stringify(chats));
       } catch (e) {
-        console.warn('[chatStore] Error saving cached chats to localStorage:', e);
+        console.warn('[chatStore] Error saving cached chats to localStorage, attempting compact storage:', e);
+        try {
+          // If storage quota exceeded (e.g. lots of base64 avatars), save lightweight metadata
+          const compact = chats.map((c) => ({
+            ...c,
+            avatar: c.avatar && c.avatar.startsWith('data:image') && c.avatar.length > 2000 ? '' : c.avatar,
+          }));
+          localStorage.setItem(this.CHATS_STORAGE_KEY, JSON.stringify(compact));
+        } catch (_) {}
       }
     }
     try {
       telegramDB.saveChats(chats);
-    } catch {}
+    } catch (e) {
+      console.warn('[chatStore] Error saving cached chats to telegramDB:', e);
+    }
   }
 
   /**
@@ -404,6 +414,25 @@ export class ChatStore {
         return sqliteChats;
       }
     } catch {}
+    return [];
+  }
+
+  /**
+   * Retrieve cached chats asynchronously with full IndexedDB / SQLite resolution
+   */
+  public async getCachedChatsAsync(): Promise<Chat[]> {
+    const sync = this.getCachedChats();
+    if (sync && sync.length > 0) return sync;
+    try {
+      await telegramDB.init();
+      const sqliteChats = telegramDB.getChats();
+      if (sqliteChats && sqliteChats.length > 0) {
+        this.cachedChats = sqliteChats;
+        return sqliteChats;
+      }
+    } catch (e) {
+      console.warn('[chatStore] getCachedChatsAsync error:', e);
+    }
     return [];
   }
 

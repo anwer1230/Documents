@@ -831,11 +831,17 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const storedChats = telegramDB.getChats();
         if (storedChats && storedChats.length > 0 && !isCancelled) {
           setChats((prev) => {
-            if (prev.length === 0) return storedChats;
+            const isPrevOnlyMock = prev.length === 0 || prev.every((c) => c.id.startsWith('chat_'));
+            if (isPrevOnlyMock) {
+              chatStore.saveChats(storedChats);
+              return storedChats;
+            }
             // Merge unread and latest data
             const existingIds = new Set(prev.map((c) => c.id));
             const newFromDb = storedChats.filter((c) => !existingIds.has(c.id));
-            return newFromDb.length > 0 ? [...prev, ...newFromDb] : prev;
+            const merged = newFromDb.length > 0 ? [...prev, ...newFromDb] : prev;
+            chatStore.saveChats(merged);
+            return merged;
           });
         }
       } catch (err) {
@@ -2716,7 +2722,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setIsOffline(true);
       setNetworkStatus('offline');
-      const cached = chatStore.getCachedChats();
+      const cached = await chatStore.getCachedChatsAsync();
       if (cached && cached.length > 0) {
         setChats((prev) => (prev && prev.length > 0 ? prev : cached));
       }

@@ -2452,12 +2452,66 @@ async function startServer() {
       isVerified: Boolean(me.verified),
     };
 
-    // 3. Fetch Real Telegram Dialogs (messages.getDialogs RPC)
-    console.log('[MTProto] Fetching real dialogs (messages.getDialogs) from Telegram cloud...');
+    // 3. Fetch Real Telegram Dialogs (messages.getDialogs RPC) with Pagination Loop (up to 500 dialogs)
+    console.log('[MTProto] Fetching real dialogs (messages.getDialogs) from Telegram cloud with pagination loop...');
     let rawDialogs: any[] = [];
+    const MAX_DIALOGS = 500;
+    const CHUNK_LIMIT = 100;
+    const seenDialogIds = new Set<string>();
+
     try {
-      rawDialogs = await withTimeout(client.getDialogs({ limit: 50 }), 3500, []);
-      console.log(`[MTProto] getDialogs returned ${rawDialogs.length} dialogs.`);
+      let offsetId = 0;
+      let offsetDate = 0;
+      let offsetPeer: any = undefined;
+      let hasMore = true;
+      let iteration = 0;
+      const MAX_ITERATIONS = 5; // Up to 5 chunks of 100 dialogs = 500 dialogs max
+
+      while (hasMore && rawDialogs.length < MAX_DIALOGS && iteration < MAX_ITERATIONS) {
+        iteration++;
+        const chunkParams: any = { limit: CHUNK_LIMIT };
+        if (offsetId) chunkParams.offsetId = offsetId;
+        if (offsetDate) chunkParams.offsetDate = offsetDate;
+        if (offsetPeer) chunkParams.offsetPeer = offsetPeer;
+
+        const chunk: any[] = await withTimeout(
+          client.getDialogs(chunkParams),
+          4500,
+          []
+        );
+
+        if (!chunk || chunk.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        let newCount = 0;
+        for (const d of chunk) {
+          const dKey = String(d.id || d.entity?.id || '');
+          if (!dKey || !seenDialogIds.has(dKey)) {
+            if (dKey) seenDialogIds.add(dKey);
+            rawDialogs.push(d);
+            newCount++;
+          }
+        }
+
+        console.log(`[MTProto] getDialogs batch ${iteration}: retrieved ${chunk.length} items (${newCount} new, total: ${rawDialogs.length}).`);
+
+        if (chunk.length < CHUNK_LIMIT || newCount === 0) {
+          hasMore = false;
+          break;
+        }
+
+        const lastDialog = chunk[chunk.length - 1];
+        if (lastDialog) {
+          offsetId = lastDialog.message?.id || lastDialog.id || 0;
+          offsetDate = lastDialog.date || lastDialog.message?.date || 0;
+          offsetPeer = lastDialog.inputEntity || undefined;
+        } else {
+          hasMore = false;
+        }
+      }
+      console.log(`[MTProto] getDialogs pagination completed: collected ${rawDialogs.length} dialogs in ${iteration} batches.`);
     } catch (dialogsErr: any) {
       console.warn('[MTProto] getDialogs notice:', dialogsErr?.message || dialogsErr);
     }
