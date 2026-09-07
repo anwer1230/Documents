@@ -863,6 +863,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch (err) {
         console.warn('[StorageEngine] Error hydrating chats from IndexedDB:', err);
       }
+
+      // Background non-blocking migration: ensure existing cached messages have v2 multiEntry search tokens & compound indexes
+      try {
+        messageCache.reindexExistingMessages().catch((e) => {
+          console.warn('[IndexedDBMessageCache] Background re-indexing notice:', e);
+        });
+      } catch (_) {}
     })();
     return () => {
       isCancelled = true;

@@ -2649,10 +2649,10 @@ async function startServer() {
         }
       }
 
-      // Also retrieve archived dialogs if available (folderId: 1)
+      // Also retrieve archived dialogs if available (folder: 1)
       try {
         const archivedChunk: any[] = await withRetry(
-          () => client.getDialogs({ limit: 200, folderId: 1 }),
+          () => client.getDialogs({ limit: 200, folder: 1 }),
           { retries: 1, timeout: 15000, delay: 500, fallback: [] }
         );
         if (archivedChunk && archivedChunk.length > 0) {

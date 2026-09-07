@@ -19,6 +19,8 @@ import {
 import { usePullToRefresh, useEdgeSwipeDrawer } from '../../hooks/useTouchGestures';
 import { messagesController } from '../../core/MessagesController';
 import { draftSyncService } from '../../services/DraftSyncService';
+import { messageCache } from '../../services/IndexedDBMessageCache';
+import { Message } from '../../types';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -51,6 +53,30 @@ export const Sidebar: React.FC = () => {
 
   const [cloudSearchResults, setCloudSearchResults] = useState<any[]>([]);
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
+  const [offlineIndexedMessages, setOfflineIndexedMessages] = useState<Message[]>([]);
+
+  useEffect(() => {
+    if (!q || q.length < 2) {
+      setOfflineIndexedMessages([]);
+      return;
+    }
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      try {
+        const results = await messageCache.searchMessagesOffline(q, { limit: 40 });
+        if (isMounted) {
+          setOfflineIndexedMessages(results);
+        }
+      } catch (err) {
+        console.warn('[Sidebar] IndexedDB message search error:', err);
+      }
+    }, 150);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [q]);
 
   useEffect(() => {
     if (!q || q.length < 2) {
@@ -133,7 +159,7 @@ export const Sidebar: React.FC = () => {
     (c) => c.type === 'private' || c.type === 'saved' || c.isSecret
   );
 
-  // Search inside all messages
+  // Search inside all messages (combining in-memory state + IndexedDB MultiEntry token index)
   const matchingMessagesList: {
     chatId: string;
     chatTitle: string;
@@ -144,11 +170,15 @@ export const Sidebar: React.FC = () => {
   }[] = [];
 
   if (isSearching) {
+    const seenMsgIds = new Set<string>();
+
+    // 1. In-memory messages for active conversations
     Object.entries(messages).forEach(([cId, msgList]) => {
       const parentChat = chats.find((c) => c.id === cId);
       const list = Array.isArray(msgList) ? msgList : [];
       list.forEach((m) => {
         if (m.text && m.text.toLowerCase().includes(q)) {
+          seenMsgIds.add(String(m.id));
           matchingMessagesList.push({
             chatId: cId,
             chatTitle: parentChat?.title || m.senderName || 'Chat',
@@ -160,6 +190,22 @@ export const Sidebar: React.FC = () => {
         }
       });
     });
+
+    // 2. High-speed IndexedDB token-indexed offline messages across entire history
+    for (const m of offlineIndexedMessages) {
+      if (!seenMsgIds.has(String(m.id))) {
+        seenMsgIds.add(String(m.id));
+        const parentChat = chats.find((c) => c.id === m.chatId);
+        matchingMessagesList.push({
+          chatId: m.chatId,
+          chatTitle: parentChat?.title || m.senderName || 'Chat',
+          chatAvatar: parentChat?.avatar || m.senderAvatar || '',
+          msgId: m.id,
+          text: m.text,
+          date: m.timestamp,
+        });
+      }
+    }
   }
 
   // Exact DrKLO MessagesController & DialogsAdapter sorting algorithm
