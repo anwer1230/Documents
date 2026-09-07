@@ -31,6 +31,15 @@ export interface StoredBatchMessage {
   updated_at?: number;
 }
 
+export interface StoredPrivateAutoReply {
+  id: string;
+  keyword: string;
+  reply: string;
+  is_active: boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
 /**
  * Common SQLite Driver interface supporting both native node:sqlite and WebAssembly sql.js fallback.
  */
@@ -209,6 +218,15 @@ export class SQLiteDatabaseService {
         CREATE TABLE IF NOT EXISTS app_settings (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS private_auto_replies (
+          id TEXT PRIMARY KEY,
+          keyword TEXT NOT NULL,
+          reply TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
         );
       `);
 
@@ -518,6 +536,131 @@ export class SQLiteDatabaseService {
       );
     } catch (e) {
       console.error(`[SQLite] incrementRuleUsage(${id}) error:`, e);
+    }
+  }
+
+  // =========================================================================
+  // PRIVATE CHAT AUTO REPLIES (Dedicated Independent Table: private_auto_replies)
+  // Strictly independent from automation_rules and keyword monitoring.
+  // =========================================================================
+
+  public getPrivateAutoReplies(): StoredPrivateAutoReply[] {
+    if (!this.db) return [];
+    try {
+      const rows = this.db.all<any>('SELECT * FROM private_auto_replies ORDER BY created_at ASC');
+      return rows.map((r) => ({
+        id: r.id,
+        keyword: r.keyword,
+        reply: r.reply,
+        is_active: Boolean(r.is_active),
+        created_at: Number(r.created_at || 0),
+        updated_at: Number(r.updated_at || 0),
+      }));
+    } catch (e) {
+      console.error('[SQLite] getPrivateAutoReplies error:', e);
+      return [];
+    }
+  }
+
+  public getPrivateAutoReplyById(id: string): StoredPrivateAutoReply | null {
+    if (!this.db || !id) return null;
+    try {
+      const r = this.db.get<any>('SELECT * FROM private_auto_replies WHERE id = ?', [id]);
+      if (!r) return null;
+      return {
+        id: r.id,
+        keyword: r.keyword,
+        reply: r.reply,
+        is_active: Boolean(r.is_active),
+        created_at: Number(r.created_at || 0),
+        updated_at: Number(r.updated_at || 0),
+      };
+    } catch (e) {
+      console.error(`[SQLite] getPrivateAutoReplyById(${id}) error:`, e);
+      return null;
+    }
+  }
+
+  public addPrivateAutoReply(data: { id?: string; keyword: string; reply: string; is_active?: boolean | number }): StoredPrivateAutoReply {
+    const id = data.id || `par_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const keyword = (data.keyword || '').trim();
+    const reply = (data.reply || '').trim();
+    const is_active = data.is_active !== false && data.is_active !== 0 ? 1 : 0;
+    const now = Date.now();
+
+    if (this.db) {
+      try {
+        this.db.run(
+          `INSERT OR REPLACE INTO private_auto_replies (id, keyword, reply, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [id, keyword, reply, is_active, now, now]
+        );
+      } catch (e) {
+        console.error('[SQLite] addPrivateAutoReply error:', e);
+      }
+    }
+
+    return {
+      id,
+      keyword,
+      reply,
+      is_active: Boolean(is_active),
+      created_at: now,
+      updated_at: now,
+    };
+  }
+
+  public updatePrivateAutoReply(
+    id: string,
+    updates: { keyword?: string; reply?: string; is_active?: boolean | number }
+  ): StoredPrivateAutoReply | null {
+    const existing = this.getPrivateAutoReplyById(id);
+    if (!existing || !this.db) return null;
+
+    const keyword = updates.keyword !== undefined ? updates.keyword.trim() : existing.keyword;
+    const reply = updates.reply !== undefined ? updates.reply.trim() : existing.reply;
+    const is_active = updates.is_active !== undefined
+      ? (updates.is_active ? 1 : 0)
+      : (existing.is_active ? 1 : 0);
+    const now = Date.now();
+
+    try {
+      this.db.run(
+        `UPDATE private_auto_replies 
+         SET keyword = ?, reply = ?, is_active = ?, updated_at = ?
+         WHERE id = ?`,
+        [keyword, reply, is_active, now, id]
+      );
+      return this.getPrivateAutoReplyById(id);
+    } catch (e) {
+      console.error(`[SQLite] updatePrivateAutoReply(${id}) error:`, e);
+      return null;
+    }
+  }
+
+  public deletePrivateAutoReply(id: string): boolean {
+    if (!this.db || !id) return false;
+    try {
+      this.db.run('DELETE FROM private_auto_replies WHERE id = ?', [id]);
+      return true;
+    } catch (e) {
+      console.error(`[SQLite] deletePrivateAutoReply(${id}) error:`, e);
+      return false;
+    }
+  }
+
+  public togglePrivateAutoReply(id: string): StoredPrivateAutoReply | null {
+    const existing = this.getPrivateAutoReplyById(id);
+    if (!existing || !this.db) return null;
+
+    const nextState = existing.is_active ? 0 : 1;
+    const now = Date.now();
+    try {
+      this.db.run('UPDATE private_auto_replies SET is_active = ?, updated_at = ? WHERE id = ?', [nextState, now, id]);
+      return this.getPrivateAutoReplyById(id);
+    } catch (e) {
+      console.error(`[SQLite] togglePrivateAutoReply(${id}) error:`, e);
+      return null;
     }
   }
 

@@ -1823,23 +1823,100 @@ async function startServer() {
               }
             }
           }
-
-          // ==============================================================
-          // AUTO REPLIES ENGINE (AUTOMATIC, REAL GRAMJS RESPONSE)
-          // ==============================================================
-          if (!isOut && !msg.out && sqliteDatabase.isAutoRepliesEnabled() && textSnippet) {
-            handleAutoReplyForMessage(client, msg, {
-              chatId,
-              peerIdStr,
-              senderId,
-              senderName,
-              text: textSnippet,
-            }).catch((err) => {
-              console.warn('[AutoReply] Handler error:', err);
-            });
-          }
         } catch (eventErr) {
           console.warn('[TelegramClient] Event handler error:', eventErr);
+        }
+      }, new NewMessage({}));
+
+      // ==============================================================
+      // INDEPENDENT DEDICATED EVENT HANDLER: PRIVATE CHAT AUTO-REPLIES
+      // Completely decoupled from keyword monitoring or any other worker.
+      // Strictly processes incoming messages in Private Chats ONLY.
+      // FORBIDDEN from handling any messages from groups or channels.
+      // Reads keyword and reply permanently from SQLite table `private_auto_replies`.
+      // ==============================================================
+      client.addEventHandler(async (event: any) => {
+        try {
+          const msg = event?.message;
+          if (!msg) return;
+
+          // 1. Strictly ignore outgoing messages (sent by the user / account itself)
+          if (event.isOutgoing || msg.out) return;
+
+          // 2. Strict validation: MUST be a Private Chat ONLY
+          // GramJS NewMessage event has event.isPrivate boolean.
+          // Also check msg.isGroup, msg.isChannel, and chat ID format.
+          const isGroupOrChannel = Boolean(
+            msg.isGroup ||
+            msg.isChannel ||
+            event.isGroup ||
+            event.isChannel ||
+            (msg.peerId && (msg.peerId.channelId || msg.peerId.chatId))
+          );
+
+          if (isGroupOrChannel) {
+            // Strictly forbidden in groups and channels
+            return;
+          }
+
+          const isPrivateChat = Boolean(
+            event.isPrivate ||
+            (msg.peerId && (msg.peerId.userId || msg.peerId.className === 'PeerUser')) ||
+            (typeof event.chatId === 'number' && event.chatId > 0)
+          );
+
+          if (!isPrivateChat) {
+            return;
+          }
+
+          const rawText = (msg.message || '').trim();
+          if (!rawText) return;
+
+          // 3. Read active rules permanently from SQLite table `private_auto_replies`
+          const activeRules = sqliteDatabase.getPrivateAutoReplies().filter((r) => Boolean(r.is_active));
+          if (!activeRules || activeRules.length === 0) return;
+
+          const normalizedMsgText = normalizeArabicText(rawText);
+
+          // 4. Match message with keyword and reply
+          for (const rule of activeRules) {
+            const keyword = (rule.keyword || '').trim();
+            if (!keyword) continue;
+
+            const normalizedKw = normalizeArabicText(keyword);
+            const isMatch =
+              normalizedMsgText.includes(normalizedKw) ||
+              rawText.toLowerCase().includes(keyword.toLowerCase());
+
+            if (isMatch) {
+              const replyText = (rule.reply || '').trim();
+              if (!replyText) continue;
+
+              console.log(`[PrivateAutoReply] 🤖 Triggered rule "${rule.keyword}" in private chat ${event.chatId || msg.chatId}`);
+
+              // Target peer in private chat
+              const targetPeer = event.message?.peerId || msg.peerId || event.chatId || msg.chatId;
+              await client.sendMessage(targetPeer, {
+                message: replyText,
+                replyTo: msg.id,
+              });
+
+              try {
+                io.emit('private_auto_reply_sent', {
+                  ruleId: rule.id,
+                  keyword: rule.keyword,
+                  reply: replyText,
+                  chatId: String(event.chatId || msg.chatId || ''),
+                  messageId: msg.id,
+                  timestamp: Date.now(),
+                });
+              } catch (_) {}
+
+              break; // Stop after first matched rule to avoid multiple replies
+            }
+          }
+        } catch (err: any) {
+          console.warn('[PrivateAutoReply] Handler error:', err?.message || err);
         }
       }, new NewMessage({}));
 
@@ -9244,6 +9321,132 @@ Please provide the concise summary.`;
       success: true,
       autoRepliesEnabled: nextState,
     });
+  });
+
+  // =========================================================================
+  // DEDICATED PRIVATE AUTO REPLIES API (Table: private_auto_replies)
+  // Strictly independent from automation_rules and keyword monitoring.
+  // =========================================================================
+  app.get('/api/auto-replies/private/list', (req, res) => {
+    try {
+      const rules = sqliteDatabase.getPrivateAutoReplies();
+      res.json({
+        success: true,
+        rules,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل جلب القواعد' });
+    }
+  });
+
+  app.post('/api/auto-replies/private/add', (req, res) => {
+    try {
+      const { keyword, reply, is_active } = req.body || {};
+      const trimmedKeyword = (keyword || '').trim();
+      const trimmedReply = (reply || '').trim();
+
+      if (!trimmedKeyword || !trimmedReply) {
+        return res.status(400).json({
+          success: false,
+          message: 'الكلمة المفتاحية ونص الرد مطلوبان',
+        });
+      }
+
+      const rule = sqliteDatabase.addPrivateAutoReply({
+        keyword: trimmedKeyword,
+        reply: trimmedReply,
+        is_active: is_active !== undefined ? Boolean(is_active) : true,
+      });
+
+      res.json({
+        success: true,
+        message: 'تمت إضافة قاعدة الرد التلقائي للمحادثات الخاصة بنجاح',
+        rule,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل إضافة القاعدة' });
+    }
+  });
+
+  app.post('/api/auto-replies/private/edit', (req, res) => {
+    try {
+      const { id, keyword, reply, is_active } = req.body || {};
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: 'معرف القاعدة مطلوب',
+        });
+      }
+
+      const updated = sqliteDatabase.updatePrivateAutoReply(id, {
+        keyword,
+        reply,
+        is_active,
+      });
+
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          message: 'القاعدة غير موجودة',
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'تم تعديل قاعدة الرد بنجاح',
+        rule: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل تعديل القاعدة' });
+    }
+  });
+
+  app.post('/api/auto-replies/private/delete', (req, res) => {
+    try {
+      const { id } = req.body || {};
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: 'معرف القاعدة مطلوب',
+        });
+      }
+
+      const deleted = sqliteDatabase.deletePrivateAutoReply(id);
+      res.json({
+        success: true,
+        message: deleted ? 'تم حذف القاعدة بنجاح' : 'القاعدة غير موجودة',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل حذف القاعدة' });
+    }
+  });
+
+  app.post('/api/auto-replies/private/toggle', (req, res) => {
+    try {
+      const { id } = req.body || {};
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: 'معرف القاعدة مطلوب',
+        });
+      }
+
+      const rule = sqliteDatabase.togglePrivateAutoReply(id);
+      if (!rule) {
+        return res.status(404).json({
+          success: false,
+          message: 'القاعدة غير موجودة',
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'تم تغيير حالة التفعيل بنجاح',
+        rule,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err?.message || 'فشل تبديل الحالة' });
+    }
   });
 
   // =========================================================================

@@ -521,6 +521,15 @@ export interface AutoReplyRule {
   lastTriggeredAt?: string;
 }
 
+export interface PrivateAutoReplyRule {
+  id: string;
+  keyword: string;
+  reply: string;
+  is_active: boolean;
+  created_at?: number;
+  updated_at?: number;
+}
+
 // 6. Smart AI Learn (Groq LLM)
 export interface SmartAiService {
   id: string;
