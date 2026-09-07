@@ -49,6 +49,7 @@ export const ChatInput: React.FC = () => {
     activeChat,
     activeChatId,
     sendMessage,
+    sendMediaMessage,
     editMessageText,
     replyingTo,
     setReplyingTo,
@@ -418,27 +419,19 @@ export const ChatInput: React.FC = () => {
     setRecordDuration(0);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const url = URL.createObjectURL(file);
-    const isImage = file.type.startsWith('image/');
-
-    const media: MessageMedia = {
-      type: isImage ? 'photo' : 'document',
-      url,
-      fileName: file.name,
-      fileSize: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-    };
-
+    const caption = text;
     if (activeChatId) {
       setChatDraft(activeChatId, '');
     }
-    sendMessage(text, media);
     setText('');
     setShowAttachMenu(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+
+    await sendMediaMessage(file, caption);
   };
 
   const sendSticker = (stickerUrl: string) => {

@@ -215,6 +215,7 @@ interface TelegramContextType {
   
   // Messages & Interactions
   sendMessage: (text: string, media?: MessageMedia) => void;
+  sendMediaMessage: (file: File, caption?: string, mediaType?: 'photo' | 'document') => Promise<void>;
   editMessageText: (messageId: string, newText: string) => void;
   forwardMessageTo: (targetChatId: string, message: Message) => void;
   toggleReaction: (messageId: string, emoji: string) => void;
@@ -3443,19 +3444,182 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
+  const sendMediaMessage = async (file: File, caption?: string, mediaType?: 'photo' | 'document') => {
+    if (!activeChatId) return;
+
+    // Clear draft for this chat immediately across sessions
+    draftSyncService.clearDraft(activeChatId);
+
+    const now = new Date();
+    const timeStr = formatTelegramTime(now);
+    const dateStr = now.toISOString().split('T')[0];
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const isPhoto = mediaType === 'photo' || file.type.startsWith('image/');
+    const localUrl = URL.createObjectURL(file);
+    const fileSizeStr = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+
+    const mediaObj: MessageMedia = {
+      type: isPhoto ? 'photo' : 'document',
+      url: localUrl,
+      fileName: file.name,
+      fileSize: fileSizeStr,
+    };
+
+    const newOptimisticMessage: Message = {
+      id: messageId,
+      chatId: activeChatId,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderAvatar: currentUser.avatar,
+      text: (caption || '').trim(),
+      timestamp: timeStr,
+      date: dateStr,
+      epoch: now.getTime(),
+      rawDate: Math.floor(now.getTime() / 1000),
+      isOutgoing: true,
+      status: 'sending',
+      media: mediaObj,
+      replyTo: replyingTo || undefined,
+    };
+
+    setMessages((prev) => {
+      const currentList = prev[activeChatId] || [];
+      return {
+        ...prev,
+        [activeChatId]: [...currentList, newOptimisticMessage],
+      };
+    });
+
+    setChats((prev) =>
+      reorderChatsWithUpdate(prev, activeChatId, {
+        draft: undefined,
+        draftTimestamp: undefined,
+        lastMessage: {
+          id: messageId,
+          senderName: 'You',
+          text: (caption || '').trim() || (isPhoto ? 'Photo' : file.name),
+          timestamp: timeStr,
+          isOutgoing: true,
+          status: 'sending',
+          mediaType: isPhoto ? 'photo' : 'document',
+        },
+      })
+    );
+
+    setReplyingTo(null);
+
+    try {
+      const reader = new FileReader();
+      const fileData = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/telegram/messages/send-media', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: activeChatId,
+          fileData,
+          fileName: file.name,
+          mimeType: file.type,
+          caption: (caption || '').trim(),
+          mediaType: isPhoto ? 'photo' : 'document',
+          replyToMsgId: replyingTo?.messageId,
+          phone: currentUser.phone,
+          sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+        }),
+      });
+
+      const data = await res.json();
+      if (data && data.success && data.result) {
+        const realMsgId = String(data.result.id || '');
+        setMessages((prev) => {
+          const currentList = prev[activeChatId] || [];
+          return {
+            ...prev,
+            [activeChatId]: currentList.map((m) =>
+              m.id === messageId
+                ? {
+                    ...m,
+                    id: realMsgId || m.id,
+                    status: 'sent',
+                    date: data.result.date || m.date,
+                    timestamp: data.result.timestamp || m.timestamp,
+                  }
+                : m
+            ),
+          };
+        });
+        showToast(settings.language === 'ar' ? 'تم إرسال الملف بنجاح عبر تيليجرام' : 'Media sent via Telegram', '📎');
+        await syncInitializationRoutine().catch(() => {});
+      } else {
+        const errMsg = data?.message || data?.error || 'Failed to send media';
+        showToast(errMsg, '❌');
+        setMessages((prev) => {
+          const currentList = prev[activeChatId] || [];
+          return {
+            ...prev,
+            [activeChatId]: currentList.map((m) =>
+              m.id === messageId ? { ...m, status: 'error' } : m
+            ),
+          };
+        });
+      }
+    } catch (err: any) {
+      console.error('sendMediaMessage error:', err);
+      showToast(err?.message || 'Error uploading file', '❌');
+      setMessages((prev) => {
+        const currentList = prev[activeChatId] || [];
+        return {
+          ...prev,
+          [activeChatId]: currentList.map((m) =>
+            m.id === messageId ? { ...m, status: 'error' } : m
+          ),
+        };
+      });
+    }
+  };
+
   const editMessageText = (messageId: string, newText: string) => {
     if (!activeChatId || !newText.trim()) return;
+    const trimmedText = newText.trim();
     setMessages((prev) => {
       const currentList = prev[activeChatId] || [];
       return {
         ...prev,
         [activeChatId]: currentList.map((m) =>
-          m.id === messageId ? { ...m, text: newText.trim(), isEdited: true } : m
+          m.id === messageId ? { ...m, text: trimmedText, isEdited: true } : m
         ),
       };
     });
     setEditingMessage(null);
     showToast(settings.language === 'ar' ? 'تم تعديل الرسالة' : 'Message edited', '✏️');
+
+    // Dispatch to Telegram MTProto server via POST /api/telegram/messages/edit
+    fetch('/api/telegram/messages/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: activeChatId,
+        messageId,
+        text: trimmedText,
+        phone: currentUser.phone,
+        sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data && data.success) {
+          console.log('[MTProto] Message edited successfully on Telegram server');
+        } else {
+          console.warn('[MTProto] editMessage returned non-success:', data);
+        }
+      })
+      .catch((err) => {
+        console.error('[MTProto] editMessage network error:', err);
+      });
   };
 
   const forwardMessageTo = (targetChatId: string, msgToForward: Message) => {
@@ -3476,7 +3640,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       timestamp: timeStr,
       date: dateStr,
       isOutgoing: true,
-      status: 'read',
+      status: 'sent',
       media: msgToForward.media,
       forwardedFrom: {
         fromChatName: msgToForward.senderName || originalChat?.title || 'Unknown',
@@ -3501,7 +3665,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 text: `Forwarded: ${msgToForward.text || '[Media]'}`,
                 timestamp: timeStr,
                 isOutgoing: true,
-                status: 'read',
+                status: 'sent',
               },
             }
           : c
@@ -3516,6 +3680,31 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       targetChatId,
       false
     ).catch(() => {});
+
+    // Dispatch to Telegram MTProto server via POST /api/telegram/messages/forward
+    fetch('/api/telegram/messages/forward', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fromChatId: msgToForward.chatId || activeChatId,
+        toChatId: targetChatId,
+        messageIds: [Number(msgToForward.id)],
+        phone: currentUser.phone,
+        sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data && data.success) {
+          console.log('[MTProto] Message forwarded successfully on Telegram server');
+          await syncInitializationRoutine().catch(() => {});
+        } else {
+          console.warn('[MTProto] forwardMessages returned non-success:', data);
+        }
+      })
+      .catch((err) => {
+        console.error('[MTProto] forwardMessages network error:', err);
+      });
 
     setActiveChatId(targetChatId);
     setForwardingMessage(null);
@@ -3594,6 +3783,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch {}
     }
 
+    let isRemoving = false;
+
     setMessages((prev) => {
       const currentList = prev[activeChatId] || [];
       const updated = currentList.map((msg) => {
@@ -3605,6 +3796,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (existing) {
           const hasUserReacted = existing.users.includes(currentUser.id);
           if (hasUserReacted) {
+            isRemoving = true;
             const newUsers = existing.users.filter((u) => u !== currentUser.id);
             const newCount = existing.count - 1;
             const updatedReactions = newCount > 0
@@ -3632,6 +3824,31 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         [activeChatId]: updated,
       };
     });
+
+    // Dispatch to Telegram MTProto server via POST /api/telegram/messages/react
+    fetch('/api/telegram/messages/react', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: activeChatId,
+        messageId,
+        emoji,
+        remove: isRemoving,
+        phone: currentUser.phone,
+        sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data && data.success) {
+          console.log('[MTProto] Reaction synced successfully on Telegram server');
+        } else {
+          console.warn('[MTProto] SendReaction returned non-success:', data);
+        }
+      })
+      .catch((err) => {
+        console.error('[MTProto] SendReaction network error:', err);
+      });
   };
 
   const deleteMessage = (messageId: string) => {
@@ -3641,6 +3858,29 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       [activeChatId]: (prev[activeChatId] || []).filter((m) => m.id !== messageId),
     }));
     showToast(settings.language === 'ar' ? 'تم حذف الرسالة' : 'Message deleted', '🗑️');
+
+    // Dispatch to Telegram MTProto server via POST /api/telegram/messages/delete
+    fetch('/api/telegram/messages/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId: activeChatId,
+        messageId,
+        phone: currentUser.phone,
+        sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (data && data.success) {
+          console.log('[MTProto] Message deleted successfully on Telegram server');
+        } else {
+          console.warn('[MTProto] deleteMessages returned non-success:', data);
+        }
+      })
+      .catch((err) => {
+        console.error('[MTProto] deleteMessages network error:', err);
+      });
   };
 
   const pinMessage = (messageId: string) => {
@@ -5274,6 +5514,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setMessageContextMenu,
         showToast,
         sendMessage,
+        sendMediaMessage,
         editMessageText,
         forwardMessageTo,
         toggleReaction,

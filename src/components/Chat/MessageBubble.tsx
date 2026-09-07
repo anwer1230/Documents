@@ -5,6 +5,8 @@ import {
   Pin,
   Reply,
   Share2,
+  Edit2,
+  Trash2,
   Smile,
   FileText,
   Download,
@@ -76,6 +78,10 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
     activeChat,
     setReplyingTo,
     toggleReaction,
+    deleteMessage,
+    setEditingMessage,
+    setForwardingMessage,
+    setActiveModal,
     setViewerMedia,
     votePoll,
     setMessageContextMenu,
@@ -385,6 +391,39 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
             title="Reply"
           >
             <Reply className="w-3.5 h-3.5" />
+          </button>
+          {isOutgoing && message.text && !message.media && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingMessage({ id: message.id, text: message.text || '' });
+              }}
+              className="hover:text-emerald-400 p-0.5 text-gray-300 transition-colors"
+              title="Edit"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setForwardingMessage(message);
+              setActiveModal('forward');
+            }}
+            className="hover:text-blue-400 p-0.5 text-gray-300 transition-colors"
+            title="Forward"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteMessage(message.id);
+            }}
+            className="hover:text-rose-400 p-0.5 text-gray-300 transition-colors"
+            title="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
 

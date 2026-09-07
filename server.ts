@@ -3841,7 +3841,357 @@ async function startServer() {
     }
   });
 
-  // 6. Check Chat Invite Link (messages.checkChatInvite RPC)
+  // 5.1 Send Media Dispatcher (Real client.uploadFile & client.sendFile MTProto RPC)
+  app.post('/api/telegram/messages/send-media', async (req, res) => {
+    const { chatId, fileData, fileName, mimeType, caption, replyToMsgId, mediaType, phone, sessionString } = req.body;
+
+    console.log(`[MTProto] Sending media to chat "${chatId}", fileName: ${fileName}, mediaType: ${mediaType}`);
+
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      if (!fileData) {
+        return res.status(400).json({
+          success: false,
+          error: 'NO_FILE_DATA',
+          message: 'لم يتم توفير بيانات الملف أو الصورة',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+
+      // Convert Base64 data to Buffer
+      const base64Clean = fileData.replace(/^data:[^;]+;base64,/, '');
+      const fileBuffer = Buffer.from(base64Clean, 'base64');
+      const safeFileName = fileName || (mimeType?.startsWith('image/') ? 'photo.jpg' : 'file.bin');
+      const isDocument = mediaType === 'document' || (!mimeType?.startsWith('image/') && !safeFileName.match(/\.(jpg|jpeg|png|webp|gif)$/i));
+
+      // Upload file via GramJS MTProto client.uploadFile()
+      const customFile = new CustomFile(safeFileName, fileBuffer.length, '', fileBuffer);
+      const uploadedFile = await client.uploadFile({
+        file: customFile,
+        workers: 1,
+      });
+
+      // Send file via GramJS MTProto client.sendFile()
+      let sentMsg: any = null;
+      try {
+        sentMsg = await client.sendFile(peerTarget, {
+          file: uploadedFile,
+          caption: caption || '',
+          parseMode: 'md',
+          replyTo: replyToMsgId ? Number(replyToMsgId) : undefined,
+          forceDocument: isDocument,
+        });
+      } catch (sendError: any) {
+        const sendErrMsg = sendError?.errorMessage || sendError?.message || '';
+        if (
+          (sendErrMsg.includes('USER_NOT_PARTICIPANT') || sendErrMsg.includes('CHAT_WRITE_FORBIDDEN')) &&
+          (peerTarget?.className === 'Channel' || peerTarget?.broadcast || peerTarget?.megagroup)
+        ) {
+          await client.invoke(new Api.channels.JoinChannel({ channel: peerTarget }));
+          sentMsg = await client.sendFile(peerTarget, {
+            file: uploadedFile,
+            caption: caption || '',
+            parseMode: 'md',
+            replyTo: replyToMsgId ? Number(replyToMsgId) : undefined,
+            forceDocument: isDocument,
+          });
+        } else {
+          throw sendError;
+        }
+      }
+
+      console.log(`[MTProto] Media sent successfully via Telegram cloud! ID: ${sentMsg?.id}`);
+
+      const msgTimestampSec = sentMsg?.date || Math.floor(Date.now() / 1000);
+      const msgDate = new Date(msgTimestampSec * 1000);
+      const peerIdClean = String(
+        peerTarget?.id ||
+        peerTarget?.userId ||
+        peerTarget?.channelId ||
+        peerTarget?.chatId ||
+        chatId.replace(/^chat_/, '')
+      );
+      const fullChatId = chatId.startsWith('chat_') ? chatId : `chat_${peerIdClean}`;
+
+      const outgoingMessageObj = {
+        id: String(sentMsg?.id || Date.now()),
+        chatId: fullChatId,
+        peerId: peerIdClean,
+        senderId: 'me',
+        senderName: 'أنت',
+        text: caption || sentMsg?.message || '',
+        timestamp: msgDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        date: msgDate.toISOString().split('T')[0],
+        epoch: msgDate.getTime(),
+        rawDate: msgTimestampSec,
+        out: true,
+        isOutgoing: true,
+        status: 'sent',
+        media: {
+          type: isDocument ? 'document' : 'photo',
+          fileName: safeFileName,
+          fileSize: `${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB`,
+          url: fileData.startsWith('data:') ? fileData : `data:${mimeType || 'application/octet-stream'};base64,${base64Clean}`,
+        },
+      };
+
+      broadcastTelegramUpdate({
+        type: 'new_message',
+        chatId: fullChatId,
+        peerId: peerIdClean,
+        out: true,
+        message: outgoingMessageObj,
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        result: outgoingMessageObj,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram send-media failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'SEND_MEDIA_FAILED',
+        message: `فشل إرسال الوسائط عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 5.2 Edit Message Dispatcher (Real client.editMessage MTProto RPC)
+  app.post('/api/telegram/messages/edit', async (req, res) => {
+    const { chatId, messageId, text, phone, sessionString } = req.body;
+
+    console.log(`[MTProto] Editing message ${messageId} in chat "${chatId}"`);
+
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+      const msgIdNum = Number(messageId);
+
+      await client.editMessage(peerTarget, {
+        message: msgIdNum,
+        text: text || '',
+        parseMode: 'md',
+      });
+
+      console.log(`[MTProto] Message ${msgIdNum} edited successfully via Telegram cloud!`);
+
+      broadcastTelegramUpdate({
+        type: 'edit_message',
+        chatId,
+        messageId: String(msgIdNum),
+        text: text || '',
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        result: {
+          id: String(msgIdNum),
+          chatId,
+          text: text || '',
+          isEdited: true,
+        },
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram editMessage failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'EDIT_MESSAGE_FAILED',
+        message: `فشل تعديل الرسالة عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 5.3 Delete Messages Dispatcher (Real client.deleteMessages MTProto RPC with revoke: true)
+  app.post('/api/telegram/messages/delete', async (req, res) => {
+    const { chatId, messageId, messageIds, phone, sessionString } = req.body;
+
+    console.log(`[MTProto] Deleting messages in chat "${chatId}":`, messageIds || messageId);
+
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+      const rawIds = messageIds || (messageId ? [messageId] : []);
+      const idsToDelete = rawIds.map((id: any) => Number(id)).filter((n: number) => !isNaN(n) && n > 0);
+
+      if (idsToDelete.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_MESSAGE_IDS',
+          message: 'معرفات الرسائل المطلوب حذفها غير صالحة',
+        });
+      }
+
+      await client.deleteMessages(peerTarget, idsToDelete, { revoke: true });
+
+      console.log(`[MTProto] Messages [${idsToDelete.join(', ')}] deleted successfully via Telegram cloud!`);
+
+      broadcastTelegramUpdate({
+        type: 'delete_messages',
+        chatId,
+        messages: idsToDelete.map(String),
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        deletedIds: idsToDelete.map(String),
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram deleteMessages failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'DELETE_MESSAGES_FAILED',
+        message: `فشل حذف الرسائل عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 5.4 Forward Messages Dispatcher (Real client.forwardMessages MTProto RPC)
+  app.post('/api/telegram/messages/forward', async (req, res) => {
+    const { fromChatId, toChatId, messageId, messageIds, phone, sessionString } = req.body;
+
+    console.log(`[MTProto] Forwarding messages from "${fromChatId}" to "${toChatId}"`);
+
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      const toPeer = await resolvePeerTarget(client, toChatId);
+      const fromPeer = await resolvePeerTarget(client, fromChatId);
+      const rawIds = messageIds || (messageId ? [messageId] : []);
+      const idsToForward = rawIds.map((id: any) => Number(id)).filter((n: number) => !isNaN(n) && n > 0);
+
+      if (idsToForward.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_MESSAGE_IDS',
+          message: 'معرفات الرسائل المطلوب إعادة توجيهها غير صالحة',
+        });
+      }
+
+      const forwardedResult: any = await client.forwardMessages(toPeer, {
+        messages: idsToForward,
+        fromPeer: fromPeer,
+      });
+
+      console.log(`[MTProto] Messages forwarded successfully via Telegram cloud!`);
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        result: forwardedResult,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram forwardMessages failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'FORWARD_MESSAGES_FAILED',
+        message: `فشل إعادة توجيه الرسائل عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 5.5 Send Reaction Dispatcher (Real client.invoke Api.messages.SendReaction MTProto RPC)
+  app.post('/api/telegram/messages/react', async (req, res) => {
+    const { chatId, messageId, emoji, remove, phone, sessionString } = req.body;
+
+    console.log(`[MTProto] Adding reaction "${emoji}" (remove=${remove}) to msg ${messageId} in chat "${chatId}"`);
+
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها. يرجى تسجيل الدخول أولاً.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+      const msgIdNum = Number(messageId);
+
+      if (isNaN(msgIdNum) || msgIdNum <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_MESSAGE_ID',
+          message: 'معرف الرسالة غير صالح للتفاعل',
+        });
+      }
+
+      const reactionArray = (remove || !emoji)
+        ? []
+        : [new Api.ReactionEmoji({ emoticon: emoji })];
+
+      const result: any = await client.invoke(
+        new Api.messages.SendReaction({
+          peer: peerTarget,
+          msgId: msgIdNum,
+          reaction: reactionArray,
+        })
+      );
+
+      console.log(`[MTProto] SendReaction applied successfully via Telegram cloud!`);
+
+      broadcastTelegramUpdate({
+        type: 'message_reaction',
+        chatId,
+        messageId: String(msgIdNum),
+        emoji: emoji || '',
+        remove: !!remove,
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        result,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram SendReaction failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'SEND_REACTION_FAILED',
+        message: `فشل إرسال التفاعل عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
   app.post('/api/telegram/links/resolve', (req, res) => {
     const { query } = req.body;
     const cleanQuery = (query || '').replace(/^(https?:\/\/)?(t\.me\/|@)?(\+)?/, '').toLowerCase();
