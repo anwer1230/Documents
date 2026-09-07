@@ -446,7 +446,8 @@ async function startServer() {
     },
     transports: ['websocket', 'polling'],
   });
-  const PORT = Number(process.env.PORT) || 3000;
+  // The PORT value (3000) is hardcoded by the infrastructure and must not read process.env.PORT
+  const PORT = 3000;
 
   // CORS & Preflight Handling
   app.use((req, res, next) => {
@@ -2262,7 +2263,7 @@ async function startServer() {
 
       let timer: any;
       const timeoutPromise = new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), 2500);
+        timer = setTimeout(() => resolve(false), 15000);
       });
 
       const connectPromise = client.connect()
@@ -2299,7 +2300,7 @@ async function startServer() {
   const sessionFailureCooldowns = new Map<string, number>();
 
   // Helper to safely connect a client with a timeout
-  const connectWithTimeout = async (client: TelegramClient, timeoutMs = 2500): Promise<boolean> => {
+  const connectWithTimeout = async (client: TelegramClient, timeoutMs = 15000): Promise<boolean> => {
     let timer: any;
     const timeoutPromise = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => resolve(false), timeoutMs);
@@ -2320,7 +2321,7 @@ async function startServer() {
       const activeInstance = accountInstances.get(accountIndex);
       if (activeInstance && activeInstance.client) {
         if (activeInstance.client.connected) return activeInstance.client;
-        const ok = await connectWithTimeout(activeInstance.client, 2500);
+        const ok = await connectWithTimeout(activeInstance.client, 15000);
         if (ok) return activeInstance.client;
       }
       const stored = readAccountSession(accountIndex);
@@ -3150,7 +3151,7 @@ async function startServer() {
         console.log(`[MTProto] Invoking client.sendCode with forceSMS: ${isForceSms}...`);
         let sendCodeTimer: any;
         const sendCodeTimeout = new Promise<null>((resolve) => {
-          sendCodeTimer = setTimeout(() => resolve(null), 2500);
+          sendCodeTimer = setTimeout(() => resolve(null), 30000);
         });
 
         const sendCodeCall = client.sendCode(
@@ -3282,7 +3283,7 @@ async function startServer() {
           console.log(`[MTProto] Calling auth.resendCode on real TelegramClient for ${formattedPhone}...`);
           let resendTimer: any;
           const resendTimeout = new Promise<null>((resolve) => {
-            resendTimer = setTimeout(() => resolve(null), 2500);
+            resendTimer = setTimeout(() => resolve(null), 25000);
           });
           const resendCall = sessionData.client.invoke(
             new Api.auth.ResendCode({
@@ -3398,7 +3399,7 @@ async function startServer() {
         try {
           let signInTimer: any;
           const signInTimeout = new Promise<null>((resolve) => {
-            signInTimer = setTimeout(() => resolve(null), 2500);
+            signInTimer = setTimeout(() => resolve(null), 30000);
           });
           const signInCall = sessionData.client.invoke(
             new Api.auth.SignIn({
