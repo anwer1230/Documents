@@ -199,15 +199,23 @@ const ChatListItemComponent: React.FC<ChatListItemProps> = ({ chat, isActive }) 
             <div className="w-full h-full bg-[#2481cc] flex items-center justify-center">
               <Bookmark className="w-6 h-6 fill-white text-white" />
             </div>
-          ) : chat.avatar ? (
-            <img
-              src={chat.avatar}
-              alt={chat.title}
-              className="w-full h-full object-cover"
-              referrerPolicy="no-referrer"
-            />
           ) : (
-            <span>{chat.title.charAt(0).toUpperCase()}</span>
+            <>
+              <span className="select-none">{chat.title.charAt(0).toUpperCase()}</span>
+              {chat.avatar ? (
+                <img
+                  src={chat.avatar}
+                  alt={chat.title}
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute inset-0 w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLElement).style.display = 'none';
+                  }}
+                />
+              ) : null}
+            </>
           )}
 
           {chat.type === 'private' && (

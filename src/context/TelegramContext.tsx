@@ -2773,7 +2773,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       console.log(`[MTProto Sync] Invoking messages.getDialogs & users.getUsers for phone: ${activePhone}`);
 
-      const res = await fetch('/api/telegram/sync', {
+      const res = await fetch('/api/telegram/sync-light', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4865,6 +4865,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       });
 
+      socket.on('batch_update', (updates: any[]) => {
+        if (Array.isArray(updates)) {
+          updates.forEach((update) => {
+            if (update?.type === 'new_alert' && update.alert) {
+              handleIncomingAlert(update.alert);
+            } else {
+              handleIncomingUpdate(update);
+            }
+          });
+        }
+      });
+
       socket.on('new_message', (update: any) => {
         handleIncomingUpdate(update);
       });
@@ -5092,7 +5104,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [activeChatId, isAuthenticated, chats]);
 
-  // High-performance eager hydration from IndexedDB Message Cache for activeChatId
+  // High-performance eager hydration from IndexedDB Message Cache & live on-demand fetch for activeChatId
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -5111,6 +5123,30 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 [activeChatId]: cached,
               };
             });
+          }
+
+          // Live on-demand fetch if still empty or newly opened
+          const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+          const activePhone = currentUser.phone || '';
+          if (activeSessionStr || activePhone) {
+            const res = await fetch('/api/telegram/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                peerId: activeChatId,
+                limit: 40,
+                phone: activePhone,
+                sessionString: activeSessionStr,
+              }),
+            });
+            const data = await res.json();
+            if (isSubscribed && data.success && Array.isArray(data.messages) && data.messages.length > 0) {
+              setMessages((prev) => ({
+                ...prev,
+                [activeChatId]: data.messages,
+              }));
+              messageCache.putMessages(activeChatId, data.messages).catch(() => {});
+            }
           }
         } catch {}
       }

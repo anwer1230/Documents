@@ -431,6 +431,10 @@ process.on('uncaughtException', (err: any) => {
 
 // Global memory avatar cache for ultra-fast peer avatar resolution
 const avatarCache = new Map<string, string>();
+const avatarBinaryCache = new Map<string, Buffer>();
+const fallbackAvatarSvg = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#1D4ED8"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#g)"/><text x="50%" y="54%" text-anchor="middle" fill="#FFFFFF" font-size="34" font-weight="bold" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif" dy=".3em">TG</text></svg>'
+);
 
 async function startServer() {
   const app = express();
@@ -1350,9 +1354,32 @@ async function startServer() {
     });
   });
 
+  // High performance socket update buffer to prevent UI freeze from update thrashing
+  let socketUpdateBuffer: any[] = [];
+  let socketFlushTimer: NodeJS.Timeout | null = null;
+
+  const queueBatchedSocketUpdate = (update: any) => {
+    if (!update) return;
+    socketUpdateBuffer.push(update);
+    if (!socketFlushTimer) {
+      socketFlushTimer = setTimeout(() => {
+        if (socketUpdateBuffer.length > 0) {
+          try {
+            io.emit('batch_update', socketUpdateBuffer);
+          } catch (_) {}
+          socketUpdateBuffer = [];
+        }
+        socketFlushTimer = null;
+      }, 350);
+    }
+  };
+
   const broadcastTelegramUpdate = (update: any) => {
     serverRecentUpdates.push(update);
     if (serverRecentUpdates.length > 100) serverRecentUpdates.shift();
+
+    // Batch socket broadcast to protect client main thread
+    queueBatchedSocketUpdate(update);
 
     // 1. Real-time WebSocket Broadcast via Socket.IO
     try {
@@ -2176,6 +2203,39 @@ async function startServer() {
     }
   };
 
+  // Resilient retry wrapper with custom timeout and delay for critical MTProto RPC operations
+  const withRetry = async <T>(
+    fn: () => Promise<T>,
+    options: { retries?: number; timeout?: number; delay?: number; fallback?: T } = {}
+  ): Promise<T> => {
+    const retries = options.retries ?? 2;
+    const timeoutMs = options.timeout ?? 20000;
+    const delayMs = options.delay ?? 1000;
+
+    let lastError: any;
+    for (let i = 0; i < retries; i++) {
+      let timer: any;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+      });
+      try {
+        const res = await Promise.race([fn(), timeoutPromise]);
+        clearTimeout(timer);
+        return res;
+      } catch (err: any) {
+        clearTimeout(timer);
+        lastError = err;
+        if (i < retries - 1) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+      }
+    }
+    if (options.fallback !== undefined) {
+      return options.fallback;
+    }
+    throw lastError;
+  };
+
   // Helper to create a new connected Telegram MTProto client
   const createNewTelegramClient = async (numericApiId: number, stringApiHash: string): Promise<TelegramClient> => {
     const stringSession = new sessions.StringSession('');
@@ -2462,8 +2522,9 @@ async function startServer() {
   const TELEGRAM_DATA_CACHE_TTL_MS = 6000; // 6 seconds debounce cache for rapid re-renders
 
   // Helper to fetch real MTProto profile, chats (dialogs), avatars and messages
-  const fetchRealTelegramData = async (client: TelegramClient, phoneHint?: string) => {
-    const cacheKey = phoneHint || (client.session ? (client.session as any).authKey?.key?.toString('hex') : 'default');
+  const fetchRealTelegramData = async (client: TelegramClient, phoneHint?: string, isLight = false) => {
+    const baseKey = phoneHint || (client.session ? (client.session as any).authKey?.key?.toString('hex') : 'default');
+    const cacheKey = `${baseKey}_${isLight ? 'light' : 'full'}`;
     const cached = telegramDataCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TELEGRAM_DATA_CACHE_TTL_MS) {
       return cached.data;
@@ -2529,11 +2590,11 @@ async function startServer() {
       isVerified: Boolean(me.verified),
     };
 
-    // 3. Fetch Real Telegram Dialogs (messages.getDialogs RPC) with Pagination Loop (up to 500 dialogs)
-    console.log('[MTProto] Fetching real dialogs (messages.getDialogs) from Telegram cloud with pagination loop...');
+    // 3. Fetch Real Telegram Dialogs (messages.getDialogs RPC) with Comprehensive Pagination Loop
+    console.log(`[MTProto] Fetching real dialogs (messages.getDialogs) from Telegram cloud (${isLight ? 'Lightweight' : 'Standard'} mode)...`);
     let rawDialogs: any[] = [];
-    const MAX_DIALOGS = 500;
-    const CHUNK_LIMIT = 100;
+    const MAX_DIALOGS = 3500;
+    const CHUNK_LIMIT = 200;
     const seenDialogIds = new Set<string>();
 
     try {
@@ -2542,7 +2603,7 @@ async function startServer() {
       let offsetPeer: any = undefined;
       let hasMore = true;
       let iteration = 0;
-      const MAX_ITERATIONS = 5; // Up to 5 chunks of 100 dialogs = 500 dialogs max
+      const MAX_ITERATIONS = 20;
 
       while (hasMore && rawDialogs.length < MAX_DIALOGS && iteration < MAX_ITERATIONS) {
         iteration++;
@@ -2551,10 +2612,9 @@ async function startServer() {
         if (offsetDate) chunkParams.offsetDate = offsetDate;
         if (offsetPeer) chunkParams.offsetPeer = offsetPeer;
 
-        const chunk: any[] = await withTimeout(
-          client.getDialogs(chunkParams),
-          4500,
-          []
+        const chunk: any[] = await withRetry(
+          () => client.getDialogs(chunkParams),
+          { retries: 2, timeout: 20000, delay: 1000, fallback: [] }
         );
 
         if (!chunk || chunk.length === 0) {
@@ -2588,7 +2648,32 @@ async function startServer() {
           hasMore = false;
         }
       }
-      console.log(`[MTProto] getDialogs pagination completed: collected ${rawDialogs.length} dialogs in ${iteration} batches.`);
+
+      // Also retrieve archived dialogs if available (folderId: 1)
+      try {
+        const archivedChunk: any[] = await withRetry(
+          () => client.getDialogs({ limit: 200, folderId: 1 }),
+          { retries: 1, timeout: 15000, delay: 500, fallback: [] }
+        );
+        if (archivedChunk && archivedChunk.length > 0) {
+          let archNewCount = 0;
+          for (const d of archivedChunk) {
+            const dKey = String(d.id || d.entity?.id || '');
+            if (!dKey || !seenDialogIds.has(dKey)) {
+              if (dKey) seenDialogIds.add(dKey);
+              rawDialogs.push(d);
+              archNewCount++;
+            }
+          }
+          if (archNewCount > 0) {
+            console.log(`[MTProto] Retrieved ${archNewCount} archived dialogs (folderId: 1).`);
+          }
+        }
+      } catch (archErr: any) {
+        console.warn('[MTProto] Archived dialogs notice:', archErr?.message || archErr);
+      }
+
+      console.log(`[MTProto] getDialogs pagination completed: collected ${rawDialogs.length} dialogs total in ${iteration} batches.`);
     } catch (dialogsErr: any) {
       console.warn('[MTProto] getDialogs notice:', dialogsErr?.message || dialogsErr);
     }
@@ -2734,7 +2819,7 @@ async function startServer() {
         type: chatType,
         title: chatTitle,
         username,
-        avatar: isMe ? myAvatar : '',
+        avatar: isMe ? (myAvatar || '/api/avatar/me') : (isLight ? `/api/avatar/${dialogIdStr}` : ''),
         isVerified: Boolean(entity?.verified),
         isPinned: Boolean(dialog.pinned),
         unreadCount: dialog.unreadCount || 0,
@@ -2833,142 +2918,155 @@ async function startServer() {
       });
     }
 
-    // 4. Download Avatars in fast parallel batches with 1.5s timeout per avatar & cache
-    const avatarDownloadPromises = chats.slice(0, 40).map(async (chat, idx) => {
-      if (chat.type === 'saved' && myAvatar) {
-        chat.avatar = myAvatar;
-        return;
-      }
-      const rawDialog = rawDialogs[idx];
-      const targetEntity = rawDialog?.entity || (rawDialog?.id ? rawDialog.id : undefined);
-      if (!targetEntity) return;
-
-      try {
-        let timer: any;
-        const timeoutPromise = new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), 1500);
-        });
-        const downloadPromise = client.downloadProfilePhoto(targetEntity, { isBig: false }).catch(() => null);
-        const photoBuf: any = await Promise.race([downloadPromise, timeoutPromise]);
-        clearTimeout(timer);
-        if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
-          const dataUrl = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
-          chat.avatar = dataUrl;
-          if (chat.peerId) {
-            avatarCache.set(chat.peerId, dataUrl);
-          }
+    if (!isLight) {
+      // 4. Download Avatars in fast parallel batches with 1.5s timeout per avatar & cache
+      const avatarDownloadPromises = chats.slice(0, 40).map(async (chat, idx) => {
+        if (chat.type === 'saved' && myAvatar) {
+          chat.avatar = myAvatar;
+          return;
         }
-      } catch (_) {}
-    });
-
-    await Promise.allSettled(avatarDownloadPromises);
-
-    // Build user catalogue lookup map for fast O(1) sender resolution
-    const usersMap = new Map<string, any>(usersList.map((u) => [String(u.id), u]));
-
-    // 5. Fetch Recent Messages for Top 15 Active Chats with 2.0s timeout per chat
-    const messageFetchPromises = chats.slice(0, 15).map(async (chat, idx) => {
-      try {
         const rawDialog = rawDialogs[idx];
-        const peerTarget = chat.id === 'chat_saved_messages' ? 'me' : (rawDialog?.inputEntity || rawDialog?.entity || chat.peerId || chat.id.replace('chat_', ''));
-        
-        let timer: any;
-        const timeoutPromise = new Promise<any[]>((resolve) => {
-          timer = setTimeout(() => resolve([]), 2000);
-        });
-        const fetchPromise = client.getMessages(peerTarget, { limit: 30 }).catch(() => []);
-        const rawMessages: any = await Promise.race([fetchPromise, timeoutPromise]);
-        clearTimeout(timer);
+        const targetEntity = rawDialog?.entity || (rawDialog?.id ? rawDialog.id : undefined);
+        if (!targetEntity) return;
 
-        const msgsList: any[] = [];
-
-        for (const m of (rawMessages || []).reverse()) {
-          const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
-          const mDate = new Date(msgTimestampSec * 1000);
-          const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
-          const dateStr = mDate.toISOString().split('T')[0];
-
-          let mediaData: any = undefined;
-          if (m.media) {
-            if (m.media.photo) {
-              mediaData = { type: 'photo' };
-            } else if (m.media.document) {
-              const docAttr = m.media.document.attributes?.find((a: any) => a.fileName || a.title);
-              mediaData = {
-                type: 'document',
-                fileName: docAttr?.fileName || docAttr?.title || 'document',
-              };
-            } else if (m.media.voice) {
-              mediaData = { type: 'voice', duration: 15 };
-            }
-          }
-
-          const isOut = Boolean(m.out);
-          const fromIdStr = m.fromId ? String(m.fromId.userId || m.fromId.channelId || m.fromId.chatId || '') : (m.senderId ? String(m.senderId) : '');
-          const senderUser = fromIdStr ? usersMap.get(fromIdStr) : undefined;
-          const senderEntity = (m as any).sender;
-
-          let senderName = isOut ? userProfile.name : 'مستخدم تيليجرام';
-          let senderAvatar = isOut ? userProfile.avatar : '';
-          let senderUsername = isOut ? userProfile.username : undefined;
-          let senderRole: 'owner' | 'admin' | 'member' | undefined = undefined;
-
-          if (!isOut) {
-            if (senderUser) {
-              senderName = senderUser.name;
-              senderAvatar = senderUser.avatar || '';
-              senderUsername = senderUser.username;
-            } else if (senderEntity) {
-              const entityName = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
-              if (entityName) senderName = entityName;
-              senderUsername = senderEntity.username;
-              if (fromIdStr && avatarCache.has(fromIdStr)) {
-                senderAvatar = avatarCache.get(fromIdStr)!;
-              }
-            } else if (chat.type === 'private' || chat.type === 'bot') {
-              senderName = chat.title;
-              senderAvatar = chat.avatar;
-              senderUsername = chat.username;
-            } else {
-              senderName = chat.title;
-              senderAvatar = chat.avatar;
-            }
-          }
-
-          msgsList.push({
-            id: String(m.id),
-            chatId: chat.id,
-            senderId: isOut ? userProfile.id : (fromIdStr || chat.peerId || chat.id),
-            senderName,
-            senderUsername,
-            senderAvatar,
-            senderRole,
-            text: m.message || (mediaData ? `[${mediaData.type}]` : ''),
-            timestamp: timeStr,
-            date: dateStr,
-            epoch: mDate.getTime(),
-            rawDate: msgTimestampSec,
-            isOutgoing: isOut,
-            status: 'read',
-            media: mediaData,
+        try {
+          let timer: any;
+          const timeoutPromise = new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), 1500);
           });
-        }
+          const downloadPromise = client.downloadProfilePhoto(targetEntity, { isBig: false }).catch(() => null);
+          const photoBuf: any = await Promise.race([downloadPromise, timeoutPromise]);
+          clearTimeout(timer);
+          if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+            const dataUrl = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
+            chat.avatar = dataUrl;
+            if (chat.peerId) {
+              avatarCache.set(chat.peerId, dataUrl);
+            }
+          }
+        } catch (_) {}
+      });
 
-        if (msgsList.length > 0) {
-          messagesRecord[chat.id] = msgsList;
+      await Promise.allSettled(avatarDownloadPromises);
+
+      // Build user catalogue lookup map for fast O(1) sender resolution
+      const usersMap = new Map<string, any>(usersList.map((u) => [String(u.id), u]));
+
+      // 5. Fetch Recent Messages for Top 15 Active Chats with 2.0s timeout per chat
+      const messageFetchPromises = chats.slice(0, 15).map(async (chat, idx) => {
+        try {
+          const rawDialog = rawDialogs[idx];
+          const peerTarget = chat.id === 'chat_saved_messages' ? 'me' : (rawDialog?.inputEntity || rawDialog?.entity || chat.peerId || chat.id.replace('chat_', ''));
+          
+          let timer: any;
+          const timeoutPromise = new Promise<any[]>((resolve) => {
+            timer = setTimeout(() => resolve([]), 2000);
+          });
+          const fetchPromise = client.getMessages(peerTarget, { limit: 30 }).catch(() => []);
+          const rawMessages: any = await Promise.race([fetchPromise, timeoutPromise]);
+          clearTimeout(timer);
+
+          const msgsList: any[] = [];
+
+          for (const m of (rawMessages || []).reverse()) {
+            const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
+            const mDate = new Date(msgTimestampSec * 1000);
+            const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const dateStr = mDate.toISOString().split('T')[0];
+
+            let mediaData: any = undefined;
+            if (m.media) {
+              if (m.media.photo) {
+                mediaData = { type: 'photo' };
+              } else if (m.media.document) {
+                const docAttr = m.media.document.attributes?.find((a: any) => a.fileName || a.title);
+                mediaData = {
+                  type: 'document',
+                  fileName: docAttr?.fileName || docAttr?.title || 'document',
+                };
+              } else if (m.media.voice) {
+                mediaData = { type: 'voice', duration: 15 };
+              }
+            }
+
+            const isOut = Boolean(m.out);
+            const fromIdStr = m.fromId ? String(m.fromId.userId || m.fromId.channelId || m.fromId.chatId || '') : (m.senderId ? String(m.senderId) : '');
+            const senderUser = fromIdStr ? usersMap.get(fromIdStr) : undefined;
+            const senderEntity = (m as any).sender;
+
+            let senderName = isOut ? userProfile.name : 'مستخدم تيليجرام';
+            let senderAvatar = isOut ? userProfile.avatar : '';
+            let senderUsername = isOut ? userProfile.username : undefined;
+            let senderRole: 'owner' | 'admin' | 'member' | undefined = undefined;
+
+            if (!isOut) {
+              if (senderUser) {
+                senderName = senderUser.name;
+                senderAvatar = senderUser.avatar || '';
+                senderUsername = senderUser.username;
+              } else if (senderEntity) {
+                const entityName = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
+                if (entityName) senderName = entityName;
+                senderUsername = senderEntity.username;
+                if (fromIdStr && avatarCache.has(fromIdStr)) {
+                  senderAvatar = avatarCache.get(fromIdStr)!;
+                }
+              } else if (chat.type === 'private' || chat.type === 'bot') {
+                senderName = chat.title;
+                senderAvatar = chat.avatar;
+                senderUsername = chat.username;
+              } else {
+                senderName = chat.title;
+                senderAvatar = chat.avatar;
+              }
+            }
+
+            msgsList.push({
+              id: String(m.id),
+              chatId: chat.id,
+              senderId: isOut ? userProfile.id : (fromIdStr || chat.peerId || chat.id),
+              senderName,
+              senderUsername,
+              senderAvatar,
+              senderRole,
+              text: m.message || (mediaData ? `[${mediaData.type}]` : ''),
+              timestamp: timeStr,
+              date: dateStr,
+              epoch: mDate.getTime(),
+              rawDate: msgTimestampSec,
+              isOutgoing: isOut,
+              status: 'read',
+              media: mediaData,
+            });
+          }
+
+          if (msgsList.length > 0) {
+            messagesRecord[chat.id] = msgsList;
+          }
+        } catch (chatMsgErr) {
+          console.warn(`[MTProto] Could not fetch messages for chat ${chat.title}:`, (chatMsgErr as any)?.message || chatMsgErr);
         }
-      } catch (chatMsgErr) {
-        console.warn(`[MTProto] Could not fetch messages for chat ${chat.title}:`, (chatMsgErr as any)?.message || chatMsgErr);
+      });
+
+      await Promise.allSettled(messageFetchPromises);
+    }
+
+    // Retrieve active MTProto PTS state for incremental sync
+    let pts: number | undefined = undefined;
+    try {
+      const state: any = await withTimeout(client.invoke(new Api.updates.GetState()), 2000, null);
+      if (state && typeof state.pts === 'number') {
+        pts = state.pts;
       }
-    });
-
-    await Promise.allSettled(messageFetchPromises);
+    } catch (_) {}
 
     const result = {
       user: userProfile,
       users: usersList,
       chats,
       messages: messagesRecord,
+      pts,
+      totalDialogs: chats.length,
     };
 
     telegramDataCache.set(cacheKey, { data: result, timestamp: Date.now() });
@@ -5264,6 +5362,65 @@ async function startServer() {
     return res.json({ success: true, rpc: 'messages.getDialogs', chats: [], messages: {}, count: 0 });
   });
 
+  // 8.1.1 MTProto Sync-Light Endpoint (Fast metadata-only sync without heavy avatars and full histories)
+  app.all(['/api/telegram/sync-light', '/api/sync-light'], async (req, res) => {
+    const phone = req.body?.phone || (req.query?.phone as string);
+    const sessionString = req.body?.sessionString || (req.query?.sessionString as string);
+
+    console.log(`[MTProto] Synchronizing light account data from Telegram cloud (phone: ${phone || 'any'})...`);
+
+    try {
+      const client = await getClientForSession(sessionString, phone);
+      if (client && client.connected) {
+        const realData = await fetchRealTelegramData(client, phone, true);
+        console.log(`[MTProto] Light sync completed! Retrieved ${realData.chats.length} chats in lightweight mode.`);
+        return res.json({
+          success: true,
+          isRealTelegramMTProto: true,
+          isLightSync: true,
+          syncTimestamp: new Date().toISOString(),
+          ...realData,
+          apiId: TELEGRAM_API_ID,
+          layer: 184,
+        });
+      }
+    } catch (syncErr: any) {
+      const errMsg = syncErr?.message || syncErr?.errorMessage || String(syncErr);
+      console.warn('[MTProto] Real light sync error:', errMsg);
+      if (errMsg.includes('SESSION_REVOKED') || errMsg.includes('AUTH_KEY_UNREGISTERED') || syncErr?.code === 'SESSION_REVOKED') {
+        const revokeKey = sessionString?.trim() || (phone ? formatE164Phone(phone) : '');
+        if (revokeKey) {
+          await handleSessionRevocation(revokeKey, 'AUTH_KEY_UNREGISTERED');
+        }
+        return res.json({
+          success: false,
+          sessionRevoked: true,
+          error: 'SESSION_REVOKED',
+          message: 'انتهت صلاحية جلسة تيليجرام أو تم تسجيل الخروج من أجهزة أخرى. يرجى تسجيل الدخول مجدداً.',
+        });
+      }
+
+      if (errMsg.includes('FLOOD_WAIT') || syncErr?.code === 'FLOOD_WAIT') {
+        const match = errMsg.match(/FLOOD_WAIT_?(\d+)/i) || errMsg.match(/wait of (\d+)/i);
+        const retryAfter = syncErr?.seconds || (match ? parseInt(match[1], 10) : 15);
+        return res.status(429).json({
+          success: false,
+          error: 'FLOOD_WAIT',
+          retryAfter,
+          retry_after: retryAfter,
+          message: `تم تجاوز حد طلبات تيليجرام (FLOOD_WAIT). يرجى الانتظار ${retryAfter} ثانية.`,
+        });
+      }
+    }
+
+    return res.json({
+      success: false,
+      needsLogin: true,
+      error: 'NO_SESSION',
+      message: 'لا توجد جلسة تيليجرام نشطة. يرجى تسجيل الدخول برقم الهاتف أو رمز الجلسة.',
+    });
+  });
+
   // 8.2 MTProto Dedicated users.getUsers Endpoint
   app.post('/api/telegram/users', async (req, res) => {
     const { userIds, phone, sessionString } = req.body;
@@ -5292,8 +5449,14 @@ async function startServer() {
   });
 
   // 8.1. MTProto messages.getHistory Dedicated Incremental Pagination Endpoint
-  app.post('/api/telegram/messages/fetch', async (req, res) => {
-    const { peerId, phone, sessionString, limit = 30, offsetId, maxId, minId } = req.body;
+  app.all(['/api/telegram/messages/fetch', '/api/telegram/messages', '/api/messages'], async (req, res) => {
+    const peerId = req.body?.peerId || (req.query?.peerId as string);
+    const phone = req.body?.phone || (req.query?.phone as string);
+    const sessionString = req.body?.sessionString || (req.query?.sessionString as string);
+    const limit = req.body?.limit || req.query?.limit || 30;
+    const offsetId = req.body?.offsetId || req.query?.offsetId;
+    const maxId = req.body?.maxId || req.query?.maxId;
+    const minId = req.body?.minId || req.query?.minId;
     try {
       if (!peerId) {
         return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
@@ -5481,31 +5644,66 @@ async function startServer() {
     return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
   });
 
-  // 8.3 MTProto On-Demand Avatar Fetch Endpoint
-  app.get('/api/telegram/avatar/:peerId', async (req, res) => {
+  // 8.3 MTProto On-Demand Avatar Fetch Endpoint (Supports binary JPEG streaming & JSON)
+  app.get(['/api/telegram/avatar/:peerId', '/api/avatar/:peerId'], async (req, res) => {
     const { peerId } = req.params;
     const sessionString = (req.query?.sessionString as string) || '';
     const phone = (req.query?.phone as string) || '';
+    const wantsJson = req.query?.format === 'json' || req.headers.accept === 'application/json';
+
+    // Fast memory return if binary cached
+    if (peerId && avatarBinaryCache.has(peerId)) {
+      const cachedBuf = avatarBinaryCache.get(peerId)!;
+      if (wantsJson) {
+        return res.json({ success: true, avatar: `data:image/jpeg;base64,${cachedBuf.toString('base64')}` });
+      }
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      return res.send(cachedBuf);
+    }
 
     if (peerId && avatarCache.has(peerId)) {
-      return res.json({ success: true, avatar: avatarCache.get(peerId) });
+      const dataUrl = avatarCache.get(peerId)!;
+      if (wantsJson) {
+        return res.json({ success: true, avatar: dataUrl });
+      }
+      const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      const buf = Buffer.from(base64Data, 'base64');
+      avatarBinaryCache.set(peerId, buf);
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      return res.send(buf);
     }
 
     try {
       const client = await getClientForSession(sessionString, phone);
       if (client && client.connected && peerId) {
-        const cleanPeer = peerId === 'saved' || peerId === 'chat_saved_messages' ? 'me' : peerId.replace('chat_', '').replace('user_', '');
-        const photoBuf: any = await withTimeout(client.downloadProfilePhoto(cleanPeer, { isBig: false }), 1500, null);
+        const cleanPeer = peerId === 'saved' || peerId === 'chat_saved_messages' || peerId === 'me' ? 'me' : peerId.replace('chat_', '').replace('user_', '');
+        const photoBuf: any = await withTimeout(client.downloadProfilePhoto(cleanPeer, { isBig: false }), 2500, null);
         if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+          avatarBinaryCache.set(peerId, photoBuf);
           const dataUrl = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
           avatarCache.set(peerId, dataUrl);
-          return res.json({ success: true, avatar: dataUrl });
+
+          if (wantsJson) {
+            return res.json({ success: true, avatar: dataUrl });
+          }
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+          return res.send(photoBuf);
         }
       }
     } catch (err: any) {
       console.warn('[MTProto] download avatar error:', err?.message || err);
     }
-    return res.json({ success: false, avatar: '' });
+
+    if (wantsJson) {
+      return res.json({ success: false, avatar: '' });
+    }
+    // Return graceful SVG placeholder so <img> tags never break
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(fallbackAvatarSvg);
   });
 
   // ==========================================

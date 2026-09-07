@@ -169,6 +169,21 @@ export const Sidebar: React.FC = () => {
     searchQuery
   );
 
+  const [renderLimit, setRenderLimit] = useState(40);
+
+  useEffect(() => {
+    setRenderLimit(40);
+  }, [activeFolderId, searchQuery]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 350) {
+      if (renderLimit < sortedChats.length) {
+        setRenderLimit((prev) => Math.min(prev + 40, sortedChats.length));
+      }
+    }
+  };
+
   return (
     <div
       id="tg-sidebar"
@@ -218,6 +233,7 @@ export const Sidebar: React.FC = () => {
       <div
         id="conversation-list-container"
         data-conversation-list="true"
+        onScroll={handleScroll}
         {...pullHandlers}
         className="flex-1 overflow-y-auto divide-y divide-white/5 py-1"
       >
@@ -516,9 +532,18 @@ export const Sidebar: React.FC = () => {
             {isArabic ? 'لم يتم العثور على محادثات' : 'No chats found'}
           </div>
         ) : (
-          sortedChats.map((chat) => (
-            <ChatListItem key={chat.id} chat={chat} isActive={activeChatId === chat.id} />
-          ))
+          <>
+            {sortedChats.slice(0, renderLimit).map((chat) => (
+              <ChatListItem key={chat.id} chat={chat} isActive={activeChatId === chat.id} />
+            ))}
+            {renderLimit < sortedChats.length && (
+              <div className="py-2.5 text-center text-xs text-sky-400/80 font-medium">
+                {isArabic
+                  ? `عرض ${renderLimit} من أصل ${sortedChats.length} محادثة (قم بالتمرير للمزيد)`
+                  : `Showing ${renderLimit} of ${sortedChats.length} chats (scroll for more)`}
+              </div>
+            )}
+          </>
         )}
       </div>
 
