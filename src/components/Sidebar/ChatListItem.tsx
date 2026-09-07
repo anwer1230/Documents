@@ -36,6 +36,7 @@ const ChatListItemComponent: React.FC<ChatListItemProps> = ({ chat, isActive }) 
     setActiveChatId,
     setChatContextMenu,
     togglePinChat,
+    toggleArchiveChat,
     toggleMuteChat,
     markChatReadUnread,
     deleteChat,
@@ -88,7 +89,7 @@ const ChatListItemComponent: React.FC<ChatListItemProps> = ({ chat, isActive }) 
 
   const { offset, isDragging, touchHandlers, resetOffset } = useChatSwipeActions({
     onArchive: () => {
-      showToast(isRtl ? 'تم أرشفة المحادثة' : 'Chat archived', '📦');
+      toggleArchiveChat(chat.id);
     },
     onPin: () => {
       togglePinChat(chat.id);

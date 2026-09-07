@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTelegram } from '../../context/TelegramContext';
 import { ChatListHeader } from './ChatListHeader';
 import { FolderBar } from './FolderBar';
@@ -41,12 +41,44 @@ export const Sidebar: React.FC = () => {
     refreshDialogs,
     isSyncing,
     showToast,
+    searchTelegramGlobal,
   } = useTelegram();
 
   const isArabic = settings.language === 'ar';
   const isSearchMode = isSearchActive || !!searchQuery.trim() || searchFilter !== 'all';
   const isSearching = !!searchQuery.trim();
   const q = searchQuery.toLowerCase().trim();
+
+  const [cloudSearchResults, setCloudSearchResults] = useState<any[]>([]);
+  const [isSearchingCloud, setIsSearchingCloud] = useState(false);
+
+  useEffect(() => {
+    if (!q || q.length < 2) {
+      setCloudSearchResults([]);
+      return;
+    }
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      setIsSearchingCloud(true);
+      try {
+        const results = await searchTelegramGlobal(q);
+        if (isMounted) {
+          setCloudSearchResults(results);
+        }
+      } catch (err) {
+        console.error('Cloud search error:', err);
+      } finally {
+        if (isMounted) {
+          setIsSearchingCloud(false);
+        }
+      }
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [q, searchTelegramGlobal]);
 
   // Edge Swipe to open drawer (DrKLO gesture)
   useEdgeSwipeDrawer(() => {
@@ -418,10 +450,59 @@ export const Sidebar: React.FC = () => {
                   </div>
                 )}
 
+                {/* Real MTProto Telegram Global Cloud Search Results */}
+                {isSearching && (
+                  <div className="border-t border-white/10 pt-2 mt-2">
+                    <div className="flex items-center justify-between px-3 py-1 text-[11px] font-bold text-sky-400 uppercase tracking-wider">
+                      <div className="flex items-center gap-1.5">
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>{isArabic ? 'بحث عالمي سحابي (Telegram Cloud)' : 'Global Cloud Search'}</span>
+                      </div>
+                      {isSearchingCloud && (
+                        <span className="text-[10px] text-gray-400 animate-pulse">
+                          {isArabic ? 'جاري البحث...' : 'Searching...'}
+                        </span>
+                      )}
+                    </div>
+                    {cloudSearchResults.length > 0 ? (
+                      <div className="space-y-1 px-1 mt-1">
+                        {cloudSearchResults.map((m) => (
+                          <button
+                            key={`cloud-${m.id}`}
+                            onClick={() => {
+                              setActiveChatId(m.chatId);
+                            }}
+                            className="w-full p-2 rounded-xl hover:bg-sky-500/10 text-left rtl:text-right flex items-start gap-2.5 transition-colors border border-transparent hover:border-sky-500/20"
+                          >
+                            <div className="w-7 h-7 rounded-full bg-[#2481cc] text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                              {m.chatTitle.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold text-sky-300 truncate">{m.chatTitle}</span>
+                                <span className="text-[10px] text-gray-500">{m.timestamp || m.date}</span>
+                              </div>
+                              <p className="text-xs text-gray-300 truncate mt-0.5">{m.text}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      !isSearchingCloud && (
+                        <div className="px-3 py-2 text-[11px] text-gray-500 italic">
+                          {isArabic ? 'لا توجد رسائل سحابية إضافية' : 'No global cloud messages found'}
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+
                 {/* Empty State */}
                 {matchingDraftChats.length === 0 &&
                   matchingChats.length === 0 &&
-                  matchingMessagesList.length === 0 && (
+                  matchingMessagesList.length === 0 &&
+                  cloudSearchResults.length === 0 &&
+                  !isSearchingCloud && (
                     <div className="p-8 text-center text-xs text-gray-400 flex flex-col items-center gap-2">
                       <Globe className="w-8 h-8 text-gray-500 opacity-50" />
                       <span>{isArabic ? 'لم يتم العثور على أي نتائج مطابقة في سحابة تيليجرام' : 'No matching results found in Telegram cloud'}</span>

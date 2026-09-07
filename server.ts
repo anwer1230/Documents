@@ -4192,6 +4192,328 @@ async function startServer() {
       });
     }
   });
+
+  // 6. Dialog Archive & Unarchive Dispatcher (Api.folders.EditPeerFolders)
+  app.post('/api/telegram/dialogs/archive', async (req, res) => {
+    const { chatId, archived, phone, sessionString } = req.body;
+    console.log(`[MTProto] Archiving/Unarchiving dialog "${chatId}", archived=${archived}`);
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+      const inputPeer = await client.getInputEntity(peerTarget);
+      // Folder 1 is Telegram Archive, folder 0 is main chat list
+      const folderId = archived === false ? 0 : 1;
+
+      const result: any = await client.invoke(
+        new Api.folders.EditPeerFolders({
+          folderPeers: [
+            new Api.InputFolderPeer({
+              peer: inputPeer,
+              folderId: folderId,
+            }),
+          ],
+        })
+      );
+
+      console.log(`[MTProto] EditPeerFolders executed successfully (folderId=${folderId})`);
+      broadcastTelegramUpdate({
+        type: 'dialog_archived',
+        chatId,
+        archived: folderId === 1,
+        folderId,
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        archived: folderId === 1,
+        folderId,
+        result,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram EditPeerFolders failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'EDIT_PEER_FOLDERS_FAILED',
+        message: `فشل تعديل مجلد الأرشيف عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 7. Block / Unblock User Dispatcher (Api.contacts.Block & Api.contacts.Unblock)
+  app.post('/api/telegram/users/block', async (req, res) => {
+    const { userId, block = true, phone, sessionString } = req.body;
+    console.log(`[MTProto] Block/Unblock user "${userId}", block=${block}`);
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, userId);
+      const inputPeer = await client.getInputEntity(peerTarget);
+
+      let result: any;
+      if (block) {
+        result = await client.invoke(
+          new Api.contacts.Block({
+            id: inputPeer,
+          })
+        );
+      } else {
+        result = await client.invoke(
+          new Api.contacts.Unblock({
+            id: inputPeer,
+          })
+        );
+      }
+
+      console.log(`[MTProto] Block/Unblock executed successfully (block=${block})`);
+      broadcastTelegramUpdate({
+        type: 'user_block_state',
+        userId: String(userId),
+        blocked: Boolean(block),
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        blocked: Boolean(block),
+        result,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram Block/Unblock failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'BLOCK_USER_FAILED',
+        message: `فشل حظر/إلغاء حظر المستخدم عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 8. Global Message & Dialog Search Dispatcher (Api.messages.SearchGlobal)
+  app.post('/api/telegram/search', async (req, res) => {
+    const { query, limit = 25, phone, sessionString } = req.body;
+    console.log(`[MTProto] Searching Telegram cloud for query: "${query}"`);
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها.',
+        });
+      }
+
+      const searchResult: any = await client.invoke(
+        new Api.messages.SearchGlobal({
+          q: query || '',
+          filter: new Api.InputMessagesFilterEmpty(),
+          minDate: 0,
+          maxDate: 0,
+          offsetRate: 0,
+          offsetPeer: new Api.InputPeerEmpty(),
+          offsetId: 0,
+          limit: Math.min(Number(limit) || 25, 50),
+        })
+      );
+
+      const usersMap = new Map<string, any>();
+      if (Array.isArray(searchResult.users)) {
+        for (const u of searchResult.users) {
+          usersMap.set(String(u.id), u);
+        }
+      }
+      const chatsMap = new Map<string, any>();
+      if (Array.isArray(searchResult.chats)) {
+        for (const c of searchResult.chats) {
+          chatsMap.set(String(c.id), c);
+        }
+      }
+
+      const foundMessages = (searchResult.messages || []).map((m: any) => {
+        let peerId = '';
+        if (m.peerId?.userId) peerId = String(m.peerId.userId);
+        else if (m.peerId?.channelId) peerId = String(m.peerId.channelId);
+        else if (m.peerId?.chatId) peerId = String(m.peerId.chatId);
+
+        const chatObj = chatsMap.get(peerId);
+        const senderUser = usersMap.get(String(m.fromId?.userId || peerId));
+        const senderName = senderUser
+          ? `${senderUser.firstName || ''} ${senderUser.lastName || ''}`.trim()
+          : chatObj?.title || 'Unknown';
+
+        const d = m.date ? new Date(m.date * 1000) : new Date();
+
+        return {
+          id: String(m.id),
+          chatId: peerId,
+          chatTitle: chatObj?.title || senderName,
+          chatUsername: chatObj?.username || senderUser?.username,
+          senderName,
+          text: m.message || '',
+          date: d.toISOString().split('T')[0],
+          timestamp: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          epoch: d.getTime(),
+          rawDate: m.date,
+        };
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        totalCount: searchResult.count || foundMessages.length,
+        messages: foundMessages,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram SearchGlobal failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'SEARCH_FAILED',
+        message: `فشل البحث السحابي عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 9. Pin / Unpin Dialog Dispatcher (Api.messages.ToggleDialogPin)
+  app.post('/api/telegram/dialogs/pin', async (req, res) => {
+    const { chatId, pinned = true, phone, sessionString } = req.body;
+    console.log(`[MTProto] Pin/Unpin dialog "${chatId}", pinned=${pinned}`);
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها.',
+        });
+      }
+
+      const peerTarget = await resolvePeerTarget(client, chatId);
+      const inputPeer = await client.getInputEntity(peerTarget);
+
+      const result: any = await client.invoke(
+        new Api.messages.ToggleDialogPin({
+          peer: new Api.InputDialogPeer({ peer: inputPeer }),
+          pinned: Boolean(pinned),
+        })
+      );
+
+      console.log(`[MTProto] ToggleDialogPin executed successfully (pinned=${pinned})`);
+      broadcastTelegramUpdate({
+        type: 'dialog_pinned',
+        chatId,
+        pinned: Boolean(pinned),
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        pinned: Boolean(pinned),
+        result,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram ToggleDialogPin failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'TOGGLE_DIALOG_PIN_FAILED',
+        message: `فشل تثبيت المحادثة عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
+
+  // 10. Create / Update Chat Folders Dispatcher (Api.messages.UpdateDialogFilter)
+  app.post('/api/telegram/folders/create', async (req, res) => {
+    const {
+      id,
+      title,
+      contacts = false,
+      nonContacts = false,
+      groups = false,
+      broadcasts = false,
+      bots = false,
+      excludeMuted = false,
+      excludeRead = false,
+      excludeArchived = true,
+      phone,
+      sessionString,
+    } = req.body;
+
+    console.log(`[MTProto] Creating/Updating DialogFilter folder: "${title}"`);
+    try {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_KEY_UNREGISTERED',
+          message: 'جلسة تيليجرام غير متصلة أو غير مصادق عليها.',
+        });
+      }
+
+      const folderId = Number(id) || Math.floor(Math.random() * 200) + 2;
+
+      const dialogFilter = new Api.DialogFilter({
+        id: folderId,
+        title: (title || 'New Folder').trim(),
+        contacts: Boolean(contacts),
+        nonContacts: Boolean(nonContacts),
+        groups: Boolean(groups),
+        broadcasts: Boolean(broadcasts),
+        bots: Boolean(bots),
+        excludeMuted: Boolean(excludeMuted),
+        excludeRead: Boolean(excludeRead),
+        excludeArchived: Boolean(excludeArchived),
+        pinnedPeers: [],
+        includePeers: [],
+        excludePeers: [],
+      });
+
+      const result: any = await client.invoke(
+        new Api.messages.UpdateDialogFilter({
+          id: folderId,
+          filter: dialogFilter,
+        })
+      );
+
+      console.log(`[MTProto] UpdateDialogFilter executed successfully (folderId=${folderId})`);
+      broadcastTelegramUpdate({
+        type: 'dialog_filter_created',
+        folderId,
+        title: dialogFilter.title,
+        epoch: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        isRealTelegramMTProto: true,
+        folderId,
+        title: dialogFilter.title,
+        result,
+      });
+    } catch (err: any) {
+      console.error('[MTProto] Real Telegram UpdateDialogFilter failed:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.errorMessage || err?.message || 'UPDATE_DIALOG_FILTER_FAILED',
+        message: `فشل إنشاء مجلد المحادثات عبر خوادم تيليجرام: ${err?.message || err}`,
+      });
+    }
+  });
   app.post('/api/telegram/links/resolve', (req, res) => {
     const { query } = req.body;
     const cleanQuery = (query || '').replace(/^(https?:\/\/)?(t\.me\/|@)?(\+)?/, '').toLowerCase();

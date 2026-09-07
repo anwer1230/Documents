@@ -899,7 +899,7 @@ export const SessionsView: React.FC<SubViewProps> = ({ onBack }) => {
 // 5. BLOCKED USERS VIEW (BlockedUsersActivity.java)
 // ==========================================
 export const BlockedUsersView: React.FC<SubViewProps> = ({ onBack }) => {
-  const { settings, showToast } = useTelegram();
+  const { settings, showToast, blockUser } = useTelegram();
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
 
@@ -908,16 +908,14 @@ export const BlockedUsersView: React.FC<SubViewProps> = ({ onBack }) => {
   );
 
   const handleUnblock = async (userId: string | number) => {
-    await privacyController.unblockUser(userId);
+    await blockUser(String(userId), false);
     setBlockedList([...privacyController.getState().blockedUsers]);
-    showToast(isArabic ? 'تم إلغاء حظر المستخدم' : 'User unblocked', '✅');
   };
 
   const handleBlockDemo = async () => {
     const randomId = Math.floor(Math.random() * 90000) + 10000;
-    await privacyController.blockUser(randomId);
+    await blockUser(String(randomId), true);
     setBlockedList([...privacyController.getState().blockedUsers]);
-    showToast(isArabic ? 'تم حظر المستخدم' : 'User blocked', '🚫');
   };
 
   return (

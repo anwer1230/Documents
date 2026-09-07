@@ -64,6 +64,7 @@ import { getTelegramEpoch, parseTelegramDate, formatTelegramTime } from '../util
 import { messageCache } from '../services/IndexedDBMessageCache';
 import { telegramDB } from '../utils/sqliteStorage';
 import { chatStore, ChatStore, ChatReadPosition } from '../store/chatStore';
+import { privacyController } from '../core/messenger/PrivacySettingsController';
 
 interface TelegramContextType {
   currentUser: User;
@@ -234,6 +235,20 @@ interface TelegramContextType {
   // Chat Actions
   toggleMuteChat: (chatId: string) => void;
   togglePinChat: (chatId: string) => void;
+  toggleArchiveChat: (chatId: string) => Promise<void>;
+  blockUser: (userId: string, block?: boolean) => Promise<void>;
+  searchTelegramGlobal: (query: string) => Promise<any[]>;
+  createChatFolder: (folderData: {
+    title: string;
+    contacts?: boolean;
+    nonContacts?: boolean;
+    groups?: boolean;
+    broadcasts?: boolean;
+    bots?: boolean;
+    excludeMuted?: boolean;
+    excludeRead?: boolean;
+    excludeArchived?: boolean;
+  }) => Promise<any>;
   markChatReadUnread: (chatId: string) => void;
   markChatAsRead: (chatId: string) => void;
   clearChatHistory: (chatId: string) => void;
@@ -585,7 +600,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
   const [typingChatId, setTypingChatId] = useState<string | null>(null);
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
-  const [folders] = useState<Folder[]>(DEFAULT_FOLDERS);
+  const [folders, setFolders] = useState<Folder[]>(DEFAULT_FOLDERS);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchFilter, setSearchFilter] = useState<'all' | 'drafts' | 'channels' | 'groups' | 'bots' | 'private'>('all');
   const [isSearchActive, setIsSearchActive] = useState<boolean>(false);
@@ -4040,6 +4055,184 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         : settings.language === 'ar' ? 'تم إلغاء تثبيت المحادثة' : 'Chat unpinned',
       '📌'
     );
+
+    // Dispatch to Telegram MTProto server via POST /api/telegram/dialogs/pin
+    fetch('/api/telegram/dialogs/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chatId,
+        pinned: isPinned,
+        phone: currentUser.phone,
+        sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.success) {
+          console.log('[MTProto] ToggleDialogPin synced on Telegram server');
+        } else {
+          console.warn('[MTProto] ToggleDialogPin returned non-success:', data);
+        }
+      })
+      .catch((err) => {
+        console.error('[MTProto] ToggleDialogPin network error:', err);
+      });
+  };
+
+  const toggleArchiveChat = async (chatId: string) => {
+    let isArchived = false;
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id === chatId) {
+          isArchived = !c.isArchived;
+          return { ...c, isArchived };
+        }
+        return c;
+      })
+    );
+
+    showToast(
+      isArchived
+        ? settings.language === 'ar' ? 'تم نقل المحادثة إلى الأرشيف' : 'Chat moved to archive'
+        : settings.language === 'ar' ? 'تم إلغاء أرشفة المحادثة' : 'Chat unarchived',
+      '📦'
+    );
+
+    try {
+      const res = await fetch('/api/telegram/dialogs/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId,
+          archived: isArchived,
+          phone: currentUser.phone,
+          sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        console.log('[MTProto] EditPeerFolders synced on Telegram server');
+      } else {
+        console.warn('[MTProto] EditPeerFolders returned non-success:', data);
+      }
+    } catch (err) {
+      console.error('[MTProto] EditPeerFolders network error:', err);
+    }
+  };
+
+  const blockUser = async (userId: string, block = true) => {
+    try {
+      await (block ? privacyController.blockUser(userId) : privacyController.unblockUser(userId));
+    } catch {}
+
+    showToast(
+      block
+        ? settings.language === 'ar' ? 'تم حظر المستخدم بنجاح' : 'User blocked successfully'
+        : settings.language === 'ar' ? 'تم إلغاء حظر المستخدم' : 'User unblocked',
+      block ? '🚫' : '✅'
+    );
+
+    try {
+      const res = await fetch('/api/telegram/users/block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          block,
+          phone: currentUser.phone,
+          sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        console.log('[MTProto] Block/Unblock synced on Telegram server');
+      } else {
+        console.warn('[MTProto] Block/Unblock returned non-success:', data);
+      }
+    } catch (err) {
+      console.error('[MTProto] Block/Unblock network error:', err);
+    }
+  };
+
+  const searchTelegramGlobal = async (query: string): Promise<any[]> => {
+    if (!query || !query.trim()) return [];
+    try {
+      const res = await fetch('/api/telegram/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: query.trim(),
+          limit: 30,
+          phone: currentUser.phone,
+          sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.messages)) {
+        return data.messages;
+      }
+      return [];
+    } catch (err) {
+      console.error('[MTProto] SearchGlobal network error:', err);
+      return [];
+    }
+  };
+
+  const createChatFolder = async (folderData: {
+    title: string;
+    contacts?: boolean;
+    nonContacts?: boolean;
+    groups?: boolean;
+    broadcasts?: boolean;
+    bots?: boolean;
+    excludeMuted?: boolean;
+    excludeRead?: boolean;
+    excludeArchived?: boolean;
+  }) => {
+    const newFolderId = `folder_${Date.now()}`;
+    const newFolderItem = {
+      id: newFolderId,
+      name: folderData.title,
+      nameAr: folderData.title,
+      icon: 'folder',
+      filter: (chat: any) => {
+        if (folderData.contacts && (chat.type === 'private' || chat.type === 'saved')) return true;
+        if (folderData.groups && chat.type === 'group') return true;
+        if (folderData.broadcasts && chat.type === 'channel') return true;
+        if (folderData.bots && chat.type === 'bot') return true;
+        return false;
+      },
+    };
+
+    setFolders((prev) => [...prev, newFolderItem]);
+    showToast(
+      settings.language === 'ar'
+        ? `تم إنشاء مجلد "${folderData.title}"`
+        : `Folder "${folderData.title}" created`,
+      '📁'
+    );
+
+    try {
+      const res = await fetch('/api/telegram/folders/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...folderData,
+          phone: currentUser.phone,
+          sessionString: SecureSessionStorage.getItem<string>('tg_session_string') || '',
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        console.log('[MTProto] UpdateDialogFilter synced on Telegram server');
+        return data;
+      } else {
+        console.warn('[MTProto] UpdateDialogFilter returned non-success:', data);
+      }
+    } catch (err) {
+      console.error('[MTProto] UpdateDialogFilter network error:', err);
+    }
   };
 
   const markChatAsRead = (chatId: string) => {
@@ -5527,6 +5720,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setChatDraft,
         toggleMuteChat,
         togglePinChat,
+        toggleArchiveChat,
+        blockUser,
+        searchTelegramGlobal,
+        createChatFolder,
         markChatReadUnread,
         markChatAsRead,
         clearChatHistory,

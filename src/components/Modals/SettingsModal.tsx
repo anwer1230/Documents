@@ -2176,8 +2176,46 @@ const DevicesView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 // 12. FOLDERS / CATEGORIES VIEW
 // ==========================================
 const FoldersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-  const { folders, showToast, settings } = useTelegram();
+  const { folders, showToast, settings, createChatFolder } = useTelegram();
   const isArabic = settings.language === 'ar';
+
+  const [isCreating, setIsCreating] = useState(false);
+  const [folderTitle, setFolderTitle] = useState('');
+  const [filterContacts, setFilterContacts] = useState(true);
+  const [filterNonContacts, setFilterNonContacts] = useState(false);
+  const [filterGroups, setFilterGroups] = useState(true);
+  const [filterChannels, setFilterChannels] = useState(true);
+  const [filterBots, setFilterBots] = useState(false);
+  const [excludeMuted, setExcludeMuted] = useState(false);
+  const [excludeArchived, setExcludeArchived] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!folderTitle.trim()) {
+      showToast(isArabic ? 'يرجى إدخال اسم المجلد' : 'Please enter folder name', '⚠️');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await createChatFolder({
+        title: folderTitle.trim(),
+        contacts: filterContacts,
+        nonContacts: filterNonContacts,
+        groups: filterGroups,
+        broadcasts: filterChannels,
+        bots: filterBots,
+        excludeMuted,
+        excludeArchived,
+      });
+      setIsCreating(false);
+      setFolderTitle('');
+    } catch (err: any) {
+      showToast(isArabic ? 'فشل إنشاء المجلد' : 'Failed to create folder', '❌');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[#0e1621]">
@@ -2194,17 +2232,112 @@ const FoldersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                   <div className="text-[11px] text-gray-400">{f.id === 'all' ? 'All chats included' : 'Filtered category'}</div>
                 </div>
               </div>
-              <span className="text-xs text-gray-400 font-mono">Default</span>
+              <span className="text-xs text-gray-400 font-mono">
+                {f.id === 'all' ? 'Default' : 'Active'}
+              </span>
             </div>
           ))}
         </div>
 
-        <button
-          onClick={() => showToast(isArabic ? 'إنشاء مجلد جديد' : 'Create new folder', '📁')}
-          className="w-full py-3 bg-[#2481cc] hover:bg-[#1f6fa8] text-white text-xs font-bold rounded-xl"
-        >
-          {isArabic ? '+ إنشاء مجلد جديد' : '+ Create New Folder'}
-        </button>
+        {isCreating ? (
+          <form onSubmit={handleCreateFolder} className="bg-[#17212b] rounded-2xl border border-white/10 p-4 space-y-3">
+            <div className="text-xs font-bold text-white mb-1">
+              {isArabic ? 'إنشاء مجلد جديد في تيليجرام' : 'Create Telegram Chat Folder'}
+            </div>
+            <div>
+              <label className="block text-[11px] text-gray-400 mb-1">
+                {isArabic ? 'اسم المجلد' : 'Folder Name'}
+              </label>
+              <input
+                type="text"
+                value={folderTitle}
+                onChange={(e) => setFolderTitle(e.target.value)}
+                placeholder={isArabic ? 'مثال: العمل، القنوات، العائلة...' : 'e.g. Work, Channels, Family...'}
+                className="w-full px-3 py-2 bg-[#0e1621] border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#5288c1]"
+                autoFocus
+              />
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <div className="text-[11px] font-semibold text-gray-300">
+                {isArabic ? 'المحادثات المضمنة:' : 'Included Chats:'}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterContacts}
+                    onChange={(e) => setFilterContacts(e.target.checked)}
+                    className="accent-[#5288c1] rounded"
+                  />
+                  <span>{isArabic ? 'جهات الاتصال' : 'Contacts'}</span>
+                </label>
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterNonContacts}
+                    onChange={(e) => setFilterNonContacts(e.target.checked)}
+                    className="accent-[#5288c1] rounded"
+                  />
+                  <span>{isArabic ? 'غير جهات الاتصال' : 'Non-Contacts'}</span>
+                </label>
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterGroups}
+                    onChange={(e) => setFilterGroups(e.target.checked)}
+                    className="accent-[#5288c1] rounded"
+                  />
+                  <span>{isArabic ? 'المجموعات' : 'Groups'}</span>
+                </label>
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterChannels}
+                    onChange={(e) => setFilterChannels(e.target.checked)}
+                    className="accent-[#5288c1] rounded"
+                  />
+                  <span>{isArabic ? 'القنوات' : 'Channels'}</span>
+                </label>
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={filterBots}
+                    onChange={(e) => setFilterBots(e.target.checked)}
+                    className="accent-[#5288c1] rounded"
+                  />
+                  <span>{isArabic ? 'البوتات' : 'Bots'}</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="flex-1 py-2.5 bg-[#2481cc] hover:bg-[#1f6fa8] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-colors"
+              >
+                {isSubmitting
+                  ? (isArabic ? 'جاري الحفظ بالسحابة...' : 'Saving to Cloud...')
+                  : (isArabic ? 'حفظ وإنشاء في تيليجرام' : 'Save & Create Folder')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCreating(false)}
+                className="px-4 py-2.5 bg-white/5 hover:bg-white/10 text-gray-300 text-xs font-medium rounded-xl transition-colors"
+              >
+                {isArabic ? 'إلغاء' : 'Cancel'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <button
+            onClick={() => setIsCreating(true)}
+            className="w-full py-3 bg-[#2481cc] hover:bg-[#1f6fa8] text-white text-xs font-bold rounded-xl transition-colors"
+          >
+            {isArabic ? '+ إنشاء مجلد جديد' : '+ Create New Folder'}
+          </button>
+        )}
       </div>
     </div>
   );
