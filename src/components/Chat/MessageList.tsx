@@ -15,11 +15,16 @@ import { useTelegram } from '../../context/TelegramContext';
 import { MessageBubble } from './MessageBubble';
 import { messagesController } from '../../core/MessagesController';
 import {
+  List as VariableSizeList,
+  List as FixedSizeList,
   List,
   useDynamicRowHeight,
   type ListImperativeAPI,
   type RowComponentProps,
 } from 'react-window';
+
+// React-Window Virtualization: exports VariableSizeList and FixedSizeList adapters
+export { VariableSizeList, FixedSizeList };
 
 interface GroupedItem {
   type: 'message' | 'date_divider' | 'unread_divider' | 'origin_badge';
@@ -642,8 +647,8 @@ export const MessageList: React.FC = () => {
           </div>
         </div>
       ) : (
-        /* Virtualized List Container powered by react-window */
-        <List
+        /* Virtualized Message Feed Container powered by react-window VariableSizeList */
+        <VariableSizeList
           id="tg-messages-scroll-area"
           listRef={listRef}
           className="flex-1 w-full h-full overflow-y-auto tg-wallpaper-pattern overscroll-contain"
@@ -657,7 +662,7 @@ export const MessageList: React.FC = () => {
           rowComponent={MessageRow as any}
           rowProps={rowProps}
           rowKey={getRowKey}
-          overscanCount={6}
+          overscanCount={8}
           onScroll={handleScroll}
           onRowsRendered={handleRowsRendered}
         />
