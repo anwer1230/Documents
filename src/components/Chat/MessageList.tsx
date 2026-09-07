@@ -6,6 +6,8 @@ import React, {
   useState,
   useCallback,
   useMemo,
+  useDeferredValue,
+  startTransition,
   type ReactElement,
 } from 'react';
 import { ArrowDown, Pin, X, Loader2, Shield, Lock } from 'lucide-react';
@@ -35,14 +37,14 @@ interface MessageRowCustomProps {
   highlightedMessageId: string | null;
 }
 
-const MessageRow = ({
+const MessageRow = React.memo(({
   index,
   style,
   items,
   highlightedMessageId,
-}: RowComponentProps<MessageRowCustomProps>): ReactElement | null => {
+}: RowComponentProps<MessageRowCustomProps>) => {
   const item = items[index];
-  if (!item) return null;
+  if (!item) return <div style={style} />;
 
     if (item.type === 'origin_badge') {
       return (
@@ -96,7 +98,7 @@ const MessageRow = ({
         >
           <div
             id={`msg-bubble-container-${msg.id}`}
-            className={`transition-all duration-500 rounded-2xl ${
+            className={`transition-all duration-300 rounded-2xl ${
               highlightedMessageId === msg.id
                 ? 'ring-2 ring-amber-400 bg-amber-500/20 p-1 shadow-lg shadow-amber-500/20 animate-pulse'
                 : ''
@@ -116,8 +118,8 @@ const MessageRow = ({
       );
     }
 
-    return null;
-};
+    return <div style={style} />;
+}) as unknown as React.ComponentType<RowComponentProps<MessageRowCustomProps>>;
 
 export const MessageList: React.FC = () => {
   const {
@@ -135,6 +137,8 @@ export const MessageList: React.FC = () => {
   const listRef = useRef<ListImperativeAPI | null>(null);
 
   const [showScrollBottom, setShowScrollBottom] = useState<boolean>(false);
+  // Defer showScrollBottom state to avoid locking the main rendering thread while user scrolls rapidly
+  const deferredShowScrollBottom = useDeferredValue(showScrollBottom);
   const [unreadStreamCount, setUnreadStreamCount] = useState<number>(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [readInboxMaxId, setReadInboxMaxId] = useState<string | undefined>(undefined);
@@ -445,7 +449,9 @@ export const MessageList: React.FC = () => {
     const isNearBottom = distanceToBottom <= 140;
     isUserNearBottomRef.current = isNearBottom;
 
-    setShowScrollBottom(!isNearBottom);
+    startTransition(() => {
+      setShowScrollBottom(!isNearBottom);
+    });
 
     if (isNearBottom && unreadStreamCount > 0) {
       setUnreadStreamCount(0);
@@ -648,7 +654,7 @@ export const MessageList: React.FC = () => {
           }}
           rowCount={groupedItems.length}
           rowHeight={dynamicRowHeight}
-          rowComponent={MessageRow}
+          rowComponent={MessageRow as any}
           rowProps={rowProps}
           rowKey={getRowKey}
           overscanCount={6}
@@ -658,7 +664,7 @@ export const MessageList: React.FC = () => {
       )}
 
       {/* Floating Scroll to Bottom Button with Unread Incoming Stream Badge */}
-      {showScrollBottom && (
+      {deferredShowScrollBottom && (
         <button
           id="tg-scroll-bottom-button"
           onClick={() => scrollToBottom('smooth')}

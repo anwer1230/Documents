@@ -86,6 +86,56 @@ export default defineConfig(() => {
         '@': path.resolve(process.cwd(), '.'),
       },
     },
+    build: {
+      target: 'es2020',
+      cssCodeSplit: true,
+      sourcemap: false,
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            // GramJS MTProto core in a dedicated chunk
+            if (id.includes('/node_modules/telegram/')) {
+              return 'vendor-telegram';
+            }
+            // SQLite WASM library in a dedicated chunk
+            if (id.includes('/node_modules/sql.js/')) {
+              return 'vendor-sql';
+            }
+            // Virtualized lists in a dedicated chunk
+            if (id.includes('/node_modules/react-window/')) {
+              return 'vendor-react-window';
+            }
+            // React & React DOM core framework
+            if (
+              id.includes('/node_modules/react/') ||
+              id.includes('/node_modules/react-dom/')
+            ) {
+              return 'vendor-react';
+            }
+            // Animation and charts libraries
+            if (
+              id.includes('/node_modules/motion/') ||
+              id.includes('/node_modules/lottie-react/') ||
+              id.includes('/node_modules/recharts/')
+            ) {
+              return 'vendor-animation-charts';
+            }
+            // Icons
+            if (id.includes('/node_modules/lucide-react/')) {
+              return 'vendor-icons';
+            }
+            // Sockets and Network
+            if (
+              id.includes('/node_modules/socket.io-client/') ||
+              id.includes('/node_modules/simple-peer/')
+            ) {
+              return 'vendor-networking';
+            }
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.

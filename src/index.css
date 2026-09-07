@@ -270,3 +270,40 @@
   border-color: #8A2BE2;
 }
 
+/* Hardware acceleration & gesture smoothness */
+#tg-messages-scroll-area,
+#tg-chat-list-scroll,
+.virtual-scroll-viewport {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* Subtle will-change for scrolling containers without memory bloating */
+#tg-messages-scroll-area {
+  will-change: scroll-position;
+}
+
+/* Accessibility & Performance: prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .tg-multicolor-gradient,
+  .tg-multicolor-text,
+  .tg-multicolor-glow,
+  .animate-tg-pulse,
+  .animate-ping,
+  .animate-pulse {
+    animation: none !important;
+  }
+}
+

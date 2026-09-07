@@ -2380,8 +2380,18 @@ async function startServer() {
     return null;
   };
 
+  // High performance cache for fetchRealTelegramData to prevent high concurrency throttling
+  const telegramDataCache = new Map<string, { data: any; timestamp: number }>();
+  const TELEGRAM_DATA_CACHE_TTL_MS = 6000; // 6 seconds debounce cache for rapid re-renders
+
   // Helper to fetch real MTProto profile, chats (dialogs), avatars and messages
   const fetchRealTelegramData = async (client: TelegramClient, phoneHint?: string) => {
+    const cacheKey = phoneHint || (client.session ? (client.session as any).authKey?.key?.toString('hex') : 'default');
+    const cached = telegramDataCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TELEGRAM_DATA_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
     let me: any = null;
     try {
       me = await withTimeout(client.getMe(), 3000, null);
@@ -2823,12 +2833,16 @@ async function startServer() {
 
     await Promise.allSettled(messageFetchPromises);
 
-    return {
+    const result = {
       user: userProfile,
       users: usersList,
       chats,
       messages: messagesRecord,
     };
+
+    telegramDataCache.set(cacheKey, { data: result, timestamp: Date.now() });
+
+    return result;
   };
 
   // Send Code Handler (auth.sendCode RPC via Official Telegram MTProto Servers)

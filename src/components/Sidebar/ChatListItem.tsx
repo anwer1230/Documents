@@ -31,7 +31,7 @@ interface ChatListItemProps {
 /**
  * ChatListItem - Replicates Telegram Android (DrKLO ItemTouchHelper & Swipe Actions)
  */
-export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) => {
+const ChatListItemComponent: React.FC<ChatListItemProps> = ({ chat, isActive }) => {
   const {
     setActiveChatId,
     setChatContextMenu,
@@ -325,3 +325,20 @@ export const ChatListItem: React.FC<ChatListItemProps> = ({ chat, isActive }) =>
     </div>
   );
 };
+
+export const ChatListItem = React.memo(ChatListItemComponent, (prevProps, nextProps) => {
+  return (
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.chat.id === nextProps.chat.id &&
+    prevProps.chat.unreadCount === nextProps.chat.unreadCount &&
+    prevProps.chat.isPinned === nextProps.chat.isPinned &&
+    prevProps.chat.isMuted === nextProps.chat.isMuted &&
+    prevProps.chat.title === nextProps.chat.title &&
+    prevProps.chat.avatar === nextProps.chat.avatar &&
+    prevProps.chat.draft === nextProps.chat.draft &&
+    prevProps.chat.lastMessage?.id === nextProps.chat.lastMessage?.id &&
+    prevProps.chat.lastMessage?.text === nextProps.chat.lastMessage?.text &&
+    prevProps.chat.lastMessage?.status === nextProps.chat.lastMessage?.status &&
+    prevProps.chat.lastMessage?.timestamp === nextProps.chat.lastMessage?.timestamp
+  );
+});

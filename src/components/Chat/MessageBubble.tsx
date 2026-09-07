@@ -65,7 +65,7 @@ interface MessageBubbleProps {
   };
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({
+const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
   message,
   isFirstInGroup = true,
   isLastInGroup = true,
@@ -742,3 +742,20 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     </div>
   );
 };
+
+export const MessageBubble = React.memo(MessageBubbleComponent, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.status === nextProps.message.status &&
+    prevProps.message.text === nextProps.message.text &&
+    prevProps.message.timestamp === nextProps.message.timestamp &&
+    prevProps.isFirstInGroup === nextProps.isFirstInGroup &&
+    prevProps.isLastInGroup === nextProps.isLastInGroup &&
+    prevProps.grouping?.isGroupStart === nextProps.grouping?.isGroupStart &&
+    prevProps.grouping?.isGroupMiddle === nextProps.grouping?.isGroupMiddle &&
+    prevProps.grouping?.isGroupEnd === nextProps.grouping?.isGroupEnd &&
+    prevProps.grouping?.isSingle === nextProps.grouping?.isSingle &&
+    JSON.stringify(prevProps.message.reactions) === JSON.stringify(nextProps.message.reactions) &&
+    JSON.stringify(prevProps.message.media?.pollData) === JSON.stringify(nextProps.message.media?.pollData)
+  );
+});
