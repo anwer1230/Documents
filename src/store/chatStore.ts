@@ -541,6 +541,107 @@ export class ChatStore {
   }
 
   /**
+   * Delta Update Mechanism:
+   * Retrieves the latest known message ID for a given chat from local cache.
+   */
+  public getLastKnownMessageId(chatId: string): string | undefined {
+    if (!chatId) return undefined;
+    const msgs = this.getCachedMessages(chatId);
+    if (!msgs || msgs.length === 0) return undefined;
+
+    let maxIdNum = 0;
+    let maxIdStr: string | undefined = undefined;
+
+    for (const m of msgs) {
+      if (!m || !m.id) continue;
+      const num = Number(String(m.id).replace(/\D/g, ''));
+      if (!isNaN(num) && num > maxIdNum) {
+        maxIdNum = num;
+        maxIdStr = String(m.id);
+      }
+    }
+
+    return maxIdStr || (msgs[msgs.length - 1]?.id ? String(msgs[msgs.length - 1].id) : undefined);
+  }
+
+  /**
+   * Delta Update Mechanism:
+   * Collects a map of chatId -> lastKnownMessageId across all cached conversations
+   * to send in delta-update requests.
+   */
+  public getLastKnownMessageIds(): Record<string, string> {
+    const map: Record<string, string> = {};
+    for (const chatId of this.cachedChatIds) {
+      const lastId = this.getLastKnownMessageId(chatId);
+      if (lastId) {
+        map[chatId] = lastId;
+      }
+    }
+    for (const chatId of this.cachedMessages.keys()) {
+      if (!map[chatId]) {
+        const lastId = this.getLastKnownMessageId(chatId);
+        if (lastId) {
+          map[chatId] = lastId;
+        }
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Delta Update Mechanism:
+   * Merges a newly received delta chunk into existing messages without reloading full history.
+   * Updates modified messages in-place, inserts novel messages, preserves scroll positions and caches.
+   */
+  public mergeDeltaChunk(
+    chatId: string,
+    deltaMessages: Message[],
+    options?: { isCloudVerified?: boolean }
+  ): Message[] {
+    if (!chatId) return [];
+    if (!Array.isArray(deltaMessages) || deltaMessages.length === 0) {
+      return this.getCachedMessages(chatId);
+    }
+
+    const existing = this.getCachedMessages(chatId);
+    if (!existing || existing.length === 0) {
+      this.saveMessages(chatId, deltaMessages, options);
+      return deltaMessages;
+    }
+
+    const msgMap = new Map<string, Message>();
+    for (const m of existing) {
+      if (m && m.id) {
+        msgMap.set(String(m.id), m);
+      }
+    }
+
+    for (const deltaMsg of deltaMessages) {
+      if (!deltaMsg || !deltaMsg.id) continue;
+      const key = String(deltaMsg.id);
+      const prev = msgMap.get(key);
+      if (prev) {
+        msgMap.set(key, { ...prev, ...deltaMsg });
+      } else {
+        msgMap.set(key, deltaMsg);
+      }
+    }
+
+    const merged = Array.from(msgMap.values());
+    merged.sort((a, b) => {
+      const timeA = a.epoch || (a.date ? new Date(a.date).getTime() : 0);
+      const timeB = b.epoch || (b.date ? new Date(b.date).getTime() : 0);
+      if (timeA !== timeB) return timeA - timeB;
+      const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+      const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+      return numA - numB;
+    });
+
+    this.saveMessages(chatId, merged, options);
+    return merged;
+  }
+
+  /**
    * Get the saved scroll position number from ScrollPositions
    */
   public getScrollPosition(chatId: string): number | undefined {

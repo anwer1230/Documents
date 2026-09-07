@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTelegram } from '../../context/TelegramContext';
 import { ChatListHeader } from './ChatListHeader';
 import { FolderBar } from './FolderBar';
@@ -20,7 +20,29 @@ import { usePullToRefresh, useEdgeSwipeDrawer } from '../../hooks/useTouchGestur
 import { messagesController } from '../../core/MessagesController';
 import { draftSyncService } from '../../services/DraftSyncService';
 import { messageCache } from '../../services/IndexedDBMessageCache';
-import { Message } from '../../types';
+import { Message, Chat } from '../../types';
+import { List, type RowComponentProps } from 'react-window';
+
+interface ChatRowCustomProps {
+  sortedChats: Chat[];
+  activeChatId: string | null;
+}
+
+const ChatRow = React.memo(({
+  index,
+  style,
+  sortedChats,
+  activeChatId,
+}: RowComponentProps<ChatRowCustomProps>) => {
+  const chat = sortedChats[index];
+  if (!chat) return <div style={style} />;
+
+  return (
+    <div style={style} className="w-full">
+      <ChatListItem chat={chat} isActive={activeChatId === chat.id} />
+    </div>
+  );
+});
 
 export const Sidebar: React.FC = () => {
   const {
@@ -215,6 +237,15 @@ export const Sidebar: React.FC = () => {
     searchQuery
   );
 
+  const chatRowProps = useMemo<ChatRowCustomProps>(() => ({
+    sortedChats,
+    activeChatId,
+  }), [sortedChats, activeChatId]);
+
+  const getChatRowKey = useCallback((index: number, data: ChatRowCustomProps) => {
+    return data.sortedChats[index]?.id || index;
+  }, []);
+
   const [renderLimit, setRenderLimit] = useState(40);
 
   useEffect(() => {
@@ -275,13 +306,13 @@ export const Sidebar: React.FC = () => {
         </div>
       )}
 
-      {/* Chat List Scrollable Feed */}
+      {/* Chat List Feed (Virtualized via react-window for peak responsiveness) */}
       <div
         id="conversation-list-container"
         data-conversation-list="true"
-        onScroll={handleScroll}
+        onScroll={isSearchMode ? handleScroll : undefined}
         {...pullHandlers}
-        className="flex-1 overflow-y-auto divide-y divide-white/5 py-1"
+        className={`flex-1 min-h-0 ${isSearchMode ? 'overflow-y-auto divide-y divide-white/5 py-1' : 'overflow-hidden'}`}
       >
         {isSearchMode ? (
           <div className="space-y-3 p-1">
@@ -578,18 +609,16 @@ export const Sidebar: React.FC = () => {
             {isArabic ? 'لم يتم العثور على محادثات' : 'No chats found'}
           </div>
         ) : (
-          <>
-            {sortedChats.slice(0, renderLimit).map((chat) => (
-              <ChatListItem key={chat.id} chat={chat} isActive={activeChatId === chat.id} />
-            ))}
-            {renderLimit < sortedChats.length && (
-              <div className="py-2.5 text-center text-xs text-sky-400/80 font-medium">
-                {isArabic
-                  ? `عرض ${renderLimit} من أصل ${sortedChats.length} محادثة (قم بالتمرير للمزيد)`
-                  : `Showing ${renderLimit} of ${sortedChats.length} chats (scroll for more)`}
-              </div>
-            )}
-          </>
+          <List
+            id="tg-sidebar-virtual-list"
+            className="w-full h-full overflow-y-auto overscroll-contain"
+            rowCount={sortedChats.length}
+            rowHeight={settings.chatListViewMode === 'three_lines' ? 84 : 72}
+            rowComponent={ChatRow as any}
+            rowProps={chatRowProps}
+            rowKey={getChatRowKey}
+            overscanCount={6}
+          />
         )}
       </div>
 

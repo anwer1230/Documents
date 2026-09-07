@@ -2780,12 +2780,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       console.log(`[MTProto Sync] Invoking messages.getDialogs & users.getUsers for phone: ${activePhone}`);
 
+      // Delta-Update Mechanism: Retrieve last known message IDs per chat to request only changed chunks
+      const lastKnownMessageIds = chatStore.getLastKnownMessageIds();
+
       const res = await fetch('/api/telegram/sync-light', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: activePhone,
           sessionString: activeSessionStr,
+          lastMessageIds: lastKnownMessageIds,
         }),
       });
       const data = await res.json();
@@ -2968,20 +2972,26 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           return null;
         });
 
-        // Map Messages from MTProto & persist to IndexedDB cache
+        // Delta-Update Mechanism: Merge newly received changed chunks into existing message lists
         if (data.messages && typeof data.messages === 'object' && Object.keys(data.messages).length > 0) {
-          setMessages((prev) => ({
-            ...prev,
-            ...data.messages,
-          }));
-          // Persist all synced messages to chatStore and local IndexedDB
-          for (const [cId, msgList] of Object.entries(data.messages)) {
-            if (Array.isArray(msgList) && msgList.length > 0) {
-              chatStore.saveMessages(cId, msgList as Message[], { isCloudVerified: true });
-              chatStore.markConversationSynced(cId, (msgList as Message[]).map((m) => m.id));
-              messageCache.putMessages(cId, msgList as Message[], { isNetworkFetch: true }).catch(() => {});
+          setMessages((prev) => {
+            const updated = { ...prev };
+            for (const [cId, msgList] of Object.entries(data.messages)) {
+              if (Array.isArray(msgList) && msgList.length > 0) {
+                // Merge delta chunk with existing conversation history
+                const merged = chatStore.mergeDeltaChunk(cId, msgList as Message[], { isCloudVerified: true });
+                updated[cId] = merged;
+                chatStore.markConversationSynced(cId, (msgList as Message[]).map((m) => m.id));
+                messageCache.putMessages(cId, merged, { isNetworkFetch: true }).catch(() => {});
+              } else if (!updated[cId]) {
+                const cached = chatStore.getCachedMessages(cId);
+                if (cached && cached.length > 0) {
+                  updated[cId] = cached;
+                }
+              }
             }
-          }
+            return updated;
+          });
         } else {
           setMessages((prev) => ({
             ...INITIAL_MESSAGES,

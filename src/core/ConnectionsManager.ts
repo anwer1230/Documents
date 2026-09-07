@@ -43,6 +43,19 @@ export class ConnectionsManager {
   private listeners = new Set<(state: ConnectionState) => void>();
   private updateListeners = new Set<(update: any) => void>();
 
+  // Request Batching Engine (Minimizes round-trips to Telegram API during initial app load)
+  private batchQueue: Array<{
+    id: string;
+    request: { _: string; [key: string]: any };
+    resolve: (res: any) => void;
+    reject: (err: any) => void;
+    notifySuccess: (res: any) => void;
+    notifyError: (err: TLRPC.TL_error) => void;
+  }> = [];
+  private batchTimer: any = null;
+  private isBatchingExplicit = false;
+  private readonly BATCH_WINDOW_MS = 25; // 25ms micro-batch window
+
   // Real MTProto Session State
   private session: MtprotoSession = {
     sessionId: this.generateRandomHex(16),
@@ -256,6 +269,149 @@ export class ConnectionsManager {
   }
 
   /**
+   * Checks if an RPC request type is suitable for batching during load/sync
+   */
+  public isBatchable(reqType: string): boolean {
+    return (
+      reqType === 'account.getPassword' ||
+      reqType === 'TL_account_getPassword' ||
+      reqType === 'account.getPrivacy' ||
+      reqType === 'TL_account_getPrivacy' ||
+      reqType === 'account.getAuthorizations' ||
+      reqType === 'TL_account_getAuthorizations' ||
+      reqType === 'updates.getState' ||
+      reqType === 'TL_updates_getState' ||
+      reqType === 'status' ||
+      reqType === 'sync-light'
+    );
+  }
+
+  /**
+   * Starts an explicit batch collection window
+   */
+  public startBatch(): void {
+    this.isBatchingExplicit = true;
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+  }
+
+  /**
+   * Ends explicit batching and immediately flushes the collected batch queue
+   */
+  public async endBatch(): Promise<void> {
+    this.isBatchingExplicit = false;
+    await this.flushBatch();
+  }
+
+  /**
+   * Dispatches batched requests in a single round-trip payload to /api/telegram/batch
+   */
+  public async flushBatch(): Promise<void> {
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+
+    if (this.batchQueue.length === 0) return;
+
+    const itemsToFlush = this.batchQueue.splice(0);
+    const activeSession = typeof window !== 'undefined' ? (localStorage.getItem('tg_session_string') || '') : '';
+
+    try {
+      const resp = await fetch('/api/telegram/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionString: activeSession,
+          requests: itemsToFlush.map((item) => ({
+            id: item.id,
+            type: item.request._,
+            params: item.request,
+          })),
+        }),
+      });
+
+      const data = await resp.json().catch(() => ({}));
+      const results: Record<string, any> = (data && data.results) || {};
+
+      for (const item of itemsToFlush) {
+        const itemResult = results[item.id];
+        if (itemResult && itemResult.success) {
+          item.notifySuccess(itemResult.data);
+          item.resolve(itemResult.data);
+        } else {
+          const err: TLRPC.TL_error = {
+            code: itemResult?.status || resp.status || 400,
+            text: itemResult?.error || data.error || 'BATCH_ITEM_FAILED',
+          };
+          item.notifyError(err);
+          item.reject(err);
+        }
+      }
+    } catch (networkErr: any) {
+      const err: TLRPC.TL_error = {
+        code: 500,
+        text: networkErr?.message || 'NETWORK_BATCH_ERROR',
+      };
+      for (const item of itemsToFlush) {
+        item.notifyError(err);
+        item.reject(err);
+      }
+    }
+  }
+
+  /**
+   * Enqueues a request into the batch queue for coalescing into a single network call
+   */
+  public async sendBatchedRequest<T = any>(
+    request: { _: string; [key: string]: any },
+    callback?: RpcCallback<T>
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const reqId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+      const notifySuccess = (res: any) => {
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(res, null);
+        } else if (callback.onSuccess) {
+          callback.onSuccess(res);
+        }
+      };
+
+      const notifyError = (err: TLRPC.TL_error) => {
+        this.handleRpcError(err);
+        if (!callback) return;
+        if (typeof callback === 'function') {
+          callback(null, err);
+        } else if (callback.onError) {
+          callback.onError(err);
+        }
+      };
+
+      this.batchQueue.push({
+        id: reqId,
+        request,
+        resolve,
+        reject,
+        notifySuccess,
+        notifyError,
+      });
+
+      // If not in explicit manual batch, debounce flush automatically
+      if (!this.isBatchingExplicit) {
+        if (!this.batchTimer) {
+          this.batchTimer = setTimeout(() => {
+            this.flushBatch();
+          }, this.BATCH_WINDOW_MS);
+        }
+      }
+    });
+  }
+
+  /**
    * Dispatches and processes an actual MTProto RPC Request with database synchronisation
    */
   public async sendRequest<T = any>(
@@ -287,6 +443,12 @@ export class ConnectionsManager {
 
       try {
         const reqType = request._;
+
+        // Auto-coalesce batchable requests during initial app load and routine queries
+        if (this.isBatchingExplicit || (request.allowBatch !== false && this.isBatchable(reqType))) {
+          this.sendBatchedRequest<T>(request, callback).then(resolve).catch(reject);
+          return;
+        }
 
         // 1. Process Channel Join Request
         if (reqType === 'TL_channels_joinChannel' || reqType === 'channels.joinChannel') {
