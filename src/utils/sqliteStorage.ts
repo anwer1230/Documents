@@ -615,6 +615,310 @@ class TelegramSQLiteDatabase {
     }
     return null;
   }
+
+  // ==========================================
+  // Development-Only Database Browser Methods
+  // ==========================================
+
+  public getDatabaseInstance(): Database | null {
+    return this.db;
+  }
+
+  public async inspectAllTables(): Promise<
+    Array<{
+      name: string;
+      rowCount: number;
+      columns: Array<{ cid: number; name: string; type: string; notnull: number; pk: number }>;
+    }>
+  > {
+    await this.init();
+    if (!this.db) return [];
+    try {
+      const res = this.db.exec(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC"
+      );
+      if (!res.length || !res[0].values) return [];
+
+      const tables: Array<{
+        name: string;
+        rowCount: number;
+        columns: Array<{ cid: number; name: string; type: string; notnull: number; pk: number }>;
+      }> = [];
+
+      for (const row of res[0].values) {
+        const tableName = String(row[0]);
+        let count = 0;
+        try {
+          const countRes = this.db.exec(`SELECT COUNT(*) FROM "${tableName}"`);
+          if (countRes.length && countRes[0].values && countRes[0].values.length) {
+            count = Number(countRes[0].values[0][0]) || 0;
+          }
+        } catch (_) {}
+
+        const cols: Array<{ cid: number; name: string; type: string; notnull: number; pk: number }> = [];
+        try {
+          const infoRes = this.db.exec(`PRAGMA table_info("${tableName}")`);
+          if (infoRes.length && infoRes[0].values) {
+            for (const colRow of infoRes[0].values) {
+              cols.push({
+                cid: Number(colRow[0]),
+                name: String(colRow[1]),
+                type: String(colRow[2]),
+                notnull: Number(colRow[3]),
+                pk: Number(colRow[5]),
+              });
+            }
+          }
+        } catch (_) {}
+
+        tables.push({
+          name: tableName,
+          rowCount: count,
+          columns: cols,
+        });
+      }
+      return tables;
+    } catch (e) {
+      console.error('[SQLite Browser] inspectAllTables error:', e);
+      return [];
+    }
+  }
+
+  public async queryTableData(
+    tableName: string,
+    options: { page?: number; pageSize?: number; search?: string; sortCol?: string; sortDir?: 'ASC' | 'DESC' } = {}
+  ): Promise<{ columns: string[]; rows: any[]; total: number; page: number; pageSize: number }> {
+    await this.init();
+    if (!this.db) return { columns: [], rows: [], total: 0, page: 1, pageSize: 25 };
+
+    const page = Math.max(1, options.page || 1);
+    const pageSize = Math.max(5, Math.min(200, options.pageSize || 25));
+    const offset = (page - 1) * pageSize;
+
+    const validTables = this.db.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    );
+    const tableNames = validTables[0]?.values?.map((r) => String(r[0])) || [];
+    if (!tableNames.includes(tableName)) {
+      throw new Error(`Invalid table name: ${tableName}`);
+    }
+
+    const infoRes = this.db.exec(`PRAGMA table_info("${tableName}")`);
+    const columns: string[] = infoRes[0]?.values?.map((r) => String(r[1])) || [];
+
+    let whereClause = '';
+    const params: any[] = [];
+    if (options.search && options.search.trim()) {
+      const q = `%${options.search.trim()}%`;
+      const searchConditions = columns.map((c) => `"${c}" LIKE ?`).join(' OR ');
+      if (searchConditions) {
+        whereClause = `WHERE (${searchConditions})`;
+        columns.forEach(() => params.push(q));
+      }
+    }
+
+    let total = 0;
+    try {
+      const countStmt = this.db.prepare(`SELECT COUNT(*) FROM "${tableName}" ${whereClause}`);
+      if (params.length) countStmt.bind(params);
+      if (countStmt.step()) {
+        total = Number(countStmt.get()[0]) || 0;
+      }
+      countStmt.free();
+    } catch (e) {
+      console.warn('[SQLite Browser] count error:', e);
+    }
+
+    let orderClause = '';
+    if (options.sortCol && columns.includes(options.sortCol)) {
+      const dir = options.sortDir === 'DESC' ? 'DESC' : 'ASC';
+      orderClause = `ORDER BY "${options.sortCol}" ${dir}`;
+    }
+
+    const querySql = `SELECT * FROM "${tableName}" ${whereClause} ${orderClause} LIMIT ? OFFSET ?`;
+    const queryParams = [...params, pageSize, offset];
+
+    const rows: any[] = [];
+    try {
+      const stmt = this.db.prepare(querySql);
+      stmt.bind(queryParams);
+      while (stmt.step()) {
+        rows.push(stmt.getAsObject());
+      }
+      stmt.free();
+    } catch (e) {
+      console.error('[SQLite Browser] queryTableData error:', e);
+    }
+
+    return { columns, rows, total, page, pageSize };
+  }
+
+  public async runDevSql(
+    sql: string
+  ): Promise<{ columns: string[]; rows: any[]; rowCount: number; executionTimeMs: number; error?: string }> {
+    await this.init();
+    if (!this.db) {
+      return { columns: [], rows: [], rowCount: 0, executionTimeMs: 0, error: 'Database not initialized' };
+    }
+
+    const start = performance.now();
+    try {
+      const res = this.db.exec(sql);
+      const executionTimeMs = Math.round((performance.now() - start) * 100) / 100;
+      if (!res.length) {
+        return { columns: [], rows: [], rowCount: 0, executionTimeMs };
+      }
+      const cols = res[0].columns;
+      const rows = res[0].values.map((row) => {
+        const obj: any = {};
+        cols.forEach((c, i) => {
+          obj[c] = row[i];
+        });
+        return obj;
+      });
+      return {
+        columns: cols,
+        rows,
+        rowCount: rows.length,
+        executionTimeMs,
+      };
+    } catch (err: any) {
+      const executionTimeMs = Math.round((performance.now() - start) * 100) / 100;
+      return {
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        executionTimeMs,
+        error: err?.message || String(err),
+      };
+    }
+  }
+
+  public async getDatabaseStorageStats(): Promise<{
+    storageKey: string;
+    byteSize: number;
+    formattedSize: string;
+    tableCount: number;
+    totalRows: number;
+  }> {
+    await this.init();
+    let byteSize = 0;
+    try {
+      const savedBinary = await get<Uint8Array>(SQLITE_STORAGE_KEY);
+      if (savedBinary) byteSize = savedBinary.byteLength;
+    } catch (_) {}
+
+    if (byteSize === 0 && this.db) {
+      try {
+        const exported = this.db.export();
+        byteSize = exported.byteLength;
+      } catch (_) {}
+    }
+
+    const tables = await this.inspectAllTables();
+    const totalRows = tables.reduce((acc, t) => acc + t.rowCount, 0);
+
+    let formattedSize = `${(byteSize / 1024).toFixed(1)} KB`;
+    if (byteSize > 1024 * 1024) {
+      formattedSize = `${(byteSize / (1024 * 1024)).toFixed(2)} MB`;
+    }
+
+    return {
+      storageKey: SQLITE_STORAGE_KEY,
+      byteSize,
+      formattedSize,
+      tableCount: tables.length,
+      totalRows,
+    };
+  }
+
+  public async getSyncDiagnosticsReport(): Promise<{
+    diffParams: any;
+    channelPtsList: Array<{ channelId: string; pts: number; updatedAt?: string }>;
+    totalChats: number;
+    totalMessages: number;
+    totalUsers: number;
+    activeSecretSessions: number;
+    lastMessageTime?: string;
+  }> {
+    await this.init();
+    let diffParams = null;
+    let channelPtsList: Array<{ channelId: string; pts: number; updatedAt?: string }> = [];
+    let totalChats = 0;
+    let totalMessages = 0;
+    let totalUsers = 0;
+    let activeSecretSessions = 0;
+    let lastMessageTime: string | undefined = undefined;
+
+    if (!this.db) {
+      return { diffParams, channelPtsList, totalChats, totalMessages, totalUsers, activeSecretSessions };
+    }
+
+    try {
+      const dp = this.db.exec('SELECT * FROM diff_params LIMIT 1');
+      if (dp.length && dp[0].values?.length) {
+        const row = dp[0].values[0];
+        diffParams = {
+          accountId: row[0],
+          pts: row[1],
+          seq: row[2],
+          date: row[3],
+          qts: row[4],
+          updatedAt: row[5] ? new Date(Number(row[5])).toLocaleString() : undefined,
+        };
+      }
+    } catch (_) {}
+
+    try {
+      const ptsRes = this.db.exec(
+        'SELECT channel_id, pts, updated_at FROM channel_pts ORDER BY updated_at DESC LIMIT 50'
+      );
+      if (ptsRes.length && ptsRes[0].values) {
+        channelPtsList = ptsRes[0].values.map((r) => ({
+          channelId: String(r[0]),
+          pts: Number(r[1]),
+          updatedAt: r[2] ? new Date(Number(r[2])).toLocaleTimeString() : undefined,
+        }));
+      }
+    } catch (_) {}
+
+    try {
+      const cRes = this.db.exec('SELECT COUNT(*) FROM chats');
+      if (cRes.length && cRes[0].values) totalChats = Number(cRes[0].values[0][0]) || 0;
+    } catch (_) {}
+
+    try {
+      const mRes = this.db.exec('SELECT COUNT(*) FROM messages');
+      if (mRes.length && mRes[0].values) totalMessages = Number(mRes[0].values[0][0]) || 0;
+    } catch (_) {}
+
+    try {
+      const uRes = this.db.exec('SELECT COUNT(*) FROM users');
+      if (uRes.length && uRes[0].values) totalUsers = Number(uRes[0].values[0][0]) || 0;
+    } catch (_) {}
+
+    try {
+      const sRes = this.db.exec('SELECT COUNT(*) FROM secret_sessions');
+      if (sRes.length && sRes[0].values) activeSecretSessions = Number(sRes[0].values[0][0]) || 0;
+    } catch (_) {}
+
+    try {
+      const lRes = this.db.exec('SELECT timestamp FROM messages ORDER BY timestamp DESC LIMIT 1');
+      if (lRes.length && lRes[0].values?.length) {
+        lastMessageTime = String(lRes[0].values[0][0]);
+      }
+    } catch (_) {}
+
+    return {
+      diffParams,
+      channelPtsList,
+      totalChats,
+      totalMessages,
+      totalUsers,
+      activeSecretSessions,
+      lastMessageTime,
+    };
+  }
 }
 
 export const telegramDB = new TelegramSQLiteDatabase();

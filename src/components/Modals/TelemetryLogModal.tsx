@@ -39,6 +39,7 @@ import {
 } from '../../utils/telemetryIndexedDB';
 import { useTelegram } from '../../context/TelegramContext';
 import { AppUpdateController } from '../../core/messenger/AppUpdateController';
+import DatabaseBrowserView from './DatabaseBrowserView';
 
 interface TelemetryLogModalProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ interface TelemetryLogModalProps {
 
 export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, onClose }) => {
   const { logout, showToast, setActiveModal } = useTelegram();
+  const [activeModalTab, setActiveModalTab] = useState<'telemetry' | 'database_browser'>('telemetry');
   const [logs, setLogs] = useState<TelemetryEvent[]>(() => getTelemetryLogs());
   const [archivedCount, setArchivedCount] = useState<number>(0);
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'network' | 'latency' | 'sync'>('all');
@@ -320,7 +322,7 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
               stiffness: 300,
               mass: 0.85,
             }}
-            className="relative z-10 w-full max-w-4xl h-[90vh] max-h-[850px] bg-[#0e1621] border border-cyan-500/30 rounded-2xl shadow-2xl flex flex-col text-white overflow-hidden"
+            className="relative z-10 w-full max-w-5xl h-[90vh] max-h-[850px] bg-[#0e1621] border border-cyan-500/30 rounded-2xl shadow-2xl flex flex-col text-white overflow-hidden"
             dir="rtl"
             onClick={(e) => e.stopPropagation()}
           >
@@ -372,21 +374,76 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
           </div>
         </div>
 
-        {/* Security & Persistence Rules Badge */}
-        <div className="px-5 py-2 bg-[#121c27] border-b border-cyan-500/20 flex flex-wrap items-center justify-between text-[11px] text-cyan-200 gap-2">
+        {/* Primary View Switcher: Telemetry Logs vs Local SQLite Database Browser */}
+        <div className="px-5 py-2.5 bg-[#121c27] border-b border-cyan-500/20 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2">
-            <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>
-              <strong>أمان وخصوصية 100%:</strong> لا يتم تسجيل محتوى الرسائل أو البيانات الحساسة. يتم الحفظ محلياً فقط.
-            </span>
+            <button
+              type="button"
+              onClick={() => setActiveModalTab('telemetry')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeModalTab === 'telemetry'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                  : 'bg-white/5 text-gray-400 hover:text-white border border-transparent'
+              }`}
+            >
+              <Activity className="w-4 h-4" />
+              <span>سجل القياس وتشخيص الشبكة (Telemetry)</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-cyan-950/80 text-cyan-300 font-mono">
+                {logs.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveModalTab('database_browser')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeModalTab === 'database_browser'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                  : 'bg-white/5 text-gray-400 hover:text-white border border-transparent'
+              }`}
+            >
+              <Database className="w-4 h-4 text-amber-400" />
+              <span>متصفح قاعدة البيانات (Database Browser)</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                Dev Only
+              </span>
+            </button>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/30 text-cyan-300">
-              <Database className="w-3 h-3 text-cyan-400" />
-              <span>{logs.length > 50 ? `IndexedDB Backup: ${logs.length} أحداث` : `الذاكرة المؤقتة: ${logs.length}/50`}</span>
-            </span>
+
+          <div className="flex items-center gap-2 text-[11px] text-cyan-200">
+            {activeModalTab === 'telemetry' ? (
+              <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/30 text-cyan-300">
+                <Database className="w-3 h-3 text-cyan-400" />
+                <span>{logs.length > 50 ? `IndexedDB Backup: ${logs.length} أحداث` : `الذاكرة المؤقتة: ${logs.length}/50`}</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/30 text-amber-300">
+                <Database className="w-3 h-3 text-amber-400" />
+                <span>IndexedDB SQLite Storage (telegram_sqlite_database_v1)</span>
+              </span>
+            )}
           </div>
         </div>
+
+        {activeModalTab === 'database_browser' ? (
+          <DatabaseBrowserView />
+        ) : (
+          <>
+            {/* Security & Persistence Rules Badge */}
+            <div className="px-5 py-2 bg-[#121c27] border-b border-cyan-500/20 flex flex-wrap items-center justify-between text-[11px] text-cyan-200 gap-2">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  <strong>أمان وخصوصية 100%:</strong> لا يتم تسجيل محتوى الرسائل أو البيانات الحساسة. يتم الحفظ محلياً فقط.
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/30 text-cyan-300">
+                  <Database className="w-3 h-3 text-cyan-400" />
+                  <span>{logs.length > 50 ? `IndexedDB Backup: ${logs.length} أحداث` : `الذاكرة المؤقتة: ${logs.length}/50`}</span>
+                </span>
+              </div>
+            </div>
 
         {/* Actionable Error Banner for AUTH_KEY_UNREGISTERED */}
         {authKeyDetected && (
@@ -816,12 +873,18 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
             })
           )}
         </div>
+        </>
+        )}
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-white/10 bg-[#17212b] flex items-center justify-between text-xs text-gray-400 shrink-0">
           <div className="flex items-center gap-2">
             <span>
-              {logs.length > 50 ? (
+              {activeModalTab === 'database_browser' ? (
+                <span className="text-cyan-300 font-semibold">
+                  متصفح قاعدة بيانات SQLite المحلي للمطورين والمسؤولين • يتم الحفظ الفوري المشفر في IndexedDB.
+                </span>
+              ) : logs.length > 50 ? (
                 <span className="text-cyan-300 font-semibold">
                   يتم حفظ السجل تلقائياً في IndexedDB مع نسخة احتياطية JSON لحفظ أكثر من 50 حدثاً بأمان.
                 </span>
