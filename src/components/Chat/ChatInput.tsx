@@ -283,32 +283,71 @@ export const ChatInput: React.FC = () => {
     setIsSolvingCaptcha(false);
   };
 
-  const handleChannelJoin = () => {
+  const handleChannelJoin = async () => {
     if (!activeChat) return;
+
+    // استخراج الجلسة
+    const sessionString = localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '';
+    const phone = localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '';
+
+    if (!sessionString || !phone) {
+      showToast(isArabic ? 'يرجى تسجيل الدخول أولاً' : 'Please log in first', '❌');
+      return;
+    }
+
+    // الحصول على معرف القناة و access_hash
+    const channelId = activeChat.id;
+    const accessHash = (activeChat as any).accessHash || '0';
+
     try {
-      confetti({
-        particleCount: 45,
-        spread: 70,
-        origin: { y: 0.8 },
-        colors: ['#2481cc', '#4caf50', '#ffb300', '#9c27b0'],
+      const res = await fetch('/api/telegram/links/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId,
+          accessHash,
+          sessionString,
+          phone,
+          type: 'public', // أو تحديد النوع بناءً على معلومات القناة
+        }),
       });
-    } catch {}
 
-    const customEvent = new CustomEvent('tg-joined-chat', {
-      detail: {
-        ...activeChat,
-        isMember: true,
-        memberCount: (activeChat.memberCount || 1000) + 1,
-      },
-    });
-    window.dispatchEvent(customEvent);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || errorData.message || (isArabic ? 'فشل الانضمام' : 'Join failed'));
+      }
 
-    showToast(
-      isArabic
-        ? `تم الانضمام إلى قناة "${activeChat.title}" بنجاح!`
-        : `Joined "${activeChat.title}" successfully!`,
-      '✨'
-    );
+      const data = await res.json();
+      if (data.success && data.joinedChat) {
+        // إطلاق تأثيرات النجاح (confetti)
+        try {
+          confetti({ particleCount: 45, spread: 70, origin: { y: 0.8 } });
+        } catch {}
+
+        // إطلاق حدث الانضمام لتحديث السياق
+        const customEvent = new CustomEvent('tg-joined-chat', { detail: data.joinedChat });
+        window.dispatchEvent(customEvent);
+
+        showToast(
+          isArabic
+            ? `تم الانضمام إلى "${data.joinedChat.title}" بنجاح!`
+            : `Joined "${data.joinedChat.title}" successfully!`,
+          '✅'
+        );
+      } else {
+        throw new Error(data.message || data.error || (isArabic ? 'فشل الانضمام' : 'Join failed'));
+      }
+    } catch (error: any) {
+      let message = isArabic ? 'حدث خطأ أثناء الانضمام' : 'Error during join';
+      if (error.message === 'AUTH_KEY_UNREGISTERED') {
+        message = isArabic ? 'يرجى تسجيل الدخول أولاً' : 'Please log in first';
+      } else if (error.message === 'FLOOD_WAIT') {
+        message = isArabic ? 'تم تجاوز حد الطلبات، يرجى الانتظار قليلاً' : 'Too many requests, please wait';
+      } else if (error.message) {
+        message = error.message;
+      }
+      showToast(message, '❌');
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

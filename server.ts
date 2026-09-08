@@ -4789,73 +4789,157 @@ async function startServer() {
 
   // 7. Import Chat Invite (messages.importChatInvite / channels.joinChannel RPC)
   app.post('/api/telegram/links/join', async (req, res) => {
-    const { inviteInfo, link, hash, sessionString, phone } = req.body;
+    const { inviteInfo, link, hash, channelId, accessHash, sessionString, phone, type } = req.body;
+
+    // التحقق من وجود بيانات الاعتماد
+    if (!sessionString || !phone) {
+      return res.status(401).json({
+        success: false,
+        error: 'AUTH_KEY_UNREGISTERED',
+        message: 'يرجى تسجيل الدخول أولاً',
+      });
+    }
+
+    // الحصول على عميل MTProto للجلسة المحددة
+    const client = await getClientForSession(sessionString, phone);
+    if (!client || !client.connected) {
+      return res.status(401).json({
+        success: false,
+        error: 'AUTH_KEY_UNREGISTERED',
+        message: 'الجلسة غير متصلة، يرجى تسجيل الدخول مرة أخرى',
+      });
+    }
+
     try {
-      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
-      if (!client || !client.connected) {
-        return res.status(401).json({
+      let joinedChat: any = null;
+
+      if ((type === 'private' || !channelId) && (hash || (inviteInfo && (inviteInfo.hash || inviteInfo.inviteHash)))) {
+        // روابط الدعوة الخاصة
+        const rawHash = hash || (inviteInfo && (inviteInfo.hash || inviteInfo.inviteHash));
+        const cleanHash = String(rawHash).replace(/^(https?:\/\/)?t\.me\/(joinchat\/|\+)?/, '').split('?')[0].split('/')[0];
+        const result: any = await client.invoke(new Api.messages.ImportChatInvite({ hash: cleanHash }));
+        if (result && result.chats && result.chats.length > 0) {
+          joinedChat = result.chats[0];
+        } else {
+          return res.status(200).json({
+            success: true,
+            status: 'pending_approval',
+            message: 'تم إرسال طلب الانضمام، بانتظار الموافقة',
+          });
+        }
+      } else if ((type === 'public' || type === 'channel' || channelId) && channelId) {
+        // القنوات العامة
+        let entity: any;
+        try {
+          if (accessHash && accessHash !== '0') {
+            entity = await client.getEntity(new Api.InputChannel({
+              channelId: BigInt(String(channelId).replace(/^-100/, '')),
+              accessHash: BigInt(accessHash),
+            }));
+          } else {
+            entity = await client.getEntity(channelId);
+          }
+        } catch {
+          entity = await client.getEntity(channelId);
+        }
+
+        const result: any = await client.invoke(new Api.channels.JoinChannel({ channel: entity }));
+        if (result && result.chats && result.chats.length > 0) {
+          joinedChat = result.chats[0];
+        }
+      } else if (link || (inviteInfo && (inviteInfo.link || inviteInfo.username))) {
+        // محاولة استنتاج النوع من الرابط
+        const joinTarget = link || (inviteInfo && (inviteInfo.link || inviteInfo.username));
+        const cleanedTarget = String(joinTarget).trim();
+        let inviteHash = '';
+        if (cleanedTarget.includes('+')) {
+          inviteHash = cleanedTarget.split('+')[1].split('/')[0].split('?')[0];
+        } else if (cleanedTarget.includes('joinchat/')) {
+          inviteHash = cleanedTarget.split('joinchat/')[1].split('/')[0].split('?')[0];
+        }
+
+        if (inviteHash) {
+          const result: any = await client.invoke(new Api.messages.ImportChatInvite({ hash: inviteHash }));
+          if (result && result.chats && result.chats.length > 0) {
+            joinedChat = result.chats[0];
+          }
+        } else {
+          const username = cleanedTarget.replace(/^https?:\/\/t\.me\//, '').replace(/^@/, '').split('/')[0];
+          const entity = await client.getEntity(username);
+          const result: any = await client.invoke(new Api.channels.JoinChannel({ channel: entity }));
+          if (result && result.chats && result.chats.length > 0) {
+            joinedChat = result.chats[0];
+          }
+        }
+      } else {
+        return res.status(400).json({
           success: false,
-          error: 'AUTH_KEY_UNREGISTERED',
-          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول أولاً.',
+          error: 'INVALID_REQUEST',
+          message: 'بيانات غير كافية للانضمام',
         });
       }
 
-      let joinTarget = hash || (inviteInfo && inviteInfo.inviteHash) || (inviteInfo && inviteInfo.link) || link;
-      if (!joinTarget && inviteInfo && inviteInfo.username) {
-        joinTarget = inviteInfo.username;
-      }
-
-      if (!joinTarget) {
-        return res.status(400).json({ success: false, error: 'TARGET_REQUIRED', message: 'رابط أو كود الدعوة مطلوب للانضمام' });
-      }
-
-      const cleanedTarget = String(joinTarget).trim();
-      let inviteHash = '';
-      if (cleanedTarget.includes('+')) {
-        inviteHash = cleanedTarget.split('+')[1].split('/')[0].split('?')[0];
-      } else if (cleanedTarget.includes('joinchat/')) {
-        inviteHash = cleanedTarget.split('joinchat/')[1].split('/')[0].split('?')[0];
-      }
-
-      let result: any = null;
-      if (inviteHash) {
-        result = await client.invoke(new Api.messages.ImportChatInvite({ hash: inviteHash }));
+      if (joinedChat) {
+        // إرجاع بيانات المحادثة المنضم إليها
+        return res.json({
+          success: true,
+          joinedChat: {
+            id: String(joinedChat.id || channelId || (inviteInfo && inviteInfo.id)),
+            title: joinedChat.title || (inviteInfo && inviteInfo.title) || 'محادثة تيليجرام',
+            username: joinedChat.username || (inviteInfo && inviteInfo.username),
+            accessHash: String(joinedChat.access_hash || accessHash || '0'),
+            type: (joinedChat.className === 'Channel' || joinedChat.broadcast) ? 'channel' : 'chat',
+            memberCount: joinedChat.participants_count || (inviteInfo && inviteInfo.memberCount) || 1,
+            avatar: (inviteInfo && inviteInfo.avatar) || '',
+            isMember: true,
+          },
+        });
       } else {
-        const username = cleanedTarget.replace(/^https?:\/\/t\.me\//, '').replace(/^@/, '').split('/')[0];
-        const entity = await client.getEntity(username);
-        result = await client.invoke(new Api.channels.JoinChannel({ channel: entity }));
+        return res.status(500).json({
+          success: false,
+          error: 'JOIN_FAILED',
+          message: 'فشل الانضمام، حاول مرة أخرى',
+        });
       }
+    } catch (error: any) {
+      const errMsg = error?.errorMessage || error?.message || String(error);
+      console.error('Join error:', errMsg);
 
-      return res.json({
-        success: true,
-        joinedChat: {
-          ...inviteInfo,
-          joinedAt: new Date().toISOString(),
-          role: 'member',
-        },
-        result,
-        message: 'تم الانضمام إلى المجموعة/القناة بنجاح عبر خوادم تيليجرام الرسمية.',
-      });
-    } catch (joinErr: any) {
-      const errMsg = joinErr?.errorMessage || joinErr?.message || String(joinErr);
-      console.warn('[MTProto] Real join error:', errMsg);
-
+      if (errMsg.includes('FLOOD_WAIT')) {
+        const seconds = errMsg.match(/\d+/)?.[0] || '60';
+        return res.status(429).json({
+          success: false,
+          error: 'FLOOD_WAIT',
+          message: `الانتظار ${seconds} ثانية قبل المحاولة مرة أخرى`,
+          seconds: parseInt(seconds, 10),
+        });
+      }
+      if (errMsg.includes('INVITE_HASH_EXPIRED')) {
+        return res.status(410).json({
+          success: false,
+          error: 'INVITE_HASH_EXPIRED',
+          message: 'رابط الدعوة منتهي الصلاحية',
+        });
+      }
       if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
         return res.status(200).json({
           success: true,
           alreadyMember: true,
-          message: 'أنت عضو بالفعل في هذه المجموعة/القناة.',
+          joinedChat: {
+            id: String(channelId || (inviteInfo && inviteInfo.id) || hash || 'chat'),
+            title: (inviteInfo && inviteInfo.title) || 'المحادثة',
+            username: inviteInfo && inviteInfo.username,
+            accessHash: String(accessHash || '0'),
+            type: (inviteInfo && inviteInfo.type) || 'channel',
+            isMember: true,
+          },
+          message: 'أنت عضو بالفعل في هذه المجموعة',
         });
       }
-
-      const statusCode = errMsg.includes('FLOOD_WAIT') ? 429 :
-                         errMsg.includes('INVITE_HASH_EXPIRED') ? 410 :
-                         errMsg.includes('CHANNELS_TOO_MUCH') ? 400 : 500;
-
-      return res.status(statusCode).json({
+      return res.status(500).json({
         success: false,
-        error: errMsg,
-        message: `فشل الانضمام عبر تيليجرام: ${errMsg}`,
+        error: 'INTERNAL_ERROR',
+        message: `حدث خطأ داخلي، يرجى المحاولة لاحقاً: ${errMsg}`,
       });
     }
   });
@@ -10728,66 +10812,10 @@ Please provide the concise summary.`;
     }
   });
 
-  app.post('/api/telegram/chat-invite/join', async (req, res) => {
-    try {
-      const { hash, sessionString, phone } = req.body;
-      if (!hash) {
-        return res.status(400).json({ ok: false, error: 'INVITE_HASH_EMPTY', message: 'رابط أو رمز الدعوة مطلوب' });
-      }
-
-      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
-      if (!client || !client.connected) {
-        return res.status(401).json({
-          ok: false,
-          error: 'AUTH_KEY_UNREGISTERED',
-          message: 'خادم تيليجرام غير متصل بالجلسة. يرجى تسجيل الدخول أولاً.',
-        });
-      }
-
-      const cleanHash = String(hash).replace(/^(https?:\/\/)?t\.me\/(joinchat\/|\+)?/, '').split('?')[0].split('/')[0];
-      const result: any = await client.invoke(new Api.messages.ImportChatInvite({ hash: cleanHash }));
-
-      let title = 'مجموعة جديدة';
-      let isChannel = false;
-      let newChatId = `chat_${cleanHash.slice(0, 8)}`;
-
-      if (result && result.chats && result.chats[0]) {
-        const c = result.chats[0];
-        title = c.title || title;
-        isChannel = Boolean(c.broadcast);
-        newChatId = String(c.id);
-      }
-
-      return res.json({
-        ok: true,
-        chatId: newChatId,
-        title,
-        isChannel,
-        joinedDate: new Date().toISOString(),
-        message: 'تم الانضمام بنجاح عبر خوادم تيليجرام الرسمية (ImportChatInvite)',
-        result,
-      });
-    } catch (e: any) {
-      const errMsg = e?.errorMessage || e?.message || String(e);
-      console.warn('[MTProto] ImportChatInvite error:', errMsg);
-
-      if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
-        return res.json({
-          ok: true,
-          alreadyMember: true,
-          message: 'أنت عضو بالفعل في هذه المجموعة/القناة.',
-        });
-      }
-
-      const status = errMsg.includes('FLOOD_WAIT') ? 429 :
-                     errMsg.includes('INVITE_HASH_EXPIRED') ? 410 : 400;
-
-      return res.status(status).json({
-        ok: false,
-        error: errMsg,
-        message: `فشل الانضمام: ${errMsg}`,
-      });
-    }
+  app.post('/api/telegram/chat-invite/join', (req, res) => {
+    // إعادة التوجيه إلى النقطة الموحدة مع نفس الجسم
+    req.url = '/api/telegram/links/join';
+    app.handle(req, res);
   });
 
   // ==========================================

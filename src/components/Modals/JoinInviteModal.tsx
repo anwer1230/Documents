@@ -58,41 +58,74 @@ export const JoinInviteModal: React.FC = () => {
   const handleJoin = async () => {
     setIsJoining(true);
     try {
+      // استخراج الجلسة من السياق أو التخزين المحلي
+      const sessionString = localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '';
+      const phone = localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '';
+
       const res = await fetch('/api/telegram/links/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inviteInfo: inviteData }),
+        body: JSON.stringify({
+          inviteInfo: inviteData,
+          sessionString,
+          phone,
+          // يمكن إرسال hash بشكل منفصل إذا كان موجوداً
+          hash: (inviteData as any)?.hash || inviteData?.inviteHash,
+        }),
       });
+
+      if (!res.ok) {
+        // معالجة الخطأ
+        let errorMessage = isArabic ? 'فشل الانضمام' : 'Failed to join';
+        try {
+          const errorData = await res.json();
+          if (errorData.error === 'AUTH_KEY_UNREGISTERED') {
+            errorMessage = isArabic ? 'يرجى تسجيل الدخول أولاً' : 'Please log in first';
+          } else if (errorData.error === 'INVITE_HASH_EXPIRED') {
+            errorMessage = isArabic ? 'رابط الدعوة منتهي الصلاحية' : 'Invite link expired';
+          } else if (errorData.error === 'FLOOD_WAIT') {
+            errorMessage = isArabic
+              ? `الانتظار ${errorData.seconds || 60} ثانية قبل المحاولة مرة أخرى`
+              : `Wait ${errorData.seconds || 60}s before retrying`;
+          } else {
+            errorMessage = errorData.message || errorData.error || (isArabic ? 'حدث خطأ أثناء الانضمام' : 'Failed to join');
+          }
+        } catch {
+          errorMessage = isArabic ? 'حدث خطأ في الاتصال بالخادم' : 'Server connection error';
+        }
+        showToast(errorMessage, '❌');
+        return; // لا نستمر في تنفيذ الكود
+      }
+
       const data = await res.json();
 
-      // Broadcast new chat creation
-      const customEvent = new CustomEvent('tg-joined-chat', { detail: data.joinedChat || inviteData });
-      window.dispatchEvent(customEvent);
+      // التأكد من أن الخادم أعاد نجاحاً فعلياً
+      if (data.success && data.joinedChat) {
+        // Broadcast new chat creation
+        const customEvent = new CustomEvent('tg-joined-chat', { detail: data.joinedChat });
+        window.dispatchEvent(customEvent);
 
-      notificationsController.postNotification({
-        category: 'channel_post',
-        title: isArabic ? 'تم الانضمام بنجاح 🎉' : 'Joined Successfully 🎉',
-        body: inviteData.title,
-        avatar: inviteData.avatar,
-        chatId: inviteData.id,
-      });
+        notificationsController.postNotification({
+          category: 'channel_post',
+          title: isArabic ? 'تم الانضمام بنجاح 🎉' : 'Joined Successfully 🎉',
+          body: data.joinedChat.title || inviteData.title,
+          avatar: data.joinedChat.avatar || inviteData.avatar,
+          chatId: data.joinedChat.id || inviteData.id,
+        });
 
-      showToast(
-        isArabic
-          ? `تم الانضمام بنجاح إلى "${inviteData.title}"`
-          : `Joined "${inviteData.title}" successfully`,
-        '✨'
-      );
-      setInviteData(null);
+        showToast(
+          isArabic
+            ? `تم الانضمام إلى ${data.joinedChat.title} بنجاح!`
+            : `Joined "${data.joinedChat.title}" successfully!`,
+          '✅'
+        );
+        setInviteData(null);
+      } else {
+        // حالة غير متوقعة
+        showToast(data.message || data.error || (isArabic ? 'حدث خطأ غير معروف' : 'Unknown error occurred'), '❌');
+      }
     } catch {
-      // Fallback local join
-      const customEvent = new CustomEvent('tg-joined-chat', { detail: inviteData });
-      window.dispatchEvent(customEvent);
-      showToast(
-        isArabic ? `تم الانضمام إلى "${inviteData.title}"` : `Joined "${inviteData.title}"`,
-        '✨'
-      );
-      setInviteData(null);
+      showToast(isArabic ? 'حدث خطأ في الاتصال بالخادم' : 'Server connection error', '❌');
     } finally {
       setIsJoining(false);
     }

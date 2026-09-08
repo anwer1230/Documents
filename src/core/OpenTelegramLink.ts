@@ -174,32 +174,43 @@ export class OpenTelegramLink {
   /**
    * Replicates ChatInviteActivity.java: Executes importChatInvite RPC
    */
-  public static async importChatInvite(hash: string): Promise<{
-    ok: boolean;
-    chatId?: string;
-    title?: string;
-    error?: string;
-    requestNeeded?: boolean;
-  }> {
-    try {
-      const res = await fetch('/api/telegram/chat-invite/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hash }),
-      });
-      if (res.ok) {
-        return await res.json();
+  public static async importChatInvite(hash: string): Promise<any> {
+    const sessionString = localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '';
+    const phone = localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '';
+
+    const res = await fetch('/api/telegram/links/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hash,
+        sessionString,
+        phone,
+        type: 'private', // أو تحديد النوع بناءً على التحليل
+      }),
+    });
+
+    if (!res.ok) {
+      let errorMessage = 'فشل الانضمام';
+      try {
+        const errorData = await res.json();
+        if (errorData.error === 'AUTH_KEY_UNREGISTERED') {
+          errorMessage = 'يرجى تسجيل الدخول أولاً';
+        } else if (errorData.error === 'INVITE_HASH_EXPIRED') {
+          errorMessage = 'رابط الدعوة منتهي الصلاحية';
+        } else {
+          errorMessage = errorData.message || 'حدث خطأ';
+        }
+      } catch {
+        errorMessage = 'حدث خطأ في الاتصال بالخادم';
       }
-      const errData = await res.json().catch(() => ({}));
-      return {
-        ok: false,
-        error: errData.error || 'INVITE_HASH_EXPIRED',
-      };
-    } catch (e: any) {
-      return {
-        ok: false,
-        error: e.message || 'CONNECTION_ERROR',
-      };
+      throw new Error(errorMessage);
+    }
+
+    const data = await res.json();
+    if (data.success && data.joinedChat) {
+      return data.joinedChat;
+    } else {
+      throw new Error(data.message || 'فشل الانضمام');
     }
   }
 

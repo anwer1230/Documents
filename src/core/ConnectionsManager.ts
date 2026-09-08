@@ -29,6 +29,8 @@ export interface MtprotoSession {
   serverSalt: string;
   seqNo: number;
   lastMsgId: bigint;
+  sessionString?: string;
+  phone?: string;
 }
 
 export class ConnectionsManager {
@@ -452,21 +454,113 @@ export class ConnectionsManager {
 
         // 1. Process Channel Join Request
         if (reqType === 'TL_channels_joinChannel' || reqType === 'channels.joinChannel') {
-          if (request.channel === 'invalid_channel') {
-            const err: TLRPC.TL_error = { code: 400, text: 'CHANNEL_PRIVATE' };
+          // استخراج بيانات القناة من الطلب
+          const channelId = request.channel?.channel_id || request.channel || 0;
+          const accessHash = request.channel?.access_hash || '0';
+          
+          // إرسال طلب انضمام حقيقي إلى الخادم الخلفي
+          const sessionString = this.session.sessionString || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '') : '');
+          const phone = this.session.phone || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '') : '');
+          
+          if (!sessionString || !phone) {
+            const err: TLRPC.TL_error = { code: 401, text: 'AUTH_KEY_UNREGISTERED' };
             notifyError(err);
             reject(err);
             return;
           }
-          const success: any = {
-            _: 'TL_updates',
-            updates: [{ _: 'TL_updateChannel', channel_id: request.channel?.channel_id || request.channel || 0 }],
-            date: Math.floor(Date.now() / 1000),
-            seq: this.session.seqNo,
-          };
-          notifySuccess(success);
-          this.updateListeners.forEach((l) => l(success));
-          resolve(success as T);
+          
+          // استدعاء نقطة النهاية الموحدة للانضمام
+          fetch('/api/telegram/links/join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channelId,
+              accessHash,
+              sessionString,
+              phone,
+              type: 'public' // سيتم تحديده لاحقاً بناءً على نوع القناة
+            })
+          })
+          .then(async (res) => {
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(errorData.error || errorData.message || 'JOIN_FAILED');
+            }
+            return res.json();
+          })
+          .then((data) => {
+            if (data.success) {
+              // معالجة الاستجابة الناجحة من الخادم
+              const success: any = {
+                _: 'TL_updates',
+                updates: [{ _: 'TL_updateChannel', channel_id: data.joinedChat?.id || channelId }],
+                date: Math.floor(Date.now() / 1000),
+                seq: this.session.seqNo,
+              };
+              notifySuccess(success);
+              this.updateListeners.forEach((l) => l(success));
+              resolve(success as T);
+            } else {
+              throw new Error(data.error || data.message || 'JOIN_FAILED');
+            }
+          })
+          .catch((err) => {
+            const errorObj: TLRPC.TL_error = { code: 400, text: err.message || 'CHANNEL_PRIVATE' };
+            notifyError(errorObj);
+            reject(errorObj);
+          });
+          return;
+        }
+
+        if (reqType === 'TL_messages_importChatInvite' || reqType === 'messages.importChatInvite') {
+          const hash = request.hash;
+          const sessionString = this.session.sessionString || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '') : '');
+          const phone = this.session.phone || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '') : '');
+          
+          if (!sessionString || !phone) {
+            const err: TLRPC.TL_error = { code: 401, text: 'AUTH_KEY_UNREGISTERED' };
+            notifyError(err);
+            reject(err);
+            return;
+          }
+          
+          fetch('/api/telegram/links/join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              hash,
+              sessionString,
+              phone,
+              type: 'private'
+            })
+          })
+          .then(async (res) => {
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(errorData.error || errorData.message || 'INVITE_FAILED');
+            }
+            return res.json();
+          })
+          .then((data) => {
+            if (data.success) {
+              const success: any = {
+                _: 'TL_updates',
+                updates: [{ _: 'TL_updateChat', chat_id: data.joinedChat?.id || 0 }],
+                date: Math.floor(Date.now() / 1000),
+                seq: this.session.seqNo,
+              };
+              notifySuccess(success);
+              this.updateListeners.forEach((l) => l(success));
+              resolve(success as T);
+            } else {
+              throw new Error(data.error || data.message || 'INVITE_FAILED');
+            }
+          })
+          .catch((err) => {
+            const errorObj: TLRPC.TL_error = { code: 400, text: err.message || 'INVITE_HASH_EXPIRED' };
+            notifyError(errorObj);
+            reject(errorObj);
+          });
           return;
         }
 

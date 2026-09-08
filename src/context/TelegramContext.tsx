@@ -5369,7 +5369,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Handle dynamic invite join event
   useEffect(() => {
-    const handleJoined = (e: any) => {
+    const handleJoined = async (e: any) => {
       const detail = e.detail;
       if (!detail) return;
 
@@ -5393,6 +5393,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         },
       };
 
+      // تحديث الحالة المحلية أولاً (لتحسين الاستجابة)
       setChats((prev) => {
         const filtered = prev.filter((c) => c.id !== newJoinedChat.id && c.username !== newJoinedChat.username);
         return [newJoinedChat, ...filtered];
@@ -5415,7 +5416,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ],
       }));
 
+      // تعيين المحادثة النشطة فوراً
       setActiveChatId(newJoinedChat.id);
+
+      // عرض إشعار نجاح
+      showToast(`تم الانضمام إلى ${newJoinedChat.title}`, '✅');
+
+      // **المزامنة السحابية**: إعادة جلب المحادثات من الخادم للتأكد من التحديث الكامل
+      try {
+        await syncInitializationRoutine();
+      } catch (error) {
+        console.error('فشل المزامنة السحابية بعد الانضمام:', error);
+      }
     };
 
     window.addEventListener('tg-joined-chat' as any, handleJoined);
