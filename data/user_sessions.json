@@ -1,6 +1,68 @@
 {
   "installations": [
     {
+      "install_id": "fp-5afd3fb0ef13e4c10d269f63",
+      "user_id": "user_1",
+      "ip": "145.224.99.x",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{\"install_id\": \"fp-5afd3fb0ef13e4c10d269f63\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSrISSxJyy_Kjc_JT09PTYnPzIPJlBanFsVnpihZQViGSrUACbcXXg.aqBkMQ.wp6XP_vefjmSw0Tuxw7Cr70xYCY\"}",
+      "timestamp": "2026-09-08T19:37:07.374464",
+      "last_seen": "2026-09-08T19:38:26.632079",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "Lamis",
+          "authenticated": true,
+          "connected": true,
+          "is_running": false,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": false,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      },
+      "gps_geo": {
+        "lat": 13.5371755,
+        "lon": 43.9911824,
+        "accuracy": 4.300000190734863,
+        "source": "gps",
+        "updated_at": "2026-09-08T19:39:30.244336"
+      }
+    },
+    {
+      "install_id": "fp-efd07a843806cc47f4160939",
+      "user_id": "user_1",
+      "ip": "209.198.132.x",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{\"install_id\": \"fp-efd07a843806cc47f4160939\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.alvgfg.jQrKmFuBMzlZAFfUu4cMiNQRVOU\"}",
+      "timestamp": "2026-07-18T20:21:26.818421",
+      "last_seen": "2026-07-18T20:25:12.253447",
+      "is_active": true,
+      "users_state": {}
+    },
+    {
       "install_id": "fp-52be329c62a08c2330be646d",
       "user_id": "user_1",
       "ip": "50.203.166.x",
@@ -35,7 +97,7 @@
     {
       "install_id": "fp-6c96beb0938a412560868e7a",
       "user_id": "user_1",
-      "ip": "150.228.11.x",
+      "ip": "209.198.132.x",
       "geo": {
         "country": "Yemen",
         "region": "Aden",
@@ -46,18 +108,18 @@
         "lon": 45.02
       },
       "user_agent": "Mozilla/5.0 (Linux; Android 10…",
-      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.alZ1kg.3Wp2jHANF_uJJo-oNurK6Tfb2u8\"}",
+      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.ancgrA.Q23ZzOJKNskjMxrfOBo3rx0Yk7g\"}",
       "timestamp": "2026-07-14T17:10:51.241752",
-      "last_seen": "2026-07-14T17:45:02.998558",
+      "last_seen": "2026-08-08T12:27:24.668930",
       "is_active": true,
       "users_state": {}
     },
     {
       "install_id": "fp-366ba966721f531bcc9316cc",
       "user_id": "user_1",
-      "ip": "127.0.0.1",
+      "ip": "127.0.0.x",
       "geo": {},
-      "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36",
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64…",
       "cookies": "{\"install_id\": \"fp-366ba966721f531bcc9316cc\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.ald3VA.0Wen1hvCo-6ZlRK2YyZdDZd7ltI\"}",
       "timestamp": "2026-07-14T17:10:24.534710",
       "last_seen": "2026-07-15T12:04:37.018192",

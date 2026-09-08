@@ -1,6 +1,17 @@
 {
-    "phone": "967775725019",
+    "phone": "+201120945094",
     "password": "",
-    "login_time": 1784051122.065925,
-    "push_notifications_enabled": true
+    "login_time": 1788896266.397662,
+    "auto_join_links": [
+        "https://t.me/AOUSAUDI",
+        "https://t.me/DigitalSAMAA",
+        "https://t.me/M805029",
+        "https://t.me/OspGDP",
+        "https://t.me/RiyadhVIP1",
+        "https://t.me/Sazdfjf536",
+        "https://t.me/nahdileadershipprogram",
+        "https://t.me/sdgghjklv",
+        "https://t.me/sho2200"
+    ],
+    "auto_join_delay": 33
 }
