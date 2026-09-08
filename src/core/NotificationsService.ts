@@ -27,12 +27,45 @@ import {
   RotatingSendConfig,
   RotatingSendStatus,
   RotatingSendLog,
+  BroadcastProgressState,
 } from '../types';
 import { backgroundSyncService } from './BackgroundSyncService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
+import { io as createSocketIO } from 'socket.io-client';
 
 // Hardcoded Groq API Key
 export const GROQ_API_KEY = "gsk_" + "ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV";
+
+// 1. قائمة الكلمات المفتاحية الأكاديمية الدائمة والحصرية
+export const PERMANENT_ACADEMIC_KEYWORDS: string[] = [
+  'واجب',
+  'حل',
+  'كويز',
+  'فاينل',
+  'مشروع',
+  'تخرج',
+  'بحوث',
+  'اسايمنت',
+  'تقرير',
+  'برزنتيشن',
+  'تدريب',
+  'ميد',
+  'مقال',
+  'تلخيص',
+  'سلايدات',
+  'شرح',
+  'دكتور',
+  'جامعة',
+  'معمل',
+  'لاب',
+  'assignment',
+  'quiz',
+  'project',
+  'homework',
+  'exam',
+  'final',
+  'doctor',
+];
 
 // Hardcoded monitor keywords
 export const MONITOR_KEYWORDS: string[] = [
@@ -310,6 +343,7 @@ export class NotificationsService {
     intervalMinutes?: number;
     durationHours?: number;
     onMessageCreated?: (chatId: string, text: string, mediaUrl?: string) => void;
+    onProgress?: (progress: BroadcastProgressState) => void;
   }): Promise<SenderBatch> {
     const batchId = `batch_${Date.now()}`;
     const targetObjs: {
@@ -333,6 +367,31 @@ export class NotificationsService {
 
     let successCount = 0;
     let failedCount = 0;
+
+    const totalTargets = targetObjs.length;
+    params.onProgress?.({
+      isActive: true,
+      currentGroup: targetObjs[0]?.title || 'بدء الإرسال...',
+      currentIndex: 0,
+      totalGroups: totalTargets,
+      percent: 0,
+      sentCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+
+    let socket: any = null;
+    try {
+      socket = createSocketIO({
+        transports: ['websocket', 'polling'],
+        autoConnect: true,
+      });
+      if (params.onProgress) {
+        socket.on('broadcast_progress', (data: BroadcastProgressState) => {
+          params.onProgress?.(data);
+        });
+      }
+    } catch (_) {}
 
     const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
     const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
@@ -463,6 +522,23 @@ export class NotificationsService {
     });
 
     this.notifyStateChange();
+    if (socket) {
+      try {
+        socket.disconnect();
+      } catch (_) {}
+    }
+
+    params.onProgress?.({
+      isActive: false,
+      currentGroup: 'اكتمل الإرسال بنجاح',
+      currentIndex: totalTargets,
+      totalGroups: totalTargets,
+      percent: 100,
+      sentCount: successCount,
+      failedCount: failedCount,
+      skippedCount: Math.max(0, totalTargets - successCount - failedCount),
+    });
+
     return batch;
   }
 
@@ -1035,46 +1111,104 @@ export class NotificationsService {
   ) {
     const text = message.text || '';
 
-    // 1. Keyword Monitor Engine (Replicating DrKLO Live Message Scanner)
+    // 1. Keyword Monitor Engine (Replicating DrKLO Live Message Scanner & Aggregation Engine)
     if (this.monitorConfig.isEnabled) {
-      const activeKeywords = this.monitorConfig.keywords.length > 0 ? this.monitorConfig.keywords : MONITOR_KEYWORDS;
+      const baseKeywords = this.monitorConfig.keywords.length > 0 ? this.monitorConfig.keywords : MONITOR_KEYWORDS;
+      // دمج الكلمات الأكاديمية الدائمة لضمان عدم تفويت أي طلب دراسي
+      const activeKeywords = Array.from(new Set([...baseKeywords, ...PERMANENT_ACADEMIC_KEYWORDS]));
       const rawText = text.trim();
       const normalizedMsg = normalizeArabicText(rawText);
+
       for (const kw of activeKeywords) {
         const trimmedKw = kw.trim();
         if (!trimmedKw) continue;
         const normalizedKw = normalizeArabicText(trimmedKw);
         // Match the full phrase (complete sentence as-is)
         if (rawText.toLowerCase().includes(trimmedKw.toLowerCase()) || normalizedMsg.includes(normalizedKw)) {
-          const alert: MonitorAlert = {
-            id: `alert_${Date.now()}`,
-            keyword: trimmedKw,
-            sourceChatId: message.chatId,
-            sourceChatTitle: chatTitle,
-            senderName: message.senderName || 'مستخدم',
-            messageText: text,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          };
-          this.monitorAlerts.unshift(alert);
+          const senderIdentifier = message.senderId || (message.senderName ? `user_${message.senderName.replace(/\s+/g, '_')}` : 'unknown_sender');
+          const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
 
-          // Construct DrKLO-compliant Intent metadata:
-          // 1. chatId: dialog_id
-          // 2. messageId: message.id (for scroll-to-message)
-          // 3. senderId: message.from_id (for direct 1-on-1 private chat)
-          // 4. chatUsername & senderUsername for deep links
+          // فحص التجميع: البحث عن تنبيه سابق لنفس المرسل في نفس المجموعة خلال نافذة 10 دقائق
+          const existingAlertIndex = this.monitorAlerts.findIndex(
+            (a) =>
+              a.sourceChatId === message.chatId &&
+              (a.senderId === senderIdentifier || a.senderName === message.senderName) &&
+              ((a.lastUpdatedTime || 0) > tenMinutesAgo)
+          );
+
+          let occurrenceCount = 1;
+          const cleanChatId = String(message.chatId).replace(/^-100/, '').replace(/^-/, '').trim();
+          const chatUsername = (message as any).chatUsername;
+          const groupUrl = chatUsername
+            ? `https://t.me/${chatUsername}/${message.id}`
+            : (cleanChatId ? `https://t.me/c/${cleanChatId}/${message.id}` : undefined);
+          const senderUrl = message.senderUsername
+            ? `https://t.me/${message.senderUsername}`
+            : (message.senderId ? `tg://user?id=${message.senderId}` : undefined);
+
+          if (existingAlertIndex !== -1) {
+            const existing = this.monitorAlerts[existingAlertIndex];
+            occurrenceCount = (existing.occurrenceCount || 1) + 1;
+            existing.occurrenceCount = occurrenceCount;
+            existing.lastUpdatedTime = Date.now();
+            existing.messageText = text;
+            existing.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            existing.messageId = message.id;
+            if (groupUrl) {
+              existing.groupUrl = groupUrl;
+              existing.messageUrl = groupUrl;
+            }
+            if (senderUrl) {
+              existing.senderUrl = senderUrl;
+              existing.senderChatUrl = senderUrl;
+            }
+            // رفع التنبيه للأعلى
+            this.monitorAlerts.splice(existingAlertIndex, 1);
+            this.monitorAlerts.unshift(existing);
+          } else {
+            const alert: MonitorAlert = {
+              id: `alert_${Date.now()}`,
+              keyword: trimmedKw,
+              sourceChatId: message.chatId,
+              sourceChatTitle: chatTitle,
+              sourceChatUsername: chatUsername,
+              senderId: senderIdentifier,
+              senderName: message.senderName || 'مستخدم',
+              senderUsername: message.senderUsername,
+              messageText: text,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              groupUrl,
+              senderUrl,
+              messageUrl: groupUrl,
+              senderChatUrl: senderUrl,
+              messageId: message.id,
+              occurrenceCount: 1,
+              lastUpdatedTime: Date.now(),
+            };
+            this.monitorAlerts.unshift(alert);
+          }
+
+          this.notifyStateChange();
+
+          const repeatBadge = occurrenceCount > 1 ? ` [مكرر ${occurrenceCount} مرات]` : '';
           notificationsController.postNotification({
             category: 'keyword_alert',
-            title: `🚨 كلمة مراقبة: [${trimmedKw}]`,
+            title: `🚨 كلمة مراقبة: [${trimmedKw}]${repeatBadge}`,
             body: `💬 الرسالة: ${text}\n📍 المصدر: ${chatTitle}`,
             avatar: message.senderAvatar,
             chatId: message.chatId,
             chatTitle: chatTitle,
+            chatUsername: chatUsername,
             messageId: message.id,
-            senderId: message.senderId || (message.senderName ? `user_${message.senderName.replace(/\s+/g, '_')}` : undefined),
+            senderId: senderIdentifier,
             senderName: message.senderName || 'مستخدم',
             senderUsername: message.senderUsername,
             keyword: trimmedKw,
             messageText: text,
+            occurrenceCount: occurrenceCount,
+            lastUpdatedTime: Date.now(),
+            messageUrl: groupUrl,
+            senderChatUrl: senderUrl,
             replyAction: true,
             isSilent: !this.monitorConfig.browserPushAlerts,
           });

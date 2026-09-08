@@ -26,7 +26,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
 import { notificationsController } from '../../core/NotificationsController';
-import { MonitorAlert, ProtectionMode } from '../../types';
+import {
+  MonitorAlert,
+  ProtectionMode,
+  GroupAuditResult,
+  DialogAuditStats,
+  BroadcastDiagnosticEntry,
+  BroadcastProgressState,
+} from '../../types';
 import { SalamActivityLog } from '../SalamActivityLog';
 
 export interface MessageDraftItem {
@@ -256,6 +263,7 @@ export const SenderModal: React.FC = () => {
     messages,
     showToast,
     jumpToMessage,
+    openPrivateChat,
     currentUser,
     accounts,
     activeAccountId,
@@ -277,6 +285,17 @@ export const SenderModal: React.FC = () => {
   const [isSending, setIsSending] = useState<boolean>(false);
   const [sendStatusMsg, setSendStatusMsg] = useState<{ text: string; success: boolean } | null>(null);
   const [senderActiveTab, setSenderActiveTab] = useState<'sender' | 'salam_log'>('sender');
+
+  // 1. Group Audit State
+  const [auditStats, setAuditStats] = useState<DialogAuditStats | null>(null);
+  const [auditGroups, setAuditGroups] = useState<GroupAuditResult[]>([]);
+
+  // 2. Broadcast Progress State
+  const [broadcastProgress, setBroadcastProgress] = useState<BroadcastProgressState | null>(null);
+
+  // 3. Diagnostic & Retry State
+  const [diagnosticEntries, setDiagnosticEntries] = useState<BroadcastDiagnosticEntry[]>([]);
+  const [showDiagnosticTable, setShowDiagnosticTable] = useState<boolean>(false);
 
   // Monitoring State
   const [watchWords, setWatchWords] = useState<string>('واجب\nبحث\nسعر\nوظيفة\nتصميم\nبرمجة');
@@ -313,11 +332,11 @@ export const SenderModal: React.FC = () => {
     }
   };
 
-  // استدعاء فعلي وحقيقي 100% لجلب جميع المجموعات والقنوات عبر خادم GramJS
+  // استدعاء فحص وتدقيق المجموعات وبوتات الحماية عبر خادم GramJS
   const handleFetchDialogs = async () => {
     try {
       setIsFetchingGroups(true);
-      showToast('⏳ جاري جلب جميع المجموعات والقنوات من حسابك الفعلي...', '🔄');
+      showToast('⏳ جاري جلب وفحص مجموعات وقنوات الحساب وبوتات الحماية...', '🔄');
 
       const activeAcc = accounts?.find((a) => a.id === activeAccountId) || accounts?.[0];
       const sessionString =
@@ -328,7 +347,8 @@ export const SenderModal: React.FC = () => {
         '';
       const phone = currentUser?.phone || activeAcc?.user?.phone || '';
 
-      const res = await fetch('/api/get_all_groups', {
+      // المحاولة الأولى: استدعاء التدقيق الشامل للمجموعات وبوتات الحماية
+      let res = await fetch('/api/sender/audit_groups', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -341,17 +361,50 @@ export const SenderModal: React.FC = () => {
         }),
       });
 
-      const data = await res.json();
-      if (data.success && Array.isArray(data.groups) && data.groups.length > 0) {
-        // وضع الروابط الحقيقية مباشرة في خانة الروابط دون تعديل
-        const directLinks = data.groups.join('\n');
-        setGroupsText(directLinks);
-        localStorage.setItem('draft_groups', directLinks);
-        showToast(`✅ تم جلب ${data.groups.length} رابط حقيقي للمجموعات والقنوات بنجاح`, '🎯');
-      } else if (data.groups && data.groups.length === 0) {
+      let data = await res.json().catch(() => null);
+
+      // إذا لم يكن متوفراً، استدعاء المجموعات القياسي كبديل
+      if (!data || !data.success) {
+        res = await fetch('/api/get_all_groups', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-telegram-session': sessionString,
+            'x-telegram-phone': phone,
+          },
+          body: JSON.stringify({
+            sessionString,
+            phone,
+          }),
+        });
+        data = await res.json().catch(() => null);
+      }
+
+      if (data && data.success && Array.isArray(data.groups) && data.groups.length > 0) {
+        if (data.stats) {
+          setAuditStats(data.stats);
+        }
+        if (typeof data.groups[0] === 'object') {
+          setAuditGroups(data.groups);
+          const links = data.groups
+            .map((g: GroupAuditResult) =>
+              g.link || (g.username ? `https://t.me/${g.username}` : (g.id ? `https://t.me/c/${g.id}` : ''))
+            )
+            .filter(Boolean);
+          const directLinks = links.join('\n');
+          setGroupsText(directLinks);
+          localStorage.setItem('draft_groups', directLinks);
+          showToast(`✅ تم جلب وفحص ${data.groups.length} مجموعة وبوتات الحماية بنجاح!`, '🎯');
+        } else {
+          const directLinks = data.groups.join('\n');
+          setGroupsText(directLinks);
+          localStorage.setItem('draft_groups', directLinks);
+          showToast(`✅ تم جلب ${data.groups.length} رابط حقيقي للمجموعات والقنوات بنجاح`, '🎯');
+        }
+      } else if (data && data.groups && data.groups.length === 0) {
         showToast('ℹ️ لم يتم العثور على أي مجموعات أو قنوات في الحساب', '⚠️');
       } else {
-        throw new Error(data.message || 'تعذر جلب المجموعات من تيليجرام');
+        throw new Error(data?.message || 'تعذر جلب المجموعات من تيليجرام');
       }
     } catch (err: any) {
       console.error('[SenderModal] Error fetching all groups:', err);
@@ -474,6 +527,17 @@ export const SenderModal: React.FC = () => {
       return cleaned;
     });
 
+    setBroadcastProgress({
+      isActive: true,
+      currentGroup: 'تجهيز بدء الإرسال...',
+      currentIndex: 0,
+      totalGroups: targetChatIds.length,
+      percent: 5,
+      sentCount: 0,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+
     const batch = await notificationsService.executeSendBatch({
       text: messageText,
       images: uploadedImages,
@@ -487,9 +551,45 @@ export const SenderModal: React.FC = () => {
       isScheduled: sendType === 'scheduled',
       intervalMinutes: intervalMinutes,
       durationHours: scheduleDuration,
+      onProgress: (prog) => {
+        setBroadcastProgress(prog);
+      },
     });
 
     setIsSending(false);
+
+    // بناء سجل تشخيص أسباب الإرسال للوجهات
+    const diags: BroadcastDiagnosticEntry[] = batch.targetChats.map((t) => {
+      let friendlyReason = t.error || '';
+      if (t.status === 'sent') {
+        friendlyReason = 'تم الإرسال بنجاح 🚀';
+      } else if (friendlyReason.includes('CHAT_WRITE_FORBIDDEN')) {
+        friendlyReason = 'مقفل للمشرفين فقط (CHAT_WRITE_FORBIDDEN)';
+      } else if (friendlyReason.includes('USER_BANNED_IN_CHANNEL')) {
+        friendlyReason = 'أنت محظور من النشر في المجموعة (USER_BANNED)';
+      } else if (friendlyReason.includes('CHANNEL_PRIVATE')) {
+        friendlyReason = 'القناة خاصة وتتطلب انضماماً أولاً';
+      } else if (friendlyReason.includes('FLOOD_WAIT')) {
+        friendlyReason = 'تم إيقاف الإرسال مؤقتاً لتجنب قيود تيليجرام';
+      } else if (t.status === 'protected' || t.status === 'skipped') {
+        friendlyReason = 'تم التخطي لحماية الحساب من قيود المجموعة';
+      } else {
+        friendlyReason = friendlyReason || 'فشل الإرسال أو قيود صلاحيات';
+      }
+
+      return {
+        chatId: t.id,
+        title: t.title,
+        status: t.status === 'sent' ? 'sent' : (t.status === 'protected' ? 'protected' : (t.status === 'skipped' ? 'skipped' : 'failed')),
+        reason: friendlyReason,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+    });
+
+    setDiagnosticEntries(diags);
+    if (diags.length > 0) {
+      setShowDiagnosticTable(true);
+    }
 
     if (sendType === 'scheduled') {
       setSendStatusMsg({
@@ -533,6 +633,25 @@ export const SenderModal: React.FC = () => {
         showToast(`⚠️ تعذر الإرسال: ${friendlyErr}`, '⚠️');
       }
     }
+  };
+
+  // إعادة إرسال الفاشلة فقط
+  const handleRetryFailedTargets = () => {
+    const failedList = diagnosticEntries.filter(
+      (d) => d.status === 'failed' || d.status === 'protected'
+    );
+    if (failedList.length === 0) {
+      showToast('لا توجد وجهات فاشلة لإعادة المحاولة 🎉', '✨');
+      return;
+    }
+    const failedChatIdsOrLinks = failedList.map((d) => {
+      const matchedGroup = auditGroups.find((g) => g.id === d.chatId || g.title === d.title);
+      return matchedGroup?.link || (matchedGroup?.username ? `https://t.me/${matchedGroup.username}` : d.chatId);
+    });
+    const newText = failedChatIdsOrLinks.join('\n');
+    setGroupsText(newText);
+    localStorage.setItem('draft_groups', newText);
+    showToast(`🔄 تم حصر ${failedList.length} وجهة فاشلة ووضعها في خانة الإرسال`, '🎯');
   };
 
   // Monitoring controls
@@ -833,6 +952,37 @@ export const SenderModal: React.FC = () => {
                     <div className="text-[0.68rem] text-gray-400 mt-0.5">
                       📤 يدعم: المعرفات (@group)، الروابط (t.me/group أو t.me/+hash)، أو أسماء المجموعات المشترك بها
                     </div>
+
+                    {/* لوحة فحص المجموعات وبوتات الحماية */}
+                    {auditStats && (
+                      <div className="mt-2 p-2 bg-black/40 border border-white/10 rounded-lg space-y-1.5">
+                        <div className="flex items-center justify-between text-[0.68rem] text-gray-300">
+                          <span className="font-semibold flex items-center gap-1">
+                            <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                            <span>تقرير فحص المجموعات وبوتات الحماية ({auditStats.total})</span>
+                          </span>
+                          <span className="text-gray-400 text-[0.62rem]">جاهز للتحليل</span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                          <div className="p-1.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-center">
+                            <div className="text-[0.62rem] text-emerald-400">🟢 مجموعات مفتوحة</div>
+                            <div className="text-[0.82rem] font-bold text-emerald-300">{auditStats.open_count}</div>
+                          </div>
+                          <div className="p-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-center">
+                            <div className="text-[0.62rem] text-amber-400">🤖 بوتات حماية</div>
+                            <div className="text-[0.82rem] font-bold text-amber-300">{auditStats.bot_protected_count}</div>
+                          </div>
+                          <div className="p-1.5 rounded bg-rose-500/10 border border-rose-500/20 text-center">
+                            <div className="text-[0.62rem] text-rose-400">🚫 تمنع الروابط</div>
+                            <div className="text-[0.82rem] font-bold text-rose-300">{auditStats.no_links_count}</div>
+                          </div>
+                          <div className="p-1.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-center">
+                            <div className="text-[0.62rem] text-indigo-400">⏳ وضع التهدئة</div>
+                            <div className="text-[0.82rem] font-bold text-indigo-300">{auditStats.slowmode_count}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* نوع الإرسال */}
@@ -939,6 +1089,40 @@ export const SenderModal: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* شريط التقدم اللحظي المئوي (Broadcast ProgressBar) */}
+                  {(isSending || (broadcastProgress && broadcastProgress.isActive)) && (
+                    <div className="p-2.5 bg-black/50 border border-cyan-500/30 rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between text-[0.72rem]">
+                        <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                          <RotateCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                          <span>المجموعة الحالية: {broadcastProgress?.currentGroup || 'جاري التجهيز...'}</span>
+                        </span>
+                        <span className="font-mono font-bold text-emerald-400">
+                          {broadcastProgress?.percent || 0}%
+                        </span>
+                      </div>
+
+                      {/* شريط رسومي متدرج */}
+                      <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden p-0.5">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-500 transition-all duration-300 shadow-sm"
+                          style={{ width: `${Math.min(100, Math.max(5, broadcastProgress?.percent || 0))}%` }}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between text-[0.65rem] text-gray-400 pt-0.5">
+                        <span>الهدف: {broadcastProgress?.currentIndex || 0} / {broadcastProgress?.totalGroups || 0}</span>
+                        <div className="flex gap-2">
+                          <span className="text-emerald-400 font-medium">✅ ناجح: {broadcastProgress?.sentCount || 0}</span>
+                          <span className="text-rose-400 font-medium">❌ فاشل: {broadcastProgress?.failedCount || 0}</span>
+                          {(broadcastProgress?.skippedCount || 0) > 0 && (
+                            <span className="text-amber-400 font-medium">🛡️ تخطي: {broadcastProgress?.skippedCount}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* أزرار الإجراءات */}
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <button
@@ -969,6 +1153,70 @@ export const SenderModal: React.FC = () => {
                   {sendStatusMsg && (
                     <div id="sendStatus" className={`mt-2 p-2 rounded text-[0.75rem] ${sendStatusMsg.success ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'}`}>
                       {sendStatusMsg.text}
+                    </div>
+                  )}
+
+                  {/* جدول تشخيص أسباب الإرسال وزر إعادة إرسال الفاشلة فقط */}
+                  {diagnosticEntries.length > 0 && (
+                    <div className="mt-2 p-2.5 bg-black/40 border border-white/10 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setShowDiagnosticTable(!showDiagnosticTable)}
+                          className="text-[0.72rem] font-bold text-gray-200 hover:text-white flex items-center gap-1.5"
+                        >
+                          <span>📋 تفاصيل وجهات الإرسال والتشخيص ({diagnosticEntries.length})</span>
+                          <ChevronDown className={`w-3 h-3 transition-transform ${showDiagnosticTable ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {diagnosticEntries.some((d) => d.status === 'failed' || d.status === 'protected') && (
+                          <button
+                            type="button"
+                            onClick={handleRetryFailedTargets}
+                            className="py-1 px-2.5 rounded-lg text-[0.68rem] font-bold text-amber-200 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 flex items-center gap-1 transition-all"
+                            title="إعادة إرسال الفاشلة فقط"
+                          >
+                            <RotateCw className="w-3 h-3" />
+                            <span>إعادة إرسال الفاشلة فقط</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {showDiagnosticTable && (
+                        <div className="max-h-48 overflow-y-auto space-y-1 pr-1 font-sans">
+                          {diagnosticEntries.map((diag, idx) => (
+                            <div
+                              key={idx}
+                              className="p-1.5 rounded bg-white/[0.03] border border-white/5 flex items-center justify-between text-[0.68rem] gap-2"
+                            >
+                              <div className="flex items-center gap-1.5 truncate">
+                                {diag.status === 'sent' ? (
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                                ) : diag.status === 'protected' || diag.status === 'skipped' ? (
+                                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                                ) : (
+                                  <span className="w-2 h-2 rounded-full bg-rose-400 shrink-0" />
+                                )}
+                                <span className="text-gray-200 truncate">{diag.title}</span>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                <span className="text-[0.62rem] text-gray-400">{diag.reason}</span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[0.6rem] font-bold ${
+                                    diag.status === 'sent'
+                                      ? 'bg-emerald-500/20 text-emerald-300'
+                                      : diag.status === 'protected' || diag.status === 'skipped'
+                                      ? 'bg-amber-500/20 text-amber-300'
+                                      : 'bg-rose-500/20 text-rose-300'
+                                  }`}
+                                >
+                                  {diag.status === 'sent' ? 'نجح' : diag.status === 'protected' || diag.status === 'skipped' ? 'تخطي' : 'فشل'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1096,22 +1344,53 @@ export const SenderModal: React.FC = () => {
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-amber-300 flex items-center gap-1">
                                 <span>🚨 {alert.keyword}</span>
+                                {Boolean(alert.occurrenceCount && alert.occurrenceCount > 1) && (
+                                  <span className="bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.2 rounded-full text-[0.62rem] font-bold">
+                                    [مكرر {alert.occurrenceCount} مرات]
+                                  </span>
+                                )}
                               </span>
                               <span className="text-[0.6rem] text-gray-400">{alert.timestamp}</span>
                             </div>
                             <p className="text-[0.7rem] text-gray-300 line-clamp-2 m-0">{alert.messageText}</p>
                             <div className="flex items-center justify-between text-[0.62rem] text-gray-400 pt-0.5">
-                              <span>{alert.sourceChatTitle}</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  jumpToMessage(alert.sourceChatId, alert.id);
-                                  setActiveModal('none');
-                                }}
-                                className="text-cyan-400 hover:underline"
-                              >
-                                انتقال للرسالة ↗
-                              </button>
+                              <span className="truncate max-w-[140px]">{alert.sourceChatTitle}</span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (alert.senderChatUrl) {
+                                      window.open(alert.senderChatUrl, '_blank');
+                                    } else if (openPrivateChat) {
+                                      openPrivateChat(
+                                        alert.senderId || 'user_' + alert.senderName,
+                                        alert.senderName,
+                                        undefined,
+                                        alert.senderUsername
+                                      );
+                                      setActiveModal('none');
+                                    }
+                                  }}
+                                  className="text-emerald-400 hover:underline flex items-center gap-0.5"
+                                  title="مراسلة خاصة مع صاحب الطلب"
+                                >
+                                  💬 مراسلة خاصة
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (alert.messageUrl) {
+                                      window.open(alert.messageUrl, '_blank');
+                                    } else {
+                                      jumpToMessage(alert.sourceChatId, alert.messageId || alert.id);
+                                      setActiveModal('none');
+                                    }
+                                  }}
+                                  className="text-cyan-400 hover:underline"
+                                >
+                                  انتقال للرسالة ↗
+                                </button>
+                              </div>
                             </div>
                           </div>
                         ))

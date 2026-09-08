@@ -207,6 +207,11 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
                       <span className="px-1.5 py-0.5 rounded-md bg-amber-400/20 text-amber-200 border border-amber-400/30 text-[11px] font-mono">
                         {current.keyword || current.title.replace(/.*\[(.*)\].*/, '$1')}
                       </span>
+                      {Boolean(current.occurrenceCount && current.occurrenceCount > 1) && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-rose-500/25 text-rose-300 border border-rose-500/40 text-[10px] font-bold">
+                          [+{current.occurrenceCount}]
+                        </span>
+                      )}
                     </>
                   ) : (
                     current.title

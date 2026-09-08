@@ -223,6 +223,10 @@ export class NotificationsController {
     messageText?: string;
     replyAction?: boolean;
     isSilent?: boolean;
+    occurrenceCount?: number;
+    lastUpdatedTime?: number;
+    messageUrl?: string;
+    senderChatUrl?: string;
   }) {
     const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const fullNotif: InAppNotification = {
@@ -243,6 +247,10 @@ export class NotificationsController {
       replyAction: notification.replyAction,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isSilent: notification.isSilent,
+      occurrenceCount: notification.occurrenceCount,
+      lastUpdatedTime: notification.lastUpdatedTime,
+      messageUrl: notification.messageUrl,
+      senderChatUrl: notification.senderChatUrl,
     };
 
     this.activeNotifications.set(notifId, fullNotif);

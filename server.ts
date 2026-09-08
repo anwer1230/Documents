@@ -110,6 +110,15 @@ export interface AlertLogItem {
   time: string;
   text: string;
   timestamp: number;
+  sourceChatId?: string;
+  sourceChatTitle?: string;
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  messageUrl?: string;
+  senderChatUrl?: string;
+  occurrenceCount?: number;
+  lastUpdatedTime?: number;
 }
 
 export const USER_LOGS: AlertLogItem[] = [];
@@ -1759,9 +1768,11 @@ async function startServer() {
                 let senderTitle = senderName || 'مستخدم';
                 let senderUsername = '';
                 let senderUrl = '';
+                let senderIdStr = '';
                 try {
                   const sender = await msg.getSender().catch(() => null);
                   if (sender) {
+                    senderIdStr = sender.id ? String(sender.id) : '';
                     senderTitle =
                       [sender.firstName || sender.first_name, sender.lastName || sender.last_name]
                         .filter(Boolean)
@@ -1771,9 +1782,18 @@ async function startServer() {
                     if (sender.username) {
                       senderUsername = sender.username;
                       senderUrl = `https://t.me/${sender.username}`;
+                    } else if (senderIdStr) {
+                      senderUrl = `tg://user?id=${senderIdStr}`;
                     }
                   }
                 } catch (_) {}
+
+                if (!senderUrl && msg.senderId) {
+                  senderIdStr = String(msg.senderId);
+                  senderUrl = `tg://user?id=${senderIdStr}`;
+                }
+                const senderChatUrl = senderUrl;
+                const messageUrl = groupUrl;
 
                 // استخدام وقت الرسالة الفعلي القادم من تيليجرام (event.message.date أو msg.date برقم الثواني)
                 const messageDate = new Date((event?.message?.date ?? msg?.date ?? event.message.date) * 1000);
@@ -1793,6 +1813,15 @@ async function startServer() {
                   time: formattedTime,
                   text: rawMsgText,
                   timestamp: messageDate.getTime(),
+                  sourceChatId: chatId,
+                  sourceChatTitle: groupTitle,
+                  senderId: senderIdStr || undefined,
+                  senderName: senderTitle,
+                  senderUsername: senderUsername || undefined,
+                  messageUrl: messageUrl || undefined,
+                  senderChatUrl: senderChatUrl || undefined,
+                  occurrenceCount: 1,
+                  lastUpdatedTime: messageDate.getTime(),
                 };
 
                 // Store in USER_LOGS (keep last 200)
@@ -1806,8 +1835,8 @@ async function startServer() {
                   const savedMsgContent =
                     `🚨 *تنبيه رصد كلمة مفتاحية* 🚨\n\n` +
                     `🔍 *العبارة المرصودة:* ${matchedKeyword}\n` +
-                    `👥 *المجموعة:* ${groupTitle}${groupUrl ? `\n🔗 رابط المجموعة: ${groupUrl}` : ''}\n` +
-                    `👤 *المرسل:* ${senderTitle}${senderUrl ? `\n🔗 حساب المرسل: ${senderUrl}` : (senderUsername ? ` (@${senderUsername})` : '')}\n` +
+                    `👥 *المجموعة:* ${groupTitle}${messageUrl ? `\n🔗 الانتقال للرسالة: ${messageUrl}` : ''}\n` +
+                    `👤 *المرسل:* ${senderTitle}${senderChatUrl ? `\n💬 مراسلة خاصة: ${senderChatUrl}` : (senderUsername ? ` (@${senderUsername})` : '')}\n` +
                     `🕒 *الوقت:* ${formattedTime}\n` +
                     `💬 *نص الرسالة:*\n${rawMsgText}\n`;
 
@@ -8257,6 +8286,236 @@ Please provide the concise summary.`;
   app.get('/api/get_all_groups', handleGetAllGroups);
   app.post('/api/get_all_groups', handleGetAllGroups);
 
+  // =========================================================================
+  // وظيفة فحص وتدقيق المجموعات وبوتات الحماية (auditTelegramDialog)
+  // =========================================================================
+  const PROTECTION_BOT_REGEX = /(shieldy|grouphelp|rose|missrose|safeguard|antispam|حماية|سكيورتي|combot|groupguard)/i;
+
+  async function auditTelegramDialog(client: any, dialog: any): Promise<any> {
+    const entity: any = dialog.entity || {};
+    const isChannel = Boolean(dialog.isChannel || (entity.className === 'Channel' && entity.broadcast));
+    const isGroup = Boolean(dialog.isGroup || (entity.className === 'Channel' && entity.megagroup) || entity.className === 'Chat');
+
+    const title = dialog.title || entity.title || (dialog as any).name || 'مجموعة';
+    const rawId = String(entity.id || dialog.id || '');
+    const cleanId = rawId.replace(/^-100/, '').replace(/^-/, '').trim();
+    const username = entity.username || (dialog as any).username;
+    const link = username ? `https://t.me/${String(username).replace(/^@/, '')}` : (cleanId ? `https://t.me/c/${cleanId}` : '');
+
+    const slowmode_seconds = Number(entity.slowmodeSeconds) || 0;
+    const defaultBanned = entity.defaultBannedRights || {};
+    const bannedRights = entity.bannedRights || {};
+    const isBroadcastChannel = Boolean(entity.broadcast);
+    const isAdminOrCreator = Boolean(entity.adminRights || entity.creator);
+
+    let can_send_text = true;
+    if (isBroadcastChannel && !isAdminOrCreator) {
+      can_send_text = false;
+    } else if (defaultBanned.sendMessages || bannedRights.sendMessages) {
+      can_send_text = false;
+    }
+
+    const can_send_links = can_send_text && !defaultBanned.embedLinks && !bannedRights.embedLinks;
+    const can_send_media = can_send_text && !defaultBanned.sendMedia && !bannedRights.sendMedia;
+
+    let has_bot_protection = false;
+    const protection_tags: string[] = [];
+    const protection_reasons: string[] = [];
+
+    // فحص البوتات في المشرفين والأعضاء
+    try {
+      const peer = entity || dialog.id;
+      let participants: any[] = [];
+      try {
+        participants = await client.getParticipants(peer, {
+          filter: new Api.ChannelParticipantsAdmins(),
+          limit: 50,
+        });
+      } catch {
+        try {
+          participants = await client.getParticipants(peer, { limit: 50 });
+        } catch {}
+      }
+
+      if (Array.isArray(participants)) {
+        for (const p of participants) {
+          const isBot = Boolean(p.bot || (p.className === 'User' && p.bot));
+          if (isBot) {
+            const uName = (p.username || '').toLowerCase();
+            const fName = (p.firstName || '').toLowerCase();
+            const lName = (p.lastName || '').toLowerCase();
+            const combined = `${uName} ${fName} ${lName}`;
+            if (PROTECTION_BOT_REGEX.test(combined)) {
+              has_bot_protection = true;
+              protection_tags.push(`بوت: @${p.username || p.firstName}`);
+              protection_reasons.push(`تم رصد بوت حماية نشط (@${p.username || p.firstName})`);
+              break;
+            }
+          }
+        }
+      }
+    } catch {}
+
+    if (!can_send_text) {
+      if (isBroadcastChannel) {
+        protection_tags.push('قناة للمشرفين');
+        protection_reasons.push('النشر مقتصر على المشرفين فقط');
+      } else {
+        protection_tags.push('ممنوع الكتابة');
+        protection_reasons.push('إرسال الرسائل مقفل في المجموعة');
+      }
+    }
+    if (can_send_text && !can_send_links) {
+      protection_tags.push('ممنوع الروابط');
+      protection_reasons.push('المجموعة تمنع نشر الروابط (embedLinks)');
+    }
+    if (can_send_text && !can_send_media) {
+      protection_tags.push('ممنوع الوسائط');
+      protection_reasons.push('المجموعة تمنع إرسال الصور والميديا');
+    }
+    if (slowmode_seconds > 0) {
+      protection_tags.push(`تهدئة ${slowmode_seconds}ث`);
+      protection_reasons.push(`وضع التهدئة مفعّل (${slowmode_seconds} ثانية)`);
+    }
+
+    let protection_type: 'open' | 'bot_protection' | 'no_links' | 'no_media' | 'slowmode' | 'admin_only' | 'all_forbidden' = 'open';
+    if (!can_send_text) {
+      protection_type = isBroadcastChannel ? 'admin_only' : 'all_forbidden';
+    } else if (has_bot_protection) {
+      protection_type = 'bot_protection';
+    } else if (!can_send_links) {
+      protection_type = 'no_links';
+    } else if (!can_send_media) {
+      protection_type = 'no_media';
+    } else if (slowmode_seconds > 0) {
+      protection_type = 'slowmode';
+    } else {
+      protection_type = 'open';
+    }
+
+    const is_protected = protection_type !== 'open';
+
+    return {
+      id: cleanId || rawId,
+      title,
+      username,
+      link,
+      isGroup,
+      isChannel,
+      is_protected,
+      protection_type,
+      protection_tags,
+      protection_reasons,
+      can_send_text,
+      can_send_links,
+      can_send_media,
+      slowmode_seconds,
+    };
+  }
+
+  // معالج تدقيق وفحص المجموعات /api/sender/audit_groups
+  const handleAuditGroups = async (req: express.Request, res: express.Response) => {
+    try {
+      const sessionString =
+        (req.headers['x-telegram-session'] as string) ||
+        req.body?.sessionString ||
+        (req.query?.sessionString as string) ||
+        '';
+      const phone =
+        (req.headers['x-telegram-phone'] as string) ||
+        req.body?.phone ||
+        (req.query?.phone as string) ||
+        '';
+
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client) {
+        return res.status(401).json({
+          success: false,
+          error: 'NO_ACTIVE_CLIENT',
+          message: 'لا يوجد جلسة تيليجرام نشطة',
+        });
+      }
+
+      console.log('[AuditGroups] Fetching dialogs for audit...');
+      const dialogs = await client.getDialogs({ limit: 150 });
+      const targetDialogs = dialogs.filter(
+        (d: any) =>
+          d.isGroup ||
+          d.isChannel ||
+          d.entity?.className === 'Channel' ||
+          d.entity?.className === 'Chat'
+      );
+
+      const auditList: any[] = [];
+      for (const d of targetDialogs) {
+        try {
+          const audit = await auditTelegramDialog(client, d);
+          auditList.push(audit);
+        } catch (e: any) {
+          console.warn('[AuditGroups] Error auditing dialog:', d.title, e?.message);
+        }
+      }
+
+      const stats = {
+        total: auditList.length,
+        open_count: auditList.filter((a) => a.protection_type === 'open').length,
+        protected_count: auditList.filter((a) => a.is_protected).length,
+        bot_protected_count: auditList.filter((a) => a.protection_type === 'bot_protection').length,
+        no_links_count: auditList.filter((a) => a.protection_type === 'no_links').length,
+        no_media_count: auditList.filter((a) => a.protection_type === 'no_media').length,
+        admin_only_count: auditList.filter((a) => a.protection_type === 'admin_only' || a.protection_type === 'all_forbidden').length,
+        slowmode_count: auditList.filter((a) => a.slowmode_seconds > 0 || a.protection_type === 'slowmode').length,
+      };
+
+      console.log(`[AuditGroups] Completed audit of ${auditList.length} groups.`);
+      return res.json({
+        success: true,
+        stats,
+        groups: auditList,
+        count: auditList.length,
+      });
+    } catch (err: any) {
+      console.error('[AuditGroups] Error:', err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'AUDIT_FAILED',
+        message: `تعذر فحص المجموعات: ${err?.message || 'خطأ غير معروف'}`,
+        groups: [],
+      });
+    }
+  };
+
+  app.get('/api/sender/audit_groups', handleAuditGroups);
+  app.post('/api/sender/audit_groups', handleAuditGroups);
+
+  // إرسال التقرير التوثيقي الرسمي إلى "الرسائل المحفوظة" (dispatchReportToSavedMessages)
+  async function dispatchReportToSavedMessages(params: {
+    client: any;
+    successCount: number;
+    failedCount: number;
+    skippedCount: number;
+    totalTargets: number;
+    failedList: string[];
+  }) {
+    const { client, successCount, failedCount, skippedCount, totalTargets, failedList } = params;
+    if (!client) return;
+    try {
+      await client.sendMessage("me", {
+        message:
+          `📊 *[تقرير حملة النشر التوثيقي]*\n` +
+          `━━━━━━━━━━━━━━━━━━\n` +
+          `✅ عدد المجموعات الناجحة: ${successCount}\n` +
+          `❌ عدد المجموعات الفاشلة: ${failedCount}\n` +
+          `🛡️ المجموعات المتخطاة/المحمية: ${skippedCount}\n` +
+          `📁 إجمالي الوجهات المستهدفة: ${totalTargets}\n` +
+          `⏰ وقت الإرسال: ${new Date().toLocaleTimeString('ar-EG')}\n` +
+          (failedList.length > 0 ? `\n⚠️ *أبرز القيود:* \n${failedList.slice(0, 5).join('\n')}` : '')
+      });
+    } catch (err) {
+      console.warn('[dispatchReportToSavedMessages] Error sending report to me:', err);
+    }
+  }
+
   // -------------------------------------------------------------
   // Salam Mode Activity Store & Real-time Broadcasting
   // -------------------------------------------------------------
@@ -10106,7 +10365,18 @@ Please provide the concise summary.`;
     const batchId = `batch_${Date.now()}`;
     const targetResults: Array<{ chatId: string; messageId: string; chatTitle: string; status: string }> = [];
 
-    for (const chatId of targetChatIds) {
+    for (let i = 0; i < targetChatIds.length; i++) {
+      const chatId = targetChatIds[i];
+      io.emit('broadcast_progress', {
+        isActive: true,
+        currentGroup: chatId,
+        currentIndex: i + 1,
+        totalGroups: targetChatIds.length,
+        percent: Math.round((i / targetChatIds.length) * 100),
+        sentCount: targetResults.filter((t) => t.status === 'success').length,
+        failedCount: targetResults.filter((t) => t.status === 'failed').length,
+        skippedCount: targetResults.filter((t) => t.status === 'skipped' || t.status === 'protected' || t.status === 'withdrawn_low_interaction').length,
+      });
       try {
         const peer = await resolvePeerTarget(client, chatId);
 
@@ -10311,26 +10581,35 @@ Please provide the concise summary.`;
       backupToDiskFiles();
     }
 
-    // Send final report to 'me' (الرسائل المحفوظة)
-    try {
-      const modeLabel =
-        protectionMode === 'salam'
-          ? 'الوضع الذكي (السلام عليكم + انتظار 30ث ورصد 3 رسائل)'
-          : 'إرسال مباشر';
+    // Send official documentation report to 'me' (الرسائل المحفوظة)
+    const successCount = successTargets.length;
+    const failedCount = targetResults.filter((t) => t.status === 'failed').length;
+    const skippedCount = targetResults.filter((t) => t.status === 'skipped' || t.status === 'protected' || t.status === 'withdrawn_low_interaction').length;
+    const totalTargets = targetChatIds.length;
+    const failedList = targetResults
+      .filter((t) => t.status !== 'success')
+      .map((t) => `• ${t.chatTitle || t.chatId}: ${t.status === 'withdrawn_low_interaction' ? 'تم الحذف لقلة التفاعل لتأمين الحساب' : (t.status === 'skipped' || t.status === 'protected' ? 'تم التخطي لحماية الحساب من قيود المجموعة' : 'فشل الإرسال أو قيود صلاحيات')}`);
 
-      const reportContent =
-        `📊 *تقرير إرسال الدفعة الحقيقي* 📊\n\n` +
-        `🆔 *معرف الدفعة:* \`${batchId}\`\n` +
-        `🛡️ *الوضع:* ${modeLabel}\n` +
-        `✅ *المجموعات الناجحة:* ${successTargets.length}\n` +
-        `❌ *المجموعات المخفقة/المسحوبة:* ${failTargets.length}\n` +
-        `🕒 *الوقت:* ${new Date().toLocaleTimeString('ar-EG')}\n\n` +
-        `💬 *نص الإعلان:*\n${text.substring(0, 180)}${text.length > 180 ? '...' : ''}`;
+    await dispatchReportToSavedMessages({
+      client,
+      successCount,
+      failedCount,
+      skippedCount,
+      totalTargets,
+      failedList,
+    });
 
-      await client.sendMessage('me', { message: reportContent, parseMode: 'md' });
-    } catch (repErr) {
-      console.warn('[SendBatch] Report to me error:', repErr);
-    }
+    // بث التقدم النهائي للمشتركين
+    io.emit('broadcast_progress', {
+      isActive: false,
+      currentGroup: 'اكتملت الحملة بنجاح',
+      currentIndex: targetChatIds.length,
+      totalGroups: targetChatIds.length,
+      percent: 100,
+      sentCount: successCount,
+      failedCount: failedCount,
+      skippedCount: skippedCount,
+    });
 
     io.emit('new_batch_sent', newBatch);
 
