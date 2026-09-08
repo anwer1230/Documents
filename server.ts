@@ -6058,6 +6058,9 @@ async function startServer() {
       const requestLimit = Math.min(Math.max(Number(limit) || 30, 5), 100);
       let raw: any[] = [];
 
+      let historyUsers: any[] = [];
+      let historyChats: any[] = [];
+
       // Primary MTProto RPC: client.invoke with GetHistory and getInputEntity
       try {
         if (inputPeer) {
@@ -6080,6 +6083,8 @@ async function startServer() {
 
           if (historyRes && Array.isArray(historyRes.messages)) {
             raw = historyRes.messages;
+            if (Array.isArray(historyRes.users)) historyUsers = historyRes.users;
+            if (Array.isArray(historyRes.chats)) historyChats = historyRes.chats;
           } else if (Array.isArray(historyRes)) {
             raw = historyRes;
           }
@@ -6103,6 +6108,17 @@ async function startServer() {
           7000,
           []
         );
+      }
+
+      const entityMap = new Map<string, any>();
+      for (const u of historyUsers) {
+        if (u && u.id) entityMap.set(String(u.id), u);
+      }
+      for (const c of historyChats) {
+        if (c && c.id) entityMap.set(String(c.id), c);
+      }
+      if (targetEntity && targetEntity.id) {
+        entityMap.set(String(targetEntity.id), targetEntity);
       }
 
       let myIdStr = 'user_me';
@@ -6152,16 +6168,47 @@ async function startServer() {
 
         const isOut = Boolean(m.out);
         const fromIdStr = m.fromId ? String(m.fromId.userId || m.fromId.channelId || m.fromId.chatId || '') : (m.senderId ? String(m.senderId) : '');
-        const senderEntity = (m as any).sender;
-        let senderName = isOut ? myName : 'طرف آخر';
+        const senderEntity = (m as any).sender || (fromIdStr ? entityMap.get(fromIdStr) : undefined) || entityMap.get(peerId);
+        let senderName = isOut ? myName : '';
         let senderUsername = isOut ? undefined : senderEntity?.username;
         let senderAvatar = '';
 
-        if (!isOut && senderEntity) {
-          const name = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
-          if (name) senderName = name;
+        if (!isOut) {
+          if (senderEntity) {
+            const name = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
+            if (name) senderName = name;
+          }
+          if (!senderName) {
+            if (targetEntity?.title && !fromIdStr) {
+              senderName = targetEntity.title;
+            } else {
+              senderName = 'عضو تيليجرام';
+            }
+          }
           if (fromIdStr && avatarCache.has(fromIdStr)) {
             senderAvatar = avatarCache.get(fromIdStr)!;
+          }
+        }
+
+        const replyMsgId = m.replyToMsgId || (m.replyTo?.replyToMsgId ? Number(m.replyTo.replyToMsgId) : undefined);
+        let replyObj: any = undefined;
+        if (replyMsgId) {
+          const repliedRaw = raw.find((rm: any) => Number(rm.id) === Number(replyMsgId));
+          if (repliedRaw) {
+            const rFromId = repliedRaw.fromId ? String(repliedRaw.fromId.userId || repliedRaw.fromId.channelId || '') : String(repliedRaw.senderId || '');
+            const rEntity = (repliedRaw as any).sender || (rFromId ? entityMap.get(rFromId) : undefined);
+            const rName = rEntity ? ([rEntity.firstName || rEntity.first_name, rEntity.lastName || rEntity.last_name].filter(Boolean).join(' ') || rEntity.title || rEntity.username) : undefined;
+            replyObj = {
+              messageId: String(replyMsgId),
+              senderName: rName || (Boolean(repliedRaw.out) ? myName : 'رسالة سابقة'),
+              textSnippet: repliedRaw.message ? (repliedRaw.message.length > 50 ? repliedRaw.message.slice(0, 47) + '...' : repliedRaw.message) : '...',
+            };
+          } else {
+            replyObj = {
+              messageId: String(replyMsgId),
+              senderName: 'رد',
+              textSnippet: '...',
+            };
           }
         }
 
@@ -6180,13 +6227,7 @@ async function startServer() {
           isOutgoing: isOut,
           status: 'read',
           media: mediaData,
-          replyTo: m.replyToMsgId
-            ? {
-                messageId: String(m.replyToMsgId),
-                senderName: 'Reply',
-                textSnippet: '...',
-              }
-            : undefined,
+          replyTo: replyObj,
         };
       });
 

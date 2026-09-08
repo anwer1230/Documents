@@ -190,19 +190,19 @@ export class ThemeController {
     const smR = '4px';
 
     if (group.isSingle) {
-      return `${r}`;
+      return isOutgoing ? `${r} ${r} ${smR} ${r}` : `${r} ${r} ${r} ${smR}`;
     }
 
     if (isOutgoing) {
-      // Outgoing message (right aligned)
+      // Outgoing message (right aligned, tail at bottom-right)
       if (group.isGroupStart) return `${r} ${r} ${smR} ${r}`;
       if (group.isGroupMiddle) return `${r} ${smR} ${smR} ${r}`;
-      if (group.isGroupEnd) return `${r} ${smR} ${r} ${r}`;
+      if (group.isGroupEnd) return `${r} ${smR} ${smR} ${r}`;
     } else {
-      // Incoming message (left aligned)
+      // Incoming message (left aligned, tail at bottom-left)
       if (group.isGroupStart) return `${r} ${r} ${r} ${smR}`;
       if (group.isGroupMiddle) return `${smR} ${r} ${r} ${smR}`;
-      if (group.isGroupEnd) return `${smR} ${r} ${r} ${r}`;
+      if (group.isGroupEnd) return `${smR} ${r} ${r} ${smR}`;
     }
 
     return `${r}`;

@@ -41,6 +41,7 @@ export const MessageSkeletonRow: React.FC<MessageSkeletonRowProps> = React.memo(
     if (variant === 'outgoing_short') {
       return (
         <div
+          dir="ltr"
           className={`flex justify-end items-end px-3 py-1 w-full select-none ${className}`}
           style={{ height: SKELETON_HEIGHTS.outgoing_short }}
         >
@@ -58,6 +59,7 @@ export const MessageSkeletonRow: React.FC<MessageSkeletonRowProps> = React.memo(
     if (variant === 'outgoing_medium') {
       return (
         <div
+          dir="ltr"
           className={`flex justify-end items-end px-3 py-1 w-full select-none ${className}`}
           style={{ height: SKELETON_HEIGHTS.outgoing_medium }}
         >
@@ -76,6 +78,7 @@ export const MessageSkeletonRow: React.FC<MessageSkeletonRowProps> = React.memo(
     if (variant === 'incoming_media') {
       return (
         <div
+          dir="ltr"
           className={`flex justify-start items-end gap-2 px-3 py-1 w-full select-none ${className}`}
           style={{ height: SKELETON_HEIGHTS.incoming_media }}
         >
@@ -95,6 +98,7 @@ export const MessageSkeletonRow: React.FC<MessageSkeletonRowProps> = React.memo(
     if (variant === 'incoming_medium') {
       return (
         <div
+          dir="ltr"
           className={`flex justify-start items-end gap-2 px-3 py-1 w-full select-none ${className}`}
           style={{ height: SKELETON_HEIGHTS.incoming_medium }}
         >
@@ -112,6 +116,7 @@ export const MessageSkeletonRow: React.FC<MessageSkeletonRowProps> = React.memo(
     // Default incoming_short
     return (
       <div
+        dir="ltr"
         className={`flex justify-start items-end gap-2 px-3 py-1 w-full select-none ${className}`}
         style={{ height: SKELETON_HEIGHTS.incoming_short }}
       >

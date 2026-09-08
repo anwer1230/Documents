@@ -99,9 +99,12 @@ function estimateItemHeight(item?: GroupedItem): number {
 
   // Text content calculation
   if (msg.text) {
-    const textLen = msg.text.length;
-    const lines = Math.max(1, Math.ceil(textLen / 40));
-    height += Math.max(34, lines * 22 + 16);
+    const rawLines = msg.text.split('\n');
+    let totalLines = 0;
+    for (const line of rawLines) {
+      totalLines += Math.max(1, Math.ceil((line.length || 1) / 34));
+    }
+    height += Math.max(34, totalLines * 22 + 16);
   } else if (!msg.media) {
     height += 44;
   }
@@ -111,7 +114,7 @@ function estimateItemHeight(item?: GroupedItem): number {
     height += 28;
   }
 
-  return Math.min(Math.max(48, height), 620);
+  return Math.min(Math.max(48, height), 800);
 }
 
 interface MessageRowCustomProps {
@@ -184,11 +187,12 @@ const MessageRow = React.memo(({
         <div
           style={style}
           data-msg-id={msg.id}
-          className="px-3 sm:px-6 py-1"
+          dir="ltr"
+          className="px-2 sm:px-4 py-0.5 w-full"
         >
           <div
             id={`msg-bubble-container-${msg.id}`}
-            className={`transition-all duration-300 rounded-2xl ${
+            className={`transition-all duration-300 rounded-2xl w-full ${
               highlightedMessageId === msg.id
                 ? 'ring-2 ring-amber-400 bg-amber-500/20 p-1 shadow-lg shadow-amber-500/20 animate-pulse'
                 : ''
