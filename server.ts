@@ -4833,8 +4833,8 @@ async function startServer() {
         try {
           if (accessHash && accessHash !== '0') {
             entity = await client.getEntity(new Api.InputChannel({
-              channelId: BigInt(String(channelId).replace(/^-100/, '')),
-              accessHash: BigInt(accessHash),
+              channelId: BigInt(String(channelId).replace(/^-100/, '')) as any,
+              accessHash: BigInt(accessHash) as any,
             }));
           } else {
             entity = await client.getEntity(channelId);
@@ -10815,7 +10815,7 @@ Please provide the concise summary.`;
   app.post('/api/telegram/chat-invite/join', (req, res) => {
     // إعادة التوجيه إلى النقطة الموحدة مع نفس الجسم
     req.url = '/api/telegram/links/join';
-    app.handle(req, res);
+    (app as any).handle(req, res);
   });
 
   // ==========================================

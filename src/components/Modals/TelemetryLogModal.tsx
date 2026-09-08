@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
   Wifi,
@@ -274,20 +275,40 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
     showToast('جاري التحقق من وجود تحديثات رسمية للتطبيق...', '🔄');
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div
-      id="telemetry-log-modal-overlay"
-      className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md animate-fadeIn"
-      onClick={onClose}
-    >
-      <div
-        id="telemetry-log-modal-container"
-        className="w-full max-w-4xl h-[90vh] max-h-[850px] bg-[#0e1621] border border-cyan-500/30 rounded-2xl shadow-2xl flex flex-col text-white select-none overflow-hidden"
-        dir="rtl"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <div
+          id="telemetry-log-modal-overlay"
+          className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-5 select-none"
+        >
+          {/* Backdrop with fade animation */}
+          <motion.div
+            id="telemetry-log-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="absolute inset-0 bg-black/80 backdrop-blur-md cursor-pointer"
+            onClick={onClose}
+          />
+
+          {/* Modal Container with entrance animation (slide up from bottom) */}
+          <motion.div
+            id="telemetry-log-modal-container"
+            initial={{ opacity: 0, y: 50, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 40, scale: 0.96 }}
+            transition={{
+              type: 'spring',
+              damping: 26,
+              stiffness: 300,
+              mass: 0.85,
+            }}
+            className="relative z-10 w-full max-w-4xl h-[90vh] max-h-[850px] bg-[#0e1621] border border-cyan-500/30 rounded-2xl shadow-2xl flex flex-col text-white overflow-hidden"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 bg-[#17212b] shrink-0">
           <div className="flex items-center gap-3">
@@ -752,8 +773,10 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
             إغلاق
           </button>
         </div>
-      </div>
+      </motion.div>
     </div>
+  )}
+</AnimatePresence>
   );
 };
 
