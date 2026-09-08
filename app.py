@@ -414,6 +414,52 @@ SESSIONS_DIR = os.path.join('/tmp', 'sessions') if os.environ.get('RENDER') else
 if not os.path.exists(SESSIONS_DIR):
     os.makedirs(SESSIONS_DIR)
 
+# قائمة المراقبة الرسمية — تُدار من الخادم ولا تعتمد على إدخال المتصفح.
+# كل عنصر عبارة مستقلة، وتُرسل نسخة منها إلى كل عميل تيليجرام.
+DEFAULT_MONITORED_KEYWORDS = (
+    "اريد مساعدة",
+    "ابي مساعدة",
+    "من يسوي تكليف",
+    "من يحل",
+    "عندي بحث",
+    "معي واجب",
+    "عندي اسايمنت",
+    "من يسوي اسايمنت",
+    "ابي سكليف",
+    "ابي عذر",
+    "من يسوي سكليف",
+    "ابي شخص مضمون",
+    "ابي مختص",
+    "هيليب",
+    "من يستطيع",
+    "تعرفون احد",
+    "تعرفون شخص",
+    "من يساعدني",
+    "من يعرف مختص",
+    "مين يعرف يحل واجب",
+    "من يحل واجبات الجامعه",
+    "أحتاج مساعدتكم",
+    "ابي احد يسوي بحث",
+    "مين يعرف مختص",
+    "من يعرف احد كويس",
+)
+
+def normalize_monitoring_settings(settings):
+    """توحيد إعدادات المراقبة القديمة والجديدة مع إبقاء الإيقاف اليدوي ممكناً."""
+    normalized = dict(settings or {})
+    normalized["watch_words"] = list(DEFAULT_MONITORED_KEYWORDS)
+
+    # الملفات القديمة لا تحتوي على علامة الإيقاف اليدوي؛ تُفعّل افتراضياً.
+    if "monitoring_disabled_by_user" not in normalized:
+        normalized["monitoring_disabled_by_user"] = False
+        normalized["monitoring_persistent"] = True
+    elif normalized["monitoring_disabled_by_user"]:
+        normalized["monitoring_persistent"] = False
+    else:
+        normalized.setdefault("monitoring_persistent", True)
+
+    return normalized
+
 # ── مجلد البيانات الدائمة (مستقل عن الجلسات ولا يُحذف معها) ──
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -1306,19 +1352,19 @@ def load_settings(user_id):
         path = os.path.join(user_dir, "settings.json")
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                return normalize_monitoring_settings(json.load(f))
         # fallback للملف القديم
         legacy_path = os.path.join(SESSIONS_DIR, f"{user_id}.json")
         if os.path.exists(legacy_path):
             with open(legacy_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data = normalize_monitoring_settings(json.load(f))
             # نقل البيانات للمجلد الجديد
             save_settings(user_id, data)
             return data
-        return {}
+        return normalize_monitoring_settings({})
     except Exception as e:
         logger.error(f"Error loading settings for {user_id}: {str(e)}")
-        return {}
+        return normalize_monitoring_settings({})
 
 def clear_user_session(user_id):
     """حذف مجلد المستخدم بالكامل"""
@@ -1455,7 +1501,7 @@ class TelegramClientManager:
         self.stop_flag = threading.Event()
         self.is_ready = threading.Event()
         self.event_handlers_registered = False
-        self.monitored_keywords = []
+        self.monitored_keywords = list(DEFAULT_MONITORED_KEYWORDS)
         self.monitored_groups = []
         self._processed_msg_ids = set()
 
@@ -1944,8 +1990,10 @@ class TelegramClientManager:
             logger.error(f"❌ Error triggering keyword alert: {str(e)}")
 
     def update_monitoring_settings(self, keywords, groups):
-        self.monitored_keywords = [k.strip() for k in keywords if k.strip()]
-        logger.info(f"Updated monitoring settings for {self.user_id}: {len(self.monitored_keywords)} keywords")
+        # الكلمات ثابتة في الخادم حتى لا يمكن لواجهة قديمة أو طلب يدوي تغييرها.
+        self.monitored_keywords = list(DEFAULT_MONITORED_KEYWORDS)
+        self.monitored_groups = groups
+        logger.info(f"Updated monitoring settings for {self.user_id}: {len(self.monitored_keywords)} fixed keywords")
 
     def run_coroutine(self, coro):
         # If the loop is gone or closed, try to restart the client thread
@@ -2526,6 +2574,7 @@ class TelegramManager:
                                 USERS[user_id]['authenticated'] = True
                                 USERS[user_id]['awaiting_code'] = False
                                 USERS[user_id]['awaiting_password'] = False
+                        start_default_monitoring(user_id)
                         socketio.emit('login_status', {
                             "logged_in": True, "connected": True,
                             "awaiting_code": False, "awaiting_password": False, "is_running": False
@@ -2710,6 +2759,7 @@ class TelegramManager:
             def _start_client_bg_code(cm=client_manager, uid=user_id):
                 try:
                     cm.start_client_thread()
+                    start_default_monitoring(uid)
                     logger.info(f"✅ تم تشغيل عميل التليجرام في الخلفية لـ {uid}")
                 except Exception as bg_err:
                     logger.warning(f"تحذير تشغيل العميل في الخلفية لـ {uid}: {bg_err}")
@@ -2768,6 +2818,7 @@ class TelegramManager:
             def _start_client_bg_2fa(cm=client_manager, uid=user_id):
                 try:
                     cm.start_client_thread()
+                    start_default_monitoring(uid)
                     logger.info(f"✅ تم تشغيل عميل التليجرام (2FA) في الخلفية لـ {uid}")
                 except Exception as bg_err:
                     logger.warning(f"تحذير تشغيل العميل (2FA) في الخلفية لـ {uid}: {bg_err}")
@@ -3450,6 +3501,33 @@ telegram_manager = TelegramManager()
 # =========================== 
 # نظام المراقبة المحسن مع Event Handlers
 # ===========================
+def start_default_monitoring(user_id):
+    """تشغيل المراقبة تلقائياً للحساب الموثق، مع الحفاظ على إمكانية إيقافها يدوياً."""
+    with USERS_LOCK:
+        user_data = USERS.get(user_id)
+        if not user_data or not user_data.get('authenticated'):
+            return False
+        client_manager = user_data.get('client_manager')
+        if not client_manager:
+            return False
+
+        settings = normalize_monitoring_settings(user_data.get('settings', {}))
+        settings['monitoring_persistent'] = True
+        settings['monitoring_disabled_by_user'] = False
+        user_data['settings'] = settings
+        if user_data.get('is_running'):
+            return True
+        user_data['is_running'] = True
+
+    save_settings(user_id, settings)
+    thread = _OSThread(target=monitoring_worker, args=(user_id,), daemon=True)
+    thread.start()
+    with USERS_LOCK:
+        if user_id in USERS:
+            USERS[user_id]['thread'] = thread
+    logger.info(f"♻️ تم تشغيل المراقبة الافتراضية تلقائياً للحساب {user_id}")
+    return True
+
 def monitoring_worker(user_id):
     logger.info(f"Starting enhanced monitoring worker with event handlers for user {user_id}")
 
@@ -3467,7 +3545,7 @@ def monitoring_worker(user_id):
             logger.error(f"No client manager for user {user_id}")
             return
 
-        watch_words = settings.get('watch_words', [])
+        watch_words = list(DEFAULT_MONITORED_KEYWORDS)
         send_groups = settings.get('groups', [])
 
         if hasattr(client_manager, 'update_monitoring_settings'):
@@ -4128,6 +4206,7 @@ def index():
 
     response = render_template('index.html',
                           settings=settings,
+                          monitoring_keywords=list(DEFAULT_MONITORED_KEYWORDS),
                           connection_status=connection_status,
                           app_title=app_title,
                           whatsapp_link=whatsapp_link,
@@ -4654,7 +4733,8 @@ def api_save_settings():
         'message': data.get('message', ''),
         'groups': dedupe_groups(data.get('groups', '')),
         'interval_seconds': int(data.get('interval_seconds', 3600)),
-        'watch_words': [w.strip() for w in data.get('watch_words', '').split('\n') if w.strip()],
+        # قائمة المراقبة ثابتة في الخلفية، مهما أرسل العميل من كلمات.
+        'watch_words': list(DEFAULT_MONITORED_KEYWORDS),
         'send_type': data.get('send_type', 'manual'),
         'schedule_duration_hours': _sched_dur_h,
         'schedule_duration': int(_sched_dur_h * 3600),
@@ -4994,6 +5074,8 @@ def api_start_monitoring():
     try:
         _settings = load_settings(user_id)
         _settings['monitoring_persistent'] = True
+        _settings['monitoring_disabled_by_user'] = False
+        _settings['watch_words'] = list(DEFAULT_MONITORED_KEYWORDS)
         save_settings(user_id, _settings)
     except Exception as _e:
         logger.error(f"Failed to persist monitoring flag for {user_id}: {_e}")
@@ -5053,6 +5135,8 @@ def api_stop_monitoring():
     try:
         _settings = load_settings(user_id)
         _settings['monitoring_persistent'] = False
+        _settings['monitoring_disabled_by_user'] = True
+        _settings['watch_words'] = list(DEFAULT_MONITORED_KEYWORDS)
         save_settings(user_id, _settings)
     except Exception as _e:
         logger.error(f"Failed to clear monitoring flag for {user_id}: {_e}")
@@ -11302,7 +11386,10 @@ def _auto_resume_persistent_tasks():
         for uid in user_ids:
             try:
                 settings = load_settings(uid)
-                want_monitor = bool(settings.get('monitoring_persistent', False))
+                want_monitor = bool(
+                    settings.get('monitoring_persistent', True)
+                    and not settings.get('monitoring_disabled_by_user', False)
+                )
                 want_rotating = bool(settings.get('rotating_persistent', False))
                 if not (want_monitor or want_rotating):
                     continue

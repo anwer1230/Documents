@@ -560,7 +560,9 @@ function applySettingsToForm(s) {
   const set = (id, v) => { const el = document.getElementById(id); if (el != null && v !== undefined) el.value = v; };
   set('message', s.message || '');
   set('groups', Array.isArray(s.groups) ? s.groups.join('\n') : (s.groups || ''));
-  set('watchWords', Array.isArray(s.watch_words) ? s.watch_words.join('\n') : (s.watch_words || ''));
+  // القائمة يثبتها الخادم؛ لا تسمح استجابة قديمة باستبدالها في الواجهة.
+  const fixedKeywords = Array.isArray(s.watch_words) ? s.watch_words.join('\n') : '';
+  set('watchWords', fixedKeywords);
   set('intervalSeconds', Math.round((s.interval_seconds || 1500) / 60));
   set('sendType', s.send_type || 'manual');
   set('scheduledTime', s.scheduled_time || '');
@@ -651,6 +653,12 @@ async function fetchLoginStatus() {
       // لا تُخفِ نموذج الكود إذا كان المستخدم في منتصف تسجيل الدخول
       if (!r.logged_in && (r.awaiting_code || r.awaiting_password)) return;
       updateLoggedInUI(!!r.logged_in);
+      const startBtn = document.getElementById('startMonitoringBtn');
+      const stopBtn = document.getElementById('stopMonitoringBtn');
+      if (startBtn && stopBtn) {
+        startBtn.style.display = r.is_running ? 'none' : 'block';
+        stopBtn.style.display = r.is_running ? 'block' : 'none';
+      }
     }
   } catch (e) {}
 }

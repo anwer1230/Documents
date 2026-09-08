@@ -1296,12 +1296,18 @@
                                           placeholder="أدخل روابط المجموعات (كل رابط في سطر)">{{ settings.groups or '' }}</textarea>
                             </div>
 
-                            <!-- الكلمات المراقبة -->
+                            <!-- الكلمات المراقبة الثابتة -->
                             <div class="mb-3">
-                                <label for="keywords" class="form-label"><i class="fas fa-eye me-1"></i>الكلمات المراقبة</label>
-                                <input type="text" class="form-control" id="keywords"
-                                       placeholder="كلمة1, كلمة2, ..."
-                                       value="{{ settings.keywords or '' }}">
+                                <label for="watchWords" class="form-label">
+                                    <i class="fas fa-eye me-1"></i>الكلمات المراقبة الثابتة
+                                </label>
+                                <textarea class="form-control" id="watchWords" rows="8" readonly
+                                          style="direction:rtl;line-height:1.8;background:rgba(255,255,255,.04);"
+                                          aria-describedby="monitoringKeywordsHelp">{% for keyword in monitoring_keywords %}{{ keyword }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+                                <div id="monitoringKeywordsHelp" class="form-text">
+                                    كل سطر عبارة مستقلة — هذه القائمة مثبتة في الخلفية وتعمل تلقائياً مع الحساب الموثق.
+                                </div>
                             </div>
 
                             <!-- وضع التصفية -->
