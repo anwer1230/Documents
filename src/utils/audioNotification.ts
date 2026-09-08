@@ -4,6 +4,34 @@
 
 class TelegramAudioEngine {
   private ctx: AudioContext | null = null;
+  private volume: number = 80; // 0 to 100 percentage
+  private isMuted: boolean = false;
+
+  public setVolume(vol: number) {
+    this.volume = Math.max(0, Math.min(100, typeof vol === 'number' ? vol : 80));
+  }
+
+  public getVolume(): number {
+    return this.volume;
+  }
+
+  public setMuted(muted: boolean) {
+    this.isMuted = Boolean(muted);
+  }
+
+  public getIsMuted(): boolean {
+    return this.isMuted;
+  }
+
+  public toggleMute(): boolean {
+    this.isMuted = !this.isMuted;
+    return this.isMuted;
+  }
+
+  private getVolumeFactor(): number {
+    if (this.isMuted || this.volume <= 0) return 0;
+    return this.volume / 100;
+  }
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -23,7 +51,8 @@ class TelegramAudioEngine {
    * Signature Telegram Message Chime (Clean, crystal two-tone frequency chime)
    */
   public playMessageChime(isSilent: boolean = false) {
-    if (isSilent) return;
+    const factor = this.getVolumeFactor();
+    if (isSilent || factor <= 0.001) return;
     try {
       const ctx = this.getContext();
       if (!ctx) return;
@@ -37,7 +66,7 @@ class TelegramAudioEngine {
       osc.frequency.exponentialRampToValueAtTime(1318.51, now + 0.08); // E6
 
       gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.28, now + 0.02);
+      gain.gain.linearRampToValueAtTime(0.28 * factor, now + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
 
       osc.connect(gain);
@@ -52,7 +81,8 @@ class TelegramAudioEngine {
    * Telegram Channel Broadcast Post Sound (Deeper bell resonance)
    */
   public playChannelPostSound(isSilent: boolean = false) {
-    if (isSilent) return;
+    const factor = this.getVolumeFactor();
+    if (isSilent || factor <= 0.001) return;
     try {
       const ctx = this.getContext();
       if (!ctx) return;
@@ -66,7 +96,7 @@ class TelegramAudioEngine {
       osc.frequency.exponentialRampToValueAtTime(987.77, now + 0.07); // B5
 
       gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.22, now + 0.02);
+      gain.gain.linearRampToValueAtTime(0.22 * factor, now + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
 
       osc.connect(gain);
@@ -81,6 +111,8 @@ class TelegramAudioEngine {
    * Telegram Sent Message Pop sound (Subtle tactile click)
    */
   public playSentPop() {
+    const factor = this.getVolumeFactor();
+    if (factor <= 0.001) return;
     try {
       const ctx = this.getContext();
       if (!ctx) return;
@@ -93,7 +125,7 @@ class TelegramAudioEngine {
       osc.frequency.setValueAtTime(520, now);
       osc.frequency.exponentialRampToValueAtTime(260, now + 0.04);
 
-      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.setValueAtTime(0.18 * factor, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
 
       osc.connect(gain);
@@ -108,6 +140,8 @@ class TelegramAudioEngine {
    * Telegram Reaction Pop sound
    */
   public playReactionSound() {
+    const factor = this.getVolumeFactor();
+    if (factor <= 0.001) return;
     try {
       const ctx = this.getContext();
       if (!ctx) return;
@@ -120,7 +154,7 @@ class TelegramAudioEngine {
       osc.frequency.setValueAtTime(587.33, now); // D5
       osc.frequency.exponentialRampToValueAtTime(1174.66, now + 0.06); // D6
 
-      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.setValueAtTime(0.15 * factor, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
 
       osc.connect(gain);

@@ -3,9 +3,37 @@
 class AudioService {
   private audioContext: AudioContext | null = null;
   private currentSound: string = 'classic';
+  private volume: number = 80; // 0 to 100
+  private isMuted: boolean = false;
 
   constructor() {
     // Lazy initialized on first user interaction if needed
+  }
+
+  public setVolume(vol: number) {
+    this.volume = Math.max(0, Math.min(100, typeof vol === 'number' ? vol : 80));
+  }
+
+  public getVolume(): number {
+    return this.volume;
+  }
+
+  public setMuted(muted: boolean) {
+    this.isMuted = Boolean(muted);
+  }
+
+  public getIsMuted(): boolean {
+    return this.isMuted;
+  }
+
+  public toggleMute(): boolean {
+    this.isMuted = !this.isMuted;
+    return this.isMuted;
+  }
+
+  private getVolumeFactor(): number {
+    if (this.isMuted || this.volume <= 0) return 0;
+    return this.volume / 100;
   }
 
   private getContext(): AudioContext | null {
@@ -41,7 +69,8 @@ class AudioService {
 
   // تشغيل صوت الإشعار
   async playNotification(soundType: string = this.currentSound) {
-    if (soundType === 'silent') return;
+    const factor = this.getVolumeFactor();
+    if (this.isMuted || factor <= 0.001 || soundType === 'silent') return;
 
     const ctx = this.getContext();
     if (!ctx) return;
@@ -50,8 +79,11 @@ class AudioService {
       const buffer = await this.loadSound(soundType);
       if (buffer) {
         const source = ctx.createBufferSource();
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(factor, ctx.currentTime);
         source.buffer = buffer;
-        source.connect(ctx.destination);
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
         source.start(0);
         return;
       }
@@ -65,6 +97,9 @@ class AudioService {
 
   // نغمات Web Audio مصممة برمجياً لمطابقة تليجرام وبدائلها
   private playSynthesizedTone(type: string) {
+    const factor = this.getVolumeFactor();
+    if (factor <= 0.001) return;
+
     const ctx = this.getContext();
     if (!ctx) return;
 
@@ -78,7 +113,7 @@ class AudioService {
         gain.connect(ctx.destination);
         osc.type = 'sine';
         osc.frequency.setValueAtTime(900, now);
-        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.setValueAtTime(0.25 * factor, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
         osc.start(now);
         osc.stop(now + 0.15);
@@ -94,10 +129,10 @@ class AudioService {
           gain.connect(ctx.destination);
           osc.type = 'sine';
           osc.frequency.setValueAtTime(freq, now + idx * 0.04);
-          gain.gain.setValueAtTime(0.18, now + idx * 0.04);
-          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+          gain.gain.setValueAtTime(0.18 * factor, now + idx * 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.04 + 0.45);
           osc.start(now + idx * 0.04);
-          osc.stop(now + 0.45);
+          osc.stop(now + idx * 0.04 + 0.45);
         });
         break;
       }
@@ -122,7 +157,7 @@ class AudioService {
           gain.connect(ctx.destination);
           osc.type = 'sine';
           osc.frequency.setValueAtTime(n.freq, now + n.time);
-          gain.gain.setValueAtTime(0.25, now + n.time);
+          gain.gain.setValueAtTime(0.25 * factor, now + n.time);
           gain.gain.exponentialRampToValueAtTime(0.001, now + n.time + n.duration);
           osc.start(now + n.time);
           osc.stop(now + n.time + n.duration);
@@ -134,6 +169,9 @@ class AudioService {
 
   // توليد صوت بوب سريع برمجياً (عند الإرسال أو فقاعة)
   playBubblePop() {
+    const factor = this.getVolumeFactor();
+    if (factor <= 0.001) return;
+
     const ctx = this.getContext();
     if (!ctx) return;
 
@@ -147,7 +185,7 @@ class AudioService {
     osc.frequency.exponentialRampToValueAtTime(1100, ctx.currentTime + 0.08);
     osc.type = 'sine';
 
-    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.setValueAtTime(0.3 * factor, ctx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
 
     osc.start(ctx.currentTime);
@@ -156,6 +194,9 @@ class AudioService {
 
   // صوت نقر خفيف وسريع للأزرار
   playClick() {
+    const factor = this.getVolumeFactor();
+    if (factor <= 0.001) return;
+
     const ctx = this.getContext();
     if (!ctx) return;
 
@@ -167,7 +208,7 @@ class AudioService {
     osc.frequency.setValueAtTime(1200, ctx.currentTime);
     osc.type = 'triangle';
 
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.setValueAtTime(0.12 * factor, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
 
     osc.start(ctx.currentTime);

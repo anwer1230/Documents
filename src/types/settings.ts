@@ -6,6 +6,8 @@ export interface AppSettings {
   notificationSound: 'classic' | 'beep' | 'chime' | 'bubble' | 'silent';
   enableSendSound: boolean;
   enableClickSound: boolean;
+  muteChatSounds?: boolean;
+  soundVolume?: number; // 0 .. 100
   
   // توفير البيانات
   dataSaver: boolean;
@@ -22,6 +24,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notificationSound: 'classic',
   enableSendSound: true,
   enableClickSound: true,
+  muteChatSounds: false,
+  soundVolume: 80,
   dataSaver: false,
   autoDownloadMedia: true,
   preloadThumbnails: true,

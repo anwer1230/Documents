@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { AppSettings, DEFAULT_SETTINGS } from '../types/settings';
 import { saveSettingsToSQLite, loadSettingsFromSQLite } from '../services/settingsDB';
+import { audioService } from '../services/audioService';
+import { telegramAudio } from '../utils/audioNotification';
 
 export const applyTheme = (theme: 'light' | 'dark') => {
   if (typeof document === 'undefined') return;
@@ -21,6 +23,14 @@ export const applyTheme = (theme: 'light' | 'dark') => {
 export const applySettings = (settings: AppSettings) => {
   if (settings.theme) {
     applyTheme(settings.theme);
+  }
+  if (typeof settings.soundVolume === 'number') {
+    audioService.setVolume(settings.soundVolume);
+    telegramAudio.setVolume(settings.soundVolume);
+  }
+  if (typeof settings.muteChatSounds === 'boolean') {
+    audioService.setMuted(settings.muteChatSounds);
+    telegramAudio.setMuted(settings.muteChatSounds);
   }
 };
 

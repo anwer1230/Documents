@@ -9,6 +9,7 @@
  */
 
 import { InAppNotification, NotificationCategory } from '../types';
+import { telegramAudio } from '../utils/audioNotification';
 
 export interface NotificationSettings {
   enabled: boolean;
@@ -350,7 +351,8 @@ export class NotificationsController {
    * WebAudio Sound Synthesizer replicating Telegram Android audio assets
    */
   public playNotificationSound(type: 'incoming' | 'sent' | 'alert' | 'mention' = 'incoming') {
-    if (!this.settings.sound) return;
+    if (!this.settings.sound || telegramAudio.getIsMuted() || telegramAudio.getVolume() <= 0) return;
+    const factor = telegramAudio.getVolume() / 100;
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
@@ -368,7 +370,7 @@ export class NotificationsController {
         // Sent sound: ascending chime
         osc.frequency.setValueAtTime(1046, now); // C6
         osc.frequency.exponentialRampToValueAtTime(1318, now + 0.06); // E6
-        gain.gain.setValueAtTime(0.18, now);
+        gain.gain.setValueAtTime(0.18 * factor, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
         osc.connect(gain);
         gain.connect(this.audioContext.destination);
@@ -379,7 +381,7 @@ export class NotificationsController {
         osc.frequency.setValueAtTime(1200, now);
         osc.frequency.setValueAtTime(1600, now + 0.08);
         osc.frequency.setValueAtTime(1200, now + 0.16);
-        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.setValueAtTime(0.25 * factor, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
         osc.connect(gain);
         gain.connect(this.audioContext.destination);
@@ -389,7 +391,7 @@ export class NotificationsController {
         // Mention chime: two quick harmonious tones
         osc.frequency.setValueAtTime(880, now); // A5
         osc.frequency.setValueAtTime(1174, now + 0.05); // D6
-        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.setValueAtTime(0.22 * factor, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
         osc.connect(gain);
         gain.connect(this.audioContext.destination);
@@ -399,7 +401,7 @@ export class NotificationsController {
         // Incoming message sound: Telegram pop chime
         osc.frequency.setValueAtTime(830, now);
         osc.frequency.exponentialRampToValueAtTime(1046, now + 0.08);
-        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.setValueAtTime(0.2 * factor, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
         osc.connect(gain);
         gain.connect(this.audioContext.destination);

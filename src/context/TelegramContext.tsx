@@ -32,6 +32,7 @@ import {
   INITIAL_MESSAGES,
 } from '../data/mockTelegramData';
 import { telegramAudio } from '../utils/audioNotification';
+import { audioService } from '../services/audioService';
 import { NotificationCenter } from '../core/NotificationCenter';
 import { notificationsController } from '../core/NotificationsController';
 import { notificationsService } from '../core/NotificationsService';
@@ -791,6 +792,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {}
     return true; // Default active as requested
   });
+
+  // Sync Audio Engine Volume & Mute Settings in Real-time
+  useEffect(() => {
+    if (typeof settings.soundVolume === 'number') {
+      telegramAudio.setVolume(settings.soundVolume);
+      audioService.setVolume(settings.soundVolume);
+    }
+    if (typeof settings.muteChatSounds === 'boolean') {
+      telegramAudio.setMuted(settings.muteChatSounds);
+      audioService.setMuted(settings.muteChatSounds);
+    }
+  }, [settings.soundVolume, settings.muteChatSounds]);
 
   // Initialize Dexie.js (IndexedDB wrapper) for persistent batch & discover logs
   useEffect(() => {
@@ -2309,6 +2322,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
     if (newSettings.fontSize !== undefined) {
       themeController.applyFontSize(newSettings.fontSize);
+    }
+    if (newSettings.soundVolume !== undefined) {
+      telegramAudio.setVolume(newSettings.soundVolume);
+      audioService.setVolume(newSettings.soundVolume);
+    }
+    if (newSettings.muteChatSounds !== undefined) {
+      telegramAudio.setMuted(newSettings.muteChatSounds);
+      audioService.setMuted(newSettings.muteChatSounds);
     }
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };

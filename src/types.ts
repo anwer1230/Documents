@@ -314,6 +314,8 @@ export interface AppSettings {
   notificationSound?: 'classic' | 'beep' | 'chime' | 'bubble' | 'silent';
   enableSendSound?: boolean;
   enableClickSound?: boolean;
+  muteChatSounds?: boolean;
+  soundVolume?: number; // 0 .. 100
   dataSaver?: boolean;
   preloadThumbnails?: boolean;
   enableTTS?: boolean;

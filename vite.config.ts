@@ -10,8 +10,8 @@ export default defineConfig(() => {
       global: 'globalThis',
     },
     plugins: [
-      react(),
-      tailwindcss(),
+      react() as any,
+      tailwindcss() as any,
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'telegram-logo.svg', 'sql-wasm.wasm', 'sw-custom.js', 'icons/*.png', 'icons/*.svg'],
