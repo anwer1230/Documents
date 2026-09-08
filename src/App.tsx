@@ -54,6 +54,7 @@ import { AppUpdateAlertDialog } from './components/Modals/AppUpdateAlertDialog';
 import { UpdateAppActivityModal } from './components/Modals/UpdateAppActivityModal';
 import { RestrictedContentModal } from './components/Modals/RestrictedContentModal';
 import { ScreenshotBlockedToast } from './components/Notifications/ScreenshotBlockedToast';
+import { AppLockOverlay } from './components/Auth/AppLockOverlay';
 import { NotificationCenter } from './core/NotificationCenter';
 import { appUpdateController } from './core/messenger/AppUpdateController';
 
@@ -353,6 +354,9 @@ const TelegramAppContent: React.FC = () => {
 
       {/* Android FLAG_SECURE Screenshot Blocked Alert */}
       <ScreenshotBlockedToast />
+
+      {/* Telegram Passcode & WebAuthn / AndroidX Biometric Lock Screen */}
+      <AppLockOverlay />
       </div>
     </div>
   );

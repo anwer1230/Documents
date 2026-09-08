@@ -10,6 +10,7 @@ import { TLRPC } from '../TLRPC';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { NotificationCenter } from '../NotificationCenter';
 import { MessagesController } from '../MessagesController';
+import { sessionSecurityManager } from '../SessionSecurityManager';
 
 export type PrivacyTarget =
   | 'phone_number'
@@ -262,10 +263,12 @@ export class PrivacySettingsController {
     if (!passcode) {
       this.state.passcodeEnabled = false;
       this.state.passcodeHash = undefined;
+      sessionSecurityManager.removePasscode();
     } else {
       this.state.passcodeEnabled = true;
       this.state.passcodeType = type;
       this.state.passcodeHash = btoa(passcode);
+      sessionSecurityManager.setPasscode(passcode, type);
     }
     this.saveState();
   }

@@ -19,8 +19,10 @@ import {
   Layers,
   MessageSquare,
   UserPlus,
+  Lock,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
+import { sessionSecurityManager } from '../../core/SessionSecurityManager';
 
 export const ChatListHeader: React.FC = () => {
   const {
@@ -242,6 +244,18 @@ export const ChatListHeader: React.FC = () => {
               >
                 <Edit3 className="w-5 h-5" />
               </button>
+
+              {/* Quick Session Lock Button (when Passcode is set) */}
+              {sessionSecurityManager.isPasscodeSet() && (
+                <button
+                  id="tg-header-lock-btn"
+                  onClick={() => sessionSecurityManager.lock()}
+                  className="p-2 rounded-full hover:bg-amber-500/20 text-amber-400 active:scale-95 transition-all"
+                  title={isArabic ? 'قفل تيليجرام فورياً (Passcode / Biometrics)' : 'Lock Telegram now'}
+                >
+                  <Lock className="w-4 h-4" />
+                </button>
+              )}
 
               {/* More Menu (Dropdown) */}
               <div className="relative">
