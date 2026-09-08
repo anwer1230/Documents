@@ -1,5 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
+
+const nodeRequire = createRequire(import.meta.url);
 
 export interface StoredAutomationRule {
   id: string;
@@ -79,9 +82,8 @@ export class SQLiteDatabaseService {
 
     // 1. Try native node:sqlite DatabaseSync (Node 22+)
     try {
-      // Use dynamic require to avoid bundling issues
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const nodeSqlite = require('node:sqlite');
+      // Use dynamic nodeRequire for ESM compatibility
+      const nodeSqlite = nodeRequire('node:sqlite');
       if (nodeSqlite && nodeSqlite.DatabaseSync) {
         const nativeDb = new nodeSqlite.DatabaseSync(this.dbFilePath);
         this.db = {
@@ -111,8 +113,7 @@ export class SQLiteDatabaseService {
 
     // 2. Fallback to sql.js (WebAssembly SQLite)
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const initSqlJs = require('sql.js');
+      const initSqlJs = nodeRequire('sql.js');
       // For synchronous fallback if possible or empty memory until loaded
       let fileBuffer: Buffer | null = null;
       if (fs.existsSync(this.dbFilePath)) {
