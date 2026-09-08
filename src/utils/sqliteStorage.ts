@@ -1,3 +1,4 @@
+import { hotColdCache } from '../services/HotColdCache';
 // @ts-ignore
 import initSqlJs from 'sql.js/dist/sql-asm.js';
 import type { Database } from 'sql.js';
@@ -148,12 +149,35 @@ class TelegramSQLiteDatabase {
         value TEXT
       );
 
+      -- Telegram High Performance SQLite PRAGMAs
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA cache_size = -64000;
+      PRAGMA temp_store = MEMORY;
+      PRAGMA mmap_size = 268435456;
+      PRAGMA count_changes = OFF;
+      PRAGMA auto_vacuum = INCREMENTAL;
+
+      -- Compound High-Throughput Indexes
       CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_date ON messages(chat_id, date);
-      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_timestamp ON messages(chat_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_date ON messages(chat_id, date DESC);
+      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_timestamp ON messages(chat_id, timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_messages_id_chat ON messages(id, chat_id);
+      CREATE INDEX IF NOT EXISTS idx_chats_pinned_time ON chats(is_pinned DESC, last_message_time DESC);
+      CREATE INDEX IF NOT EXISTS idx_stories_user_expires ON stories(user_id, expires_at);
     `);
 
     this.persist();
+  }
+
+  private persistDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  public schedulePersist(): void {
+    if (this.persistDebounceTimer) return;
+    this.persistDebounceTimer = setTimeout(() => {
+      this.persistDebounceTimer = null;
+      this.persist();
+    }, 350);
   }
 
   public async persist(): Promise<void> {
@@ -194,7 +218,13 @@ class TelegramSQLiteDatabase {
       }
       stmt.free();
       this.db.run('COMMIT');
-      this.persist();
+      // Update L1 Hot Cache
+      for (const c of chats) {
+        if (c && c.id) {
+          hotColdCache.putHotChat(c.id, c);
+        }
+      }
+      this.schedulePersist();
     } catch (e) {
       try { this.db.run('ROLLBACK'); } catch (_) {}
       console.error('[SQLite] saveChats error:', e);
@@ -302,7 +332,11 @@ class TelegramSQLiteDatabase {
       }
       stmt.free();
       this.db.run('COMMIT');
-      this.persist();
+      // Update L1 Hot Cache
+      if (messages.length > 0 && messages[0].chatId) {
+        hotColdCache.appendHotMessages(messages[0].chatId, messages);
+      }
+      this.schedulePersist();
     } catch (e) {
       try { this.db.run('ROLLBACK'); } catch (_) {}
       console.error('[SQLite] saveMessages error:', e);
@@ -310,6 +344,11 @@ class TelegramSQLiteDatabase {
   }
 
   public getMessagesForChat(chatId: string): Message[] {
+    // 1. Check L1 Hot Cache (sub-millisecond instant retrieval)
+    const hotMsgs = hotColdCache.getHotMessages(chatId);
+    if (hotMsgs && hotMsgs.length > 0) {
+      return hotMsgs;
+    }
     if (!this.db) return [];
     try {
       const stmt = this.db.prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp ASC');
@@ -337,6 +376,7 @@ class TelegramSQLiteDatabase {
         });
       }
       stmt.free();
+      hotColdCache.putHotMessages(chatId, results);
       return results;
     } catch (e) {
       console.error('[SQLite] getMessagesForChat error:', e);

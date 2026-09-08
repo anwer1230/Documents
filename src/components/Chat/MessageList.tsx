@@ -212,10 +212,12 @@ const MessageRow = React.memo(({
   },
   (prevProps, nextProps) => {
     if (prevProps.index !== nextProps.index) return false;
+    const prevStyle: any = prevProps.style;
+    const nextStyle: any = nextProps.style;
     if (
-      prevProps.style.top !== nextProps.style.top ||
-      prevProps.style.height !== nextProps.style.height ||
-      prevProps.style.transform !== nextProps.style.transform
+      prevStyle?.top !== nextStyle?.top ||
+      prevStyle?.height !== nextStyle?.height ||
+      prevStyle?.transform !== nextStyle?.transform
     ) {
       return false;
     }

@@ -4904,13 +4904,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
 
       socket.on('batch_update', (updates: any[]) => {
-        if (Array.isArray(updates)) {
-          updates.forEach((update) => {
-            if (update?.type === 'new_alert' && update.alert) {
-              handleIncomingAlert(update.alert);
-            } else {
-              handleIncomingUpdate(update);
-            }
+        if (Array.isArray(updates) && updates.length > 0) {
+          // Offload batch state transitions into a single non-blocking react render cycle
+          React.startTransition(() => {
+            updates.forEach((update) => {
+              if (update?.type === 'new_alert' && update.alert) {
+                handleIncomingAlert(update.alert);
+              } else {
+                handleIncomingUpdate(update);
+              }
+            });
           });
         }
       });

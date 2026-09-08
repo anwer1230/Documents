@@ -1368,19 +1368,32 @@ async function startServer() {
   let socketUpdateBuffer: any[] = [];
   let socketFlushTimer: NodeJS.Timeout | null = null;
 
+  // Optimized low-latency micro-batch update buffer (40ms window, max 25 items)
   const queueBatchedSocketUpdate = (update: any) => {
     if (!update) return;
     socketUpdateBuffer.push(update);
-    if (!socketFlushTimer) {
-      socketFlushTimer = setTimeout(() => {
-        if (socketUpdateBuffer.length > 0) {
-          try {
-            io.emit('batch_update', socketUpdateBuffer);
-          } catch (_) {}
-          socketUpdateBuffer = [];
-        }
+
+    const flushBatch = () => {
+      if (socketUpdateBuffer.length > 0) {
+        const batch = socketUpdateBuffer;
+        socketUpdateBuffer = [];
+        try {
+          io.emit('batch_update', batch);
+        } catch (_) {}
+      }
+      if (socketFlushTimer) {
+        clearTimeout(socketFlushTimer);
         socketFlushTimer = null;
-      }, 350);
+      }
+    };
+
+    if (socketUpdateBuffer.length >= 25) {
+      flushBatch();
+      return;
+    }
+
+    if (!socketFlushTimer) {
+      socketFlushTimer = setTimeout(flushBatch, 45);
     }
   };
 
@@ -1388,19 +1401,8 @@ async function startServer() {
     serverRecentUpdates.push(update);
     if (serverRecentUpdates.length > 100) serverRecentUpdates.shift();
 
-    // Batch socket broadcast to protect client main thread
+    // Consolidated batch socket broadcast to eliminate redundant network cycles
     queueBatchedSocketUpdate(update);
-
-    // 1. Real-time WebSocket Broadcast via Socket.IO
-    try {
-      io.emit('telegram_update', update);
-      io.emit('raw_update', update);
-      if (update.type) {
-        io.emit(update.type, update);
-      }
-    } catch (ioErr) {
-      console.warn('[Socket.IO] Broadcast error:', ioErr);
-    }
 
     // 2. Real-time Server-Sent Events (SSE) Stream
     const dataPayload = `data: ${JSON.stringify(update)}\n\n`;
