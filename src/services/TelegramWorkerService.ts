@@ -4,6 +4,7 @@
  */
 
 import { CryptoAccelerationEngine } from '../utils/cryptoAcceleration';
+import { getGramJsWorkerProxy, isGramJsWorkerRunning, GramJsWorkerClient } from '../lib/telegramClient';
 
 export class TelegramWorkerService {
   private static instance: TelegramWorkerService;
@@ -147,6 +148,14 @@ export class TelegramWorkerService {
 
   public isWorkerActive(): boolean {
     return this.isAvailable;
+  }
+
+  public getGramJsWorker(): GramJsWorkerClient {
+    return getGramJsWorkerProxy();
+  }
+
+  public isGramJsWorkerActive(): boolean {
+    return isGramJsWorkerRunning();
   }
 }
 

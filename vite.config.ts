@@ -86,6 +86,9 @@ export default defineConfig(() => {
         '@': path.resolve(process.cwd(), '.'),
       },
     },
+    worker: {
+      format: 'es',
+    },
     build: {
       target: 'es2020',
       cssCodeSplit: true,

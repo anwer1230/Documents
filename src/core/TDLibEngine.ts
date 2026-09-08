@@ -9,6 +9,7 @@ import { tdlibWasm, TDLibWasmBridge } from './tdlib/TDLibWasmBridge';
 import { TLRPC } from './TLRPC';
 import { telegramDb } from './telegramDexieDb';
 import { Chat, Message, User } from '../types';
+import { getTelegramClient } from '../lib/telegramClient';
 
 export type EngineMode = 'gramjs' | 'tdlib_wasm';
 
@@ -70,10 +71,18 @@ export class TDLibEngine {
   }
 
   /**
-   * Execute TDLib JSON query with WASM acceleration
+   * Execute TDLib JSON query with WASM acceleration or GramJS worker
    */
   public async execute<T = any>(query: { '@type': string; [key: string]: any }): Promise<T> {
     await this.initialize();
+    if (this.mode === 'gramjs') {
+      try {
+        const client = getTelegramClient();
+        return await client.invoke<T>(query);
+      } catch (err) {
+        console.warn('[TDLibEngine] GramJS worker query fallback to TdClient:', err);
+      }
+    }
     return this.client.send<T>(query as unknown as TdApi.Object);
   }
 
