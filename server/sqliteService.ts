@@ -2,7 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 
-const nodeRequire = createRequire(import.meta.url);
+// Safe dynamic require helper compatible with both Node ESM (tsx dev) and bundled CommonJS (prod)
+// Uses an absolute path to avoid ERR_INVALID_ARG_VALUE when import.meta is empty in CJS
+const nodeRequire = createRequire(
+  typeof __filename !== 'undefined'
+    ? __filename
+    : path.resolve(process.cwd(), 'package.json')
+);
 
 export interface StoredAutomationRule {
   id: string;
