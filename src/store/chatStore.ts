@@ -48,6 +48,7 @@ export class ChatStore {
 
   // Tracks chats visited during the current session
   private visitedChatsInCurrentSession: Set<string> = new Set();
+  private persistDebounceTimer: any = null;
 
   // Listeners for store subscriptions
   private listeners: Set<() => void> = new Set();
@@ -210,15 +211,36 @@ export class ChatStore {
   }
 
   /**
-   * Persist both ScrollPositions and lastReadPositions safely to localStorage
+   * Persist both ScrollPositions and lastReadPositions safely to localStorage (Debounced to prevent UI lag on scroll)
    */
   private persistToStorage(): void {
     if (typeof window === 'undefined') return;
+    if (this.persistDebounceTimer) return;
+    this.persistDebounceTimer = setTimeout(() => {
+      this.persistDebounceTimer = null;
+      try {
+        localStorage.setItem(this.SCROLL_POSITIONS_KEY, JSON.stringify(this.ScrollPositions));
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.lastReadPositions));
+      } catch (err) {
+        console.warn('[chatStore] Error saving positions to localStorage:', err);
+      }
+    }, 250);
+  }
+
+  /**
+   * Immediately flushes debounced scroll positions to localStorage
+   */
+  public flushStorage(): void {
+    if (typeof window === 'undefined') return;
+    if (this.persistDebounceTimer) {
+      clearTimeout(this.persistDebounceTimer);
+      this.persistDebounceTimer = null;
+    }
     try {
       localStorage.setItem(this.SCROLL_POSITIONS_KEY, JSON.stringify(this.ScrollPositions));
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.lastReadPositions));
     } catch (err) {
-      console.warn('[chatStore] Error saving positions to localStorage:', err);
+      console.warn('[chatStore] Error flushing positions to localStorage:', err);
     }
   }
 

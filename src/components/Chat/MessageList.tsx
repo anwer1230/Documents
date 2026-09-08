@@ -13,12 +13,18 @@ import React, {
 import { ArrowDown, Pin, X, Loader2, Shield, Lock } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { MessageBubble } from './MessageBubble';
+import {
+  MessageSkeletonRow,
+  MessageThreadSkeleton,
+  generateHistoryFetchSkeletons,
+  SKELETON_HEIGHTS,
+  type SkeletonVariant,
+} from './MessageSkeleton';
 import { messagesController } from '../../core/MessagesController';
 import {
   List as VariableSizeList,
   List as FixedSizeList,
   List,
-  useDynamicRowHeight,
   type ListImperativeAPI,
   type RowComponentProps,
 } from 'react-window';
@@ -27,7 +33,7 @@ import {
 export { VariableSizeList, FixedSizeList };
 
 interface GroupedItem {
-  type: 'message' | 'date_divider' | 'unread_divider' | 'origin_badge';
+  type: 'message' | 'date_divider' | 'unread_divider' | 'origin_badge' | 'skeleton';
   id: string;
   message?: any;
   dateText?: string;
@@ -35,6 +41,77 @@ interface GroupedItem {
   isGroupMiddle?: boolean;
   isGroupEnd?: boolean;
   isSingle?: boolean;
+  skeletonVariant?: SkeletonVariant;
+  estimatedHeight?: number;
+}
+
+/**
+ * High-performance deterministic row height calculator for react-window.
+ * Accurately calculates height in O(1) time without triggering ResizeObserver re-renders.
+ */
+function estimateItemHeight(item?: GroupedItem): number {
+  if (!item) return 64;
+  if (item.type === 'date_divider') return 40;
+  if (item.type === 'unread_divider') return 34;
+  if (item.type === 'origin_badge') return 116;
+  if (item.type === 'skeleton') {
+    return item.estimatedHeight || (item.skeletonVariant ? SKELETON_HEIGHTS[item.skeletonVariant] : 72);
+  }
+
+  const msg = item.message;
+  if (!msg) return 60;
+
+  let height = 8; // py-1 padding (4px top + 4px bottom)
+
+  // Sender Name (in groups/channels)
+  if (!msg.isOutgoing && msg.senderName) {
+    height += 20;
+  }
+  // Forwarded Header
+  if (msg.forwardedFrom) {
+    height += 24;
+  }
+  // Reply Quote
+  if (msg.replyTo) {
+    height += 38;
+  }
+
+  // Media attachments
+  if (msg.media) {
+    if (msg.media.type === 'photo' || msg.media.type === 'video') {
+      height += 220;
+    } else if (msg.media.type === 'voice' || msg.media.type === 'audio') {
+      height += 72;
+    } else if (msg.media.type === 'sticker') {
+      height += 140;
+    } else if (msg.media.type === 'document' || msg.media.type === 'file') {
+      height += 68;
+    } else if (msg.media.type === 'poll') {
+      const answersCount = msg.media.pollData?.answers?.length || 3;
+      height += 80 + answersCount * 36;
+    }
+  }
+
+  // Link preview card
+  if (msg.linkPreview) {
+    height += 110;
+  }
+
+  // Text content calculation
+  if (msg.text) {
+    const textLen = msg.text.length;
+    const lines = Math.max(1, Math.ceil(textLen / 40));
+    height += Math.max(34, lines * 22 + 16);
+  } else if (!msg.media) {
+    height += 44;
+  }
+
+  // Reactions row
+  if (msg.reactions && Object.keys(msg.reactions).length > 0) {
+    height += 28;
+  }
+
+  return Math.min(Math.max(48, height), 620);
 }
 
 interface MessageRowCustomProps {
@@ -93,6 +170,14 @@ const MessageRow = React.memo(({
       );
     }
 
+    if (item.type === 'skeleton' && item.skeletonVariant) {
+      return (
+        <div style={style}>
+          <MessageSkeletonRow variant={item.skeletonVariant} />
+        </div>
+      );
+    }
+
     if (item.message) {
       const msg = item.message;
       return (
@@ -124,7 +209,33 @@ const MessageRow = React.memo(({
     }
 
     return <div style={style} />;
-}) as unknown as React.ComponentType<RowComponentProps<MessageRowCustomProps>>;
+  },
+  (prevProps, nextProps) => {
+    if (prevProps.index !== nextProps.index) return false;
+    if (
+      prevProps.style.top !== nextProps.style.top ||
+      prevProps.style.height !== nextProps.style.height ||
+      prevProps.style.transform !== nextProps.style.transform
+    ) {
+      return false;
+    }
+    const prevItem = prevProps.items[prevProps.index];
+    const nextItem = nextProps.items[nextProps.index];
+    if (prevItem !== nextItem) {
+      if (!prevItem || !nextItem) return false;
+      if (prevItem.id !== nextItem.id || prevItem.type !== nextItem.type) return false;
+      if (prevItem.message !== nextItem.message) return false;
+    }
+    const prevMsgId = prevItem?.message?.id;
+    const nextMsgId = nextItem?.message?.id;
+    if (prevMsgId && nextMsgId) {
+      const prevHighlighted = prevProps.highlightedMessageId === prevMsgId;
+      const nextHighlighted = nextProps.highlightedMessageId === nextMsgId;
+      if (prevHighlighted !== nextHighlighted) return false;
+    }
+    return true;
+  }
+) as unknown as React.ComponentType<RowComponentProps<MessageRowCustomProps>>;
 
 export const MessageList: React.FC = () => {
   const {
@@ -164,6 +275,7 @@ export const MessageList: React.FC = () => {
   const activeChatIdRef = useRef<string | null>(activeChatId);
   const isInitialScrollDoneRef = useRef<boolean>(false);
   const lastVisibleIndexRef = useRef<number>(-1);
+  const lastScrollSaveTimeRef = useRef<number>(0);
 
   const currentMessages = useMemo(() => {
     return (activeChatId && messages[activeChatId]) || [];
@@ -177,27 +289,41 @@ export const MessageList: React.FC = () => {
   const isLoadingOlder = activeChatId ? Boolean(isChatLoadingOlder[activeChatId]) : false;
   const hasMoreOnServer = activeChatId ? (chatHasMoreOlder[activeChatId] ?? true) : true;
 
-  // Dynamic row height cache for react-window with per-chat cache key
-  const dynamicRowHeight = useDynamicRowHeight({
-    defaultRowHeight: 64,
-    key: activeChatId || 'default',
-  });
+  // Dynamic skeletons generated on-the-fly during message history fetch
+  const olderSkeletons = useMemo<GroupedItem[]>(() => {
+    if (!isLoadingOlder) return [];
+    return generateHistoryFetchSkeletons('older') as GroupedItem[];
+  }, [isLoadingOlder]);
 
-  // Sort and group messages into renderable rows
+  // Sort and group messages into renderable rows, injecting dynamic skeleton placeholders during older history fetches
   const groupedItems = useMemo<GroupedItem[]>(() => {
-    if (!currentMessages || currentMessages.length === 0) return [];
-    const baseItems = messagesController.sortAndGroupMessages(currentMessages, readInboxMaxId) as GroupedItem[];
-    if (!hasMoreOnServer && baseItems.length > 0) {
-      return [
-        {
-          type: 'origin_badge',
-          id: 'origin_encrypted_badge',
-        },
-        ...baseItems,
-      ];
+    if (!currentMessages || currentMessages.length === 0) {
+      if (isLoadingOlder) {
+        return olderSkeletons;
+      }
+      return [];
     }
-    return baseItems;
-  }, [currentMessages, readInboxMaxId, hasMoreOnServer]);
+
+    const baseItems = messagesController.sortAndGroupMessages(currentMessages, readInboxMaxId) as GroupedItem[];
+    const items: GroupedItem[] = [];
+
+    if (isLoadingOlder && olderSkeletons.length > 0) {
+      items.push(...olderSkeletons);
+    } else if (!hasMoreOnServer && baseItems.length > 0) {
+      items.push({
+        type: 'origin_badge',
+        id: 'origin_encrypted_badge',
+      });
+    }
+
+    items.push(...baseItems);
+    return items;
+  }, [currentMessages, readInboxMaxId, hasMoreOnServer, isLoadingOlder, olderSkeletons]);
+
+  // Deterministic O(1) row height calculator eliminating ResizeObserver state recalculation storms
+  const getRowHeight = useCallback((index: number) => {
+    return estimateItemHeight(groupedItems[index]);
+  }, [groupedItems]);
 
   // Map: Message ID -> Index in groupedItems (mandatory for virtualized lists to locate message positions)
   const messageIdToIndexMap = useMemo(() => {
@@ -227,7 +353,7 @@ export const MessageList: React.FC = () => {
     await loadMoreChatMessages(activeChatId);
   }, [activeChatId, isLoadingOlder, hasMoreOnServer, loadMoreChatMessages]);
 
-  // Restore scroll anchor smoothly without jumping when older messages are prepended
+  // Restore scroll anchor smoothly without jumping when older messages or skeletons are prepended
   useLayoutEffect(() => {
     if (scrollAnchorRef.current.shouldRestore) {
       const el = listRef.current?.element;
@@ -239,7 +365,7 @@ export const MessageList: React.FC = () => {
       }
       scrollAnchorRef.current.shouldRestore = false;
     }
-  }, [currentMessages.length]);
+  }, [groupedItems.length]);
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback((behavior: 'smooth' | 'instant' = 'smooth') => {
@@ -468,28 +594,34 @@ export const MessageList: React.FC = () => {
     }
 
     if (activeChatId) {
-      let lastReadMsgId: string | undefined = undefined;
-      if (isNearBottom && currentMessages.length > 0) {
-        lastReadMsgId = currentMessages[currentMessages.length - 1]?.id;
-      } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
-        for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
-          if (groupedItems[i]?.message?.id) {
-            lastReadMsgId = groupedItems[i].message.id;
-            break;
+      const now = Date.now();
+      // Throttle chatStore updates to at most once every 120ms during rapid scrolling
+      if (now - lastScrollSaveTimeRef.current > 120 || isNearBottom) {
+        lastScrollSaveTimeRef.current = now;
+
+        let lastReadMsgId: string | undefined = undefined;
+        if (isNearBottom && currentMessages.length > 0) {
+          lastReadMsgId = currentMessages[currentMessages.length - 1]?.id;
+        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
+          for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
+            if (groupedItems[i]?.message?.id) {
+              lastReadMsgId = groupedItems[i].message.id;
+              break;
+            }
           }
         }
-      }
 
-      chatStore.saveLastReadPosition(activeChatId, {
-        lastReadMessageId: lastReadMsgId,
-        scrollTop,
-        scrollHeight,
-        isNearBottom,
-      });
+        chatStore.saveLastReadPosition(activeChatId, {
+          lastReadMessageId: lastReadMsgId,
+          scrollTop,
+          scrollHeight,
+          isNearBottom,
+        });
 
-      if (lastReadMsgId) {
-        const numId = Number(lastReadMsgId);
-        chatStore.setScrollPosition(activeChatId, !isNaN(numId) ? numId : scrollTop);
+        if (lastReadMsgId) {
+          const numId = Number(lastReadMsgId);
+          chatStore.setScrollPosition(activeChatId, !isNaN(numId) ? numId : scrollTop);
+        }
       }
     }
 
@@ -617,37 +749,49 @@ export const MessageList: React.FC = () => {
         </div>
       )}
 
-      {/* Empty State */}
+      {/* Loading or Empty State */}
       {groupedItems.length === 0 ? (
-        <div
-          id="tg-messages-empty-area"
-          className="flex-1 w-full h-full flex items-center justify-center text-center p-6 select-none tg-wallpaper-pattern"
-          style={{
-            backgroundColor: 'var(--tg-theme-chat-bg)',
-          }}
-        >
+        activeChatId && (!messages[activeChatId] || isLoadingOlder) ? (
           <div
-            className="p-6 rounded-3xl max-w-sm backdrop-blur-md border shadow-lg"
+            id="tg-messages-skeleton-area"
+            className="flex-1 w-full h-full overflow-hidden select-none tg-wallpaper-pattern"
             style={{
-              backgroundColor: 'var(--tg-theme-surface)',
-              borderColor: 'var(--tg-theme-border)',
+              backgroundColor: 'var(--tg-theme-chat-bg)',
             }}
           >
-            <div className="w-12 h-12 rounded-full bg-[#2481cc]/20 text-[#2481cc] flex items-center justify-center mx-auto mb-3">
-              <Shield className="w-6 h-6" />
-            </div>
-            <div className="font-bold text-base mb-1" style={{ color: 'var(--tg-theme-bubble-in-text)' }}>
-              {activeChat?.title}
-            </div>
-            <p className="text-xs text-gray-400 leading-relaxed">
-              {isArabic
-                ? 'لا توجد رسائل سابقة في هذه المحادثة. ابدأ بالتراسل الآن مع مزامنة سحابية فورية!'
-                : 'No messages yet in this chat. Start messaging now with instant cloud synchronization!'}
-            </p>
+            <MessageThreadSkeleton count={7} />
           </div>
-        </div>
+        ) : (
+          <div
+            id="tg-messages-empty-area"
+            className="flex-1 w-full h-full flex items-center justify-center text-center p-6 select-none tg-wallpaper-pattern"
+            style={{
+              backgroundColor: 'var(--tg-theme-chat-bg)',
+            }}
+          >
+            <div
+              className="p-6 rounded-3xl max-w-sm backdrop-blur-md border shadow-lg"
+              style={{
+                backgroundColor: 'var(--tg-theme-surface)',
+                borderColor: 'var(--tg-theme-border)',
+              }}
+            >
+              <div className="w-12 h-12 rounded-full bg-[#2481cc]/20 text-[#2481cc] flex items-center justify-center mx-auto mb-3">
+                <Shield className="w-6 h-6" />
+              </div>
+              <div className="font-bold text-base mb-1" style={{ color: 'var(--tg-theme-bubble-in-text)' }}>
+                {activeChat?.title}
+              </div>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                {isArabic
+                  ? 'لا توجد رسائل سابقة في هذه المحادثة. ابدأ بالتراسل الآن مع مزامنة سحابية فورية!'
+                  : 'No messages yet in this chat. Start messaging now with instant cloud synchronization!'}
+              </p>
+            </div>
+          </div>
+        )
       ) : (
-        /* Virtualized Message Feed Container powered by react-window VariableSizeList */
+        /* Virtualized Message Feed Container powered by react-window VariableSizeList with O(1) dynamic row heights */
         <VariableSizeList
           id="tg-messages-scroll-area"
           listRef={listRef}
@@ -658,7 +802,7 @@ export const MessageList: React.FC = () => {
             width: '100%',
           }}
           rowCount={groupedItems.length}
-          rowHeight={dynamicRowHeight}
+          rowHeight={getRowHeight}
           rowComponent={MessageRow as any}
           rowProps={rowProps}
           rowKey={getRowKey}
