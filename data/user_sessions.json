@@ -35,11 +35,11 @@
         }
       },
       "gps_geo": {
-        "lat": 13.5371755,
-        "lon": 43.9911824,
-        "accuracy": 4.300000190734863,
+        "lat": 13.5371206,
+        "lon": 43.991152,
+        "accuracy": 11.126999855041504,
         "source": "gps",
-        "updated_at": "2026-09-08T19:39:30.244336"
+        "updated_at": "2026-09-08T19:45:40.455406"
       }
     },
     {
@@ -85,14 +85,29 @@
     {
       "install_id": "fp-7eb6505f69e869f4155f159c",
       "user_id": "user_1",
-      "ip": "127.0.0.x",
+      "ip": "127.0.0.1",
       "geo": {},
       "user_agent": "curl/8.14.1",
       "cookies": "{}",
       "timestamp": "2026-07-14T17:20:02.123017",
-      "last_seen": "2026-07-15T11:55:52.427112",
+      "last_seen": "2026-09-08T19:45:56.396404",
       "is_active": true,
-      "users_state": {}
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": false,
+          "connected": false,
+          "is_running": false,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": false,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
     },
     {
       "install_id": "fp-6c96beb0938a412560868e7a",
