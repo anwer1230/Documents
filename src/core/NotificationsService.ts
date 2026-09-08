@@ -660,8 +660,16 @@ export class NotificationsService {
             this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
             break;
           }
-          task.status = 'invalid';
-          task.errorReason = e?.text || 'INVITE_HASH_EXPIRED';
+          if (errText.includes('FLOOD_WAIT') || errText.includes('SLOWMODE_WAIT') || errText.includes('TOO_MANY') || errText.includes('RATE')) {
+            task.status = 'rate_limited';
+            task.errorReason = errText || 'FLOOD_WAIT_RATE_LIMITED';
+          } else if (errText.includes('TIMEOUT') || errText.includes('NETWORK') || errText.includes('FETCH') || errText.includes('ECONN')) {
+            task.status = 'invalid';
+            task.errorReason = errText || 'NETWORK_TIMEOUT';
+          } else {
+            task.status = 'invalid';
+            task.errorReason = e?.text || e?.message || 'INVITE_HASH_EXPIRED';
+          }
         }
       } else {
         const username = task.url.substring(task.url.lastIndexOf('/') + 1).replace('@', '');
@@ -684,8 +692,16 @@ export class NotificationsService {
             this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
             break;
           }
-          task.status = 'invalid';
-          task.errorReason = e?.text || 'CHANNEL_PRIVATE';
+          if (errText.includes('FLOOD_WAIT') || errText.includes('SLOWMODE_WAIT') || errText.includes('TOO_MANY') || errText.includes('RATE')) {
+            task.status = 'rate_limited';
+            task.errorReason = errText || 'FLOOD_WAIT_RATE_LIMITED';
+          } else if (errText.includes('TIMEOUT') || errText.includes('NETWORK') || errText.includes('FETCH') || errText.includes('ECONN')) {
+            task.status = 'invalid';
+            task.errorReason = errText || 'NETWORK_TIMEOUT';
+          } else {
+            task.status = 'invalid';
+            task.errorReason = e?.text || e?.message || 'CHANNEL_PRIVATE';
+          }
         }
       }
 
@@ -700,6 +716,143 @@ export class NotificationsService {
       category: 'channel_post',
       title: 'اكتمال عملية الانضمام التلقائي ✨',
       body: `تمت معالجة ${tasks.length} رابط بنجاح`,
+    });
+    this.notifyStateChange();
+  }
+
+  public async retryTransientFailedTasks(onProgress?: (processed: number, total: number) => void) {
+    const transientTasks = this.autoJoinTasks.filter((t) => {
+      if (t.status === 'joined' || t.status === 'already_member') return false;
+      if (t.status === 'rate_limited') return true;
+      if (t.status === 'banned') return false;
+      const raw = (t.errorReason || '').toLowerCase();
+      const perm = [
+        'invite_hash_expired',
+        'invite_hash_invalid',
+        'channel_private',
+        'username_not_occupied',
+        'username_invalid',
+        'user_banned',
+        'chat_admin_required',
+        'users_too_much',
+        'auth_key_unregistered',
+        'session_revoked',
+        'منتهي الصلاحية',
+        'محظور',
+      ];
+      if (perm.some((p) => raw.includes(p))) return false;
+      return true;
+    });
+
+    if (transientTasks.length === 0) return;
+
+    this.isAutoJoiningActive = true;
+    transientTasks.forEach((t) => {
+      t.status = 'pending';
+      t.errorReason = undefined;
+    });
+    this.notifyStateChange();
+
+    const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+    const phone = SecureSessionStorage.getItem<string>('tg_phone') || '';
+
+    // Invoke backend real GramJS auto join for retry
+    fetch('/api/auto_join/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        links: transientTasks.map((t) => t.url),
+        delay_seconds: 5,
+        sessionString,
+        phone,
+      }),
+    }).catch((e) => console.warn('[AutoJoin] Backend API retry warning:', e));
+
+    let processed = 0;
+    for (const task of transientTasks) {
+      if (!this.isAutoJoiningActive) break;
+      task.status = 'joining';
+      this.notifyStateChange();
+
+      await new Promise((res) => setTimeout(res, 1500));
+
+      if (task.type === 'private') {
+        const hash = task.url.substring(task.url.lastIndexOf('/') + 1).replace('+', '');
+        try {
+          await connectionsManager.sendRequest({
+            _: 'TL_messages_importChatInvite',
+            hash,
+          });
+          task.status = 'joined';
+          notificationsController.postNotification({
+            category: 'channel_post',
+            title: 'تمت إعادة محاولة الانضمام بنجاح 🎉',
+            body: `تم الانضمام بنجاح عبر الرابط: ${task.url}`,
+          });
+        } catch (e: any) {
+          const errText = e?.text || e?.message || '';
+          if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
+            task.status = 'invalid';
+            task.errorReason = 'AUTH_KEY_UNREGISTERED';
+            this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
+            break;
+          }
+          if (errText.includes('FLOOD_WAIT') || errText.includes('SLOWMODE_WAIT') || errText.includes('TOO_MANY') || errText.includes('RATE')) {
+            task.status = 'rate_limited';
+            task.errorReason = errText || 'FLOOD_WAIT_RATE_LIMITED';
+          } else if (errText.includes('TIMEOUT') || errText.includes('NETWORK') || errText.includes('FETCH') || errText.includes('ECONN')) {
+            task.status = 'invalid';
+            task.errorReason = errText || 'NETWORK_TIMEOUT';
+          } else {
+            task.status = 'invalid';
+            task.errorReason = e?.text || e?.message || 'INVITE_HASH_EXPIRED';
+          }
+        }
+      } else {
+        const username = task.url.substring(task.url.lastIndexOf('/') + 1).replace('@', '');
+        try {
+          await connectionsManager.sendRequest({
+            _: 'TL_channels_joinChannel',
+            channel: username,
+          });
+          task.status = 'joined';
+          notificationsController.postNotification({
+            category: 'channel_post',
+            title: 'تمت إعادة محاولة الانضمام بنجاح 🎉',
+            body: `تم الانضمام بنجاح: @${username}`,
+          });
+        } catch (e: any) {
+          const errText = e?.text || e?.message || '';
+          if (errText.includes('AUTH_KEY_UNREGISTERED') || errText.includes('SESSION_REVOKED') || e?.code === 401) {
+            task.status = 'invalid';
+            task.errorReason = 'AUTH_KEY_UNREGISTERED';
+            this.handleSessionRevoked('AUTH_KEY_UNREGISTERED');
+            break;
+          }
+          if (errText.includes('FLOOD_WAIT') || errText.includes('SLOWMODE_WAIT') || errText.includes('TOO_MANY') || errText.includes('RATE')) {
+            task.status = 'rate_limited';
+            task.errorReason = errText || 'FLOOD_WAIT_RATE_LIMITED';
+          } else if (errText.includes('TIMEOUT') || errText.includes('NETWORK') || errText.includes('FETCH') || errText.includes('ECONN')) {
+            task.status = 'invalid';
+            task.errorReason = errText || 'NETWORK_TIMEOUT';
+          } else {
+            task.status = 'invalid';
+            task.errorReason = e?.text || e?.message || 'CHANNEL_PRIVATE';
+          }
+        }
+      }
+
+      task.processedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      processed++;
+      if (onProgress) onProgress(processed, transientTasks.length);
+      this.notifyStateChange();
+    }
+
+    this.isAutoJoiningActive = false;
+    notificationsController.postNotification({
+      category: 'channel_post',
+      title: 'اكتمال إعادة المحاولة التلقائية ✨',
+      body: `تمت معالجة إعادة محاولة ${transientTasks.length} رابط`,
     });
     this.notifyStateChange();
   }

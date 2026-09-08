@@ -22,6 +22,7 @@ import {
   ShieldAlert,
   ArrowRight,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
@@ -32,6 +33,91 @@ export interface LinkValidationResult {
   type: 'public' | 'private' | 'invalid';
   reason?: string;
   normalizedUrl: string;
+}
+
+/**
+ * Distinguishes between transient errors (e.g. FloodWait / rate limit, temporary network drops, server timeouts)
+ * and permanent errors (e.g. expired invite hash, revoked session, banned from channel, user restrictions).
+ */
+export function isTransientError(task?: AutoJoinerTask): boolean {
+  if (!task) return false;
+  if (
+    task.status === 'joined' ||
+    task.status === 'already_member' ||
+    task.status === 'pending' ||
+    task.status === 'joining'
+  ) {
+    return false;
+  }
+
+  // Definite transient status in MTProto / Telegram
+  if (task.status === 'rate_limited') {
+    return true;
+  }
+
+  // Definite permanent status
+  if (task.status === 'banned') {
+    return false;
+  }
+
+  const rawReason = (task.errorReason || '').toLowerCase();
+
+  // Known permanent failure patterns in English and Arabic
+  const permanentKeywords = [
+    'invite_hash_expired',
+    'invite_hash_invalid',
+    'hash_expired',
+    'hash_invalid',
+    'channel_private',
+    'username_not_occupied',
+    'username_invalid',
+    'user_banned',
+    'banned_in_channel',
+    'chat_admin_required',
+    'users_too_much',
+    'auth_key_unregistered',
+    'session_revoked',
+    'منتهي الصلاحية',
+    'محظور',
+    'خاصة',
+  ];
+
+  if (permanentKeywords.some((k) => rawReason.includes(k))) {
+    return false;
+  }
+
+  // Explicit transient keywords in English and Arabic
+  const transientKeywords = [
+    'flood',
+    'wait',
+    'slowmode',
+    'rate_limit',
+    'rate',
+    'limit',
+    'too_many',
+    'قيود',
+    'timeout',
+    'network',
+    'connection',
+    'fetch',
+    '500',
+    '502',
+    '503',
+    '504',
+    'server',
+    'busy',
+    'econn',
+    'etimedout',
+    'temporary',
+    'retry',
+  ];
+
+  if (transientKeywords.some((k) => rawReason.includes(k))) {
+    return true;
+  }
+
+  // Any other failure not explicitly marked as permanent is treated as transient and eligible for retry
+  return true;
 }
 
 /**
@@ -262,7 +348,7 @@ export const AutoJoinerModal: React.FC = () => {
     let pending = 0;
 
     tasks.forEach((t) => {
-      if (t.status === 'joined') joined++;
+      if (t.status === 'joined' || t.status === 'already_member') joined++;
       else if (t.status === 'invalid' || t.status === 'banned' || t.status === 'rate_limited') failed++;
       else if (t.status === 'joining') joining++;
       else if (t.status === 'pending') pending++;
@@ -270,6 +356,20 @@ export const AutoJoinerModal: React.FC = () => {
 
     return { joined, failed, joining, pending };
   }, [tasks]);
+
+  // Distinguish transient vs permanent errors for retry operation
+  const transientFailedTasks = useMemo(() => {
+    return tasks.filter((t) => isTransientError(t));
+  }, [tasks]);
+
+  const permanentFailedTasks = useMemo(() => {
+    return tasks.filter(
+      (t) => (t.status === 'invalid' || t.status === 'banned') && !isTransientError(t)
+    );
+  }, [tasks]);
+
+  const transientFailedCount = transientFailedTasks.length;
+  const permanentFailedCount = permanentFailedTasks.length;
 
   // Current joining channel URL for progress bar subtitle
   const currentJoiningTask = useMemo(() => {
@@ -314,6 +414,24 @@ export const AutoJoinerModal: React.FC = () => {
         ? `تم تحديد الروابط الصالحة فقط (${validItemsCount} رابط)`
         : `Selected valid t.me links only (${validItemsCount})`,
       '🛡️'
+    );
+  };
+
+  // Select only transient failed links for targeted retry
+  const handleSelectTransientFailed = () => {
+    if (isProcessing) return;
+    const transientUrls = new Set(transientFailedTasks.map((t) => t.url));
+    setLinkItems((prev) =>
+      prev.map((item) => ({
+        ...item,
+        selected: transientUrls.has(item.url) || transientUrls.has(item.normalizedUrl),
+      }))
+    );
+    showToast(
+      isArabic
+        ? `تم تحديد الروابط الفاشلة مؤقتاً (${transientFailedCount})`
+        : `Selected transient failed links (${transientFailedCount})`,
+      '🔄'
     );
   };
 
@@ -455,6 +573,44 @@ export const AutoJoinerModal: React.FC = () => {
     fetch('/api/auto_join/stop', { method: 'POST' }).catch(() => {});
     setIsProcessing(false);
     showToast(isArabic ? 'تم إيقاف عملية الانضمام الجماعي ⏹️' : 'Bulk join stopped ⏹️', '⚠️');
+  };
+
+  // Step 2: Auto-retry only transient failed links from the bulk operation
+  const handleAutoRetryFailed = async () => {
+    if (isProcessing) return;
+    if (transientFailedTasks.length === 0) {
+      showToast(
+        isArabic
+          ? 'لا توجد روابط ذات أخطاء مؤقتة لإعادة محاولتها'
+          : 'No transient failed links found to retry',
+        'ℹ️'
+      );
+      return;
+    }
+
+    const retryUrls = transientFailedTasks.map((t) => t.url);
+
+    setIsProcessing(true);
+    setProgress({ processed: 0, total: retryUrls.length });
+
+    showToast(
+      isArabic
+        ? `بدء إعادة محاولة الانضمام لـ ${retryUrls.length} رابط واجه قيوداً مؤقتة...`
+        : `Retrying ${retryUrls.length} links with transient errors...`,
+      '🔄'
+    );
+
+    await notificationsService.retryTransientFailedTasks((processed, total) => {
+      setProgress({ processed, total });
+    });
+
+    setIsProcessing(false);
+    showToast(
+      isArabic
+        ? `اكتملت إعادة محاولة الروابط الفاشلة مؤقتاً (${retryUrls.length} رابط) ✨`
+        : `Auto-retry completed for ${retryUrls.length} transient failed links ✨`,
+      '✨'
+    );
   };
 
   // Calculate percentage
@@ -671,6 +827,26 @@ export const AutoJoinerModal: React.FC = () => {
                       <Lock className="w-3 h-3" />
                       <span>{isArabic ? 'الخاصة' : 'Private'}</span>
                     </button>
+
+                    {transientFailedCount > 0 && !isProcessing && (
+                      <button
+                        type="button"
+                        onClick={handleSelectTransientFailed}
+                        className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-300 text-[11px] font-semibold transition-all flex items-center gap-1 border border-amber-500/40 cursor-pointer"
+                        title={
+                          isArabic
+                            ? 'تحديد الروابط التي واجهت قيوداً مؤقتة فقط'
+                            : 'Select only transient failed links'
+                        }
+                      >
+                        <RotateCcw className="w-3 h-3 text-amber-400" />
+                        <span>
+                          {isArabic
+                            ? `الفاشلة مؤقتاً (${transientFailedCount})`
+                            : `Transient (${transientFailedCount})`}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -773,10 +949,25 @@ export const AutoJoinerModal: React.FC = () => {
                             </span>
                           )}
 
-                          {status === 'invalid' && (
-                            <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-bold flex items-center gap-1 border border-rose-500/30">
+                          {/* Transient failure badge (e.g. rate limit, flood wait, network timeout) */}
+                          {(status === 'rate_limited' || (status === 'invalid' && task && isTransientError(task))) && (
+                            <span
+                              className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold flex items-center gap-1 border border-amber-500/30"
+                              title={task?.errorReason || (isArabic ? 'خطأ مؤقت في الاتصال أو قيود السرعة' : 'Transient rate limit / network error')}
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>{isArabic ? 'مؤقت (قابل للإعادة)' : 'Transient Error'}</span>
+                            </span>
+                          )}
+
+                          {/* Permanent failure badge (e.g. expired hash, banned, private) */}
+                          {(status === 'banned' || (status === 'invalid' && task && !isTransientError(task))) && (
+                            <span
+                              className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[10px] font-bold flex items-center gap-1 border border-rose-500/30"
+                              title={task?.errorReason || (isArabic ? 'فشل دائم' : 'Permanent error')}
+                            >
                               <XCircle className="w-3 h-3" />
-                              <span>{task?.errorReason || (isArabic ? 'فشل الانضمام' : 'Failed')}</span>
+                              <span>{task?.errorReason || (isArabic ? 'فشل دائم' : 'Failed')}</span>
                             </span>
                           )}
 
@@ -950,7 +1141,14 @@ export const AutoJoinerModal: React.FC = () => {
 
                 <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 flex items-center justify-between">
                   <span>{isArabic ? 'فشلت:' : 'Failed:'}</span>
-                  <span className="font-bold font-mono">{stats.failed}</span>
+                  <span className="font-bold font-mono">
+                    {stats.failed}
+                    {transientFailedCount > 0 && (
+                      <span className="text-[10px] text-amber-300 ml-1 font-normal">
+                        ({transientFailedCount} {isArabic ? 'مؤقت' : 'transient'})
+                      </span>
+                    )}
+                  </span>
                 </div>
 
                 <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-300 flex items-center justify-between">
@@ -960,6 +1158,47 @@ export const AutoJoinerModal: React.FC = () => {
                   </span>
                 </div>
               </div>
+
+              {/* TRANSIENT ERRORS AUTO-RETRY CALLOUT BANNER */}
+              {!isProcessing && transientFailedCount > 0 && (
+                <div
+                  id="tg-autojoin-retry-banner"
+                  className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in duration-200"
+                >
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center shrink-0 mt-0.5 border border-amber-500/30">
+                      <RotateCcw className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-xs text-amber-200 flex items-center gap-1.5 flex-wrap">
+                        <span>
+                          {isArabic
+                            ? `روابط فشلت بأخطاء مؤقتة (${transientFailedCount})`
+                            : `Transient Failures Available for Retry (${transientFailedCount})`}
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-200 font-mono">
+                          {isArabic ? 'جاهز لإعادة المحاولة' : 'Ready to retry'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-amber-300/80 mt-0.5 leading-relaxed">
+                        {isArabic
+                          ? `فشل الانضمام لـ ${transientFailedCount} رابط بسبب قيود مؤقتة (مثل FloodWait أو بطء الشبكة). الأخطاء الدائمة (${permanentFailedCount}) مستبعدة.`
+                          : `${transientFailedCount} link(s) returned transient rate limits or network issues. Permanent errors (${permanentFailedCount}) are safely excluded.`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    id="btn-auto-retry-failed-banner"
+                    onClick={handleAutoRetryFailed}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 active:scale-95 text-slate-950 text-xs font-bold transition-all shadow-md shadow-amber-950/40 flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>{isArabic ? 'إعادة محاولة الفاشلة تلقائياً' : 'Auto-Retry Failed'}</span>
+                  </button>
+                </div>
+              )}
 
               {/* Current joining channel subtitle */}
               {isProcessing && currentJoiningTask && (
@@ -1119,6 +1358,28 @@ export const AutoJoinerModal: React.FC = () => {
           </button>
 
           <div className="flex items-center gap-2">
+            {/* 'Auto-Retry Failed' Button: Retries only transient failed links from initial bulk operation */}
+            {!isProcessing && transientFailedCount > 0 && (
+              <button
+                type="button"
+                id="btn-auto-retry-failed"
+                onClick={handleAutoRetryFailed}
+                className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 active:scale-95 text-xs font-bold transition-all shadow-lg shadow-amber-950/40 flex items-center gap-2 cursor-pointer"
+                title={
+                  isArabic
+                    ? `إعادة محاولة الانضمام إلى ${transientFailedCount} رابط فشل بأخطاء مؤقتة (استبعاد الأخطاء الدائمة)`
+                    : `Auto-retry ${transientFailedCount} links that returned transient errors during bulk join`
+                }
+              >
+                <RotateCcw className="w-4 h-4 text-amber-400" />
+                <span>
+                  {isArabic
+                    ? `إعادة محاولة الفاشلة تلقائياً (${transientFailedCount})`
+                    : `Auto-Retry Failed (${transientFailedCount})`}
+                </span>
+              </button>
+            )}
+
             {isProcessing ? (
               <button
                 type="button"
