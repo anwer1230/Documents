@@ -42,9 +42,11 @@ import { ChatObject } from '../../core/ChatObject';
 import { UserObject } from '../../core/UserObject';
 import { NotificationCenter } from '../../core/NotificationCenter';
 import { draftSyncService } from '../../services/DraftSyncService';
+import { useSoundEffects } from '../../hooks/useSoundEffects';
 import confetti from 'canvas-confetti';
 
 export const ChatInput: React.FC = () => {
+  const { playSendSound } = useSoundEffects();
   const {
     activeChat,
     activeChatId,
@@ -265,6 +267,7 @@ export const ChatInput: React.FC = () => {
       setChatDraft(activeChatId, '');
       messagesController.recordMessageSent(activeChatId);
     }
+    playSendSound();
     sendMessage(text);
     setText('');
     setDismissedPreviewUrl(null);

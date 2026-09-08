@@ -274,6 +274,7 @@ export type SettingsSubPage =
   | 'member_requests'
   | 'cache_by_chats'
   | 'app_update'
+  | 'settings_screen'
   | 'premium';
 
 export interface AppSettings {
@@ -309,6 +310,14 @@ export interface AppSettings {
   plusThemeEnabled?: boolean;
   useSQLiteMMAP?: boolean;
   biometricLock?: boolean;
+  // Telegram Web Settings Extensions
+  notificationSound?: 'classic' | 'beep' | 'chime' | 'bubble' | 'silent';
+  enableSendSound?: boolean;
+  enableClickSound?: boolean;
+  dataSaver?: boolean;
+  preloadThumbnails?: boolean;
+  enableTTS?: boolean;
+  ttsLanguage?: string;
 }
 
 export interface ActiveCall {

@@ -108,6 +108,7 @@ import { GiftAuctionsView } from './GiftAuctionsView';
 import { ChannelBoostsView } from './ChannelBoostsView';
 import { MemberRequestsView } from './MemberRequestsView';
 import { CacheByChatsView } from './CacheByChatsView';
+import { SettingsScreen } from '../Settings/SettingsScreen';
 import { AppUpdateSettingsView } from './AppUpdateSettingsView';
 import { AccountSettingsView } from './AccountSettingsView';
 import { AccountProfileSettings } from '../Settings/AccountProfileSettings';
@@ -299,6 +300,7 @@ export const SettingsModal: React.FC = () => {
                 {settingsSubPage === 'member_requests' && <MemberRequestsView onBack={goBack} />}
                 {settingsSubPage === 'cache_by_chats' && <CacheByChatsView onBack={goBack} />}
                 {settingsSubPage === 'app_update' && <AppUpdateSettingsView onBack={goBack} />}
+                {settingsSubPage === 'settings_screen' && <SettingsScreen onBack={goBack} />}
               </motion.div>
             </AnimatePresence>
           </motion.div>
@@ -487,6 +489,13 @@ const MainSettingsView: React.FC<{
             {isArabic ? 'إعدادات تيليجرام' : 'Telegram Settings'}
           </div>
 
+          <SettingsListItem
+            icon={<Settings className="w-5 h-5 text-cyan-400" />}
+            iconBg="bg-cyan-500/20"
+            title={isArabic ? 'إعدادات Telegram Web (المظهر، الأصوات، البيانات، النطق)' : 'Telegram Web Settings Screen'}
+            subtitle={isArabic ? 'الوضع الليلي، نغمات الإشعارات، توفير البيانات، قراءة الرسائل TTS' : 'Appearance, Sounds & Ringtones, Data Saver, Speech TTS'}
+            onClick={() => onNavigate('settings_screen')}
+          />
           <SettingsListItem
             icon={<User className="w-5 h-5 text-blue-400" />}
             iconBg="bg-blue-500/20"

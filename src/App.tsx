@@ -57,6 +57,9 @@ import { ScreenshotBlockedToast } from './components/Notifications/ScreenshotBlo
 import { AppLockOverlay } from './components/Auth/AppLockOverlay';
 import { NotificationCenter } from './core/NotificationCenter';
 import { appUpdateController } from './core/messenger/AppUpdateController';
+import { useTTS } from './hooks/useTTS';
+import { useSettingsStore, applyTheme } from './stores/settingsStore';
+import { initDB } from './db/sqlite';
 
 const TelegramAppContent: React.FC = () => {
   const {
@@ -70,6 +73,20 @@ const TelegramAppContent: React.FC = () => {
     isOffline,
     refreshDialogs,
   } = useTelegram();
+
+  // Telegram Web Official Settings & TTS Hook
+  useTTS();
+  const { settings: webSettings, loadSettings: loadWebSettings } = useSettingsStore();
+
+  React.useEffect(() => {
+    initDB().catch(() => {});
+    loadWebSettings().catch(() => {});
+  }, [loadWebSettings]);
+
+  React.useEffect(() => {
+    applyTheme(webSettings.theme);
+  }, [webSettings.theme]);
+
   const [showUpdateDialog, setShowUpdateDialog] = React.useState(false);
   const [showUpdateActivity, setShowUpdateActivity] = React.useState(false);
   const isArabic = settings.language === 'ar';

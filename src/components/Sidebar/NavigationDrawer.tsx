@@ -37,6 +37,7 @@ import {
   Bot,
   Search,
   Activity,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
@@ -841,6 +842,31 @@ export const NavigationDrawer: React.FC = () => {
                     >
                       <Settings className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#5288c1]' : 'text-gray-400'}`} />
                       <span>{isArabic ? 'الإعدادات' : 'Settings'}</span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* Telegram Web Official Settings */}
+                {(() => {
+                  const isActive = activeModal === 'settings' && settingsSubPage === 'settings_screen';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-web-settings"
+                      onClick={() => handleItemClick(() => openSettingsPage('settings_screen'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-cyan-500/20 text-cyan-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-cyan-400'
+                          : 'hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <SlidersHorizontal className={`w-5 h-5 shrink-0 ${isActive ? 'text-cyan-300' : 'text-cyan-400'} group-hover:scale-110 transition-transform`} />
+                        <span>{isArabic ? 'إعدادات Telegram Web' : 'Telegram Web Settings'}</span>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/25 text-cyan-200 border border-cyan-400/30 rounded font-mono">
+                        WEB
+                      </span>
                     </motion.button>
                   );
                 })()}

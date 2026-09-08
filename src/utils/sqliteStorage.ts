@@ -143,6 +143,11 @@ class TelegramSQLiteDatabase {
         updated_at INTEGER
       );
 
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     `);
 
@@ -918,6 +923,71 @@ class TelegramSQLiteDatabase {
       activeSecretSessions,
       lastMessageTime,
     };
+  }
+
+  // SQLite Ops for Key-Value App Settings
+  public async saveSetting(key: string, value: string): Promise<void> {
+    await this.init();
+    if (!this.db) return;
+    try {
+      this.db.run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, value]);
+      await this.persist();
+    } catch (e) {
+      console.warn('[SQLite] Error saving setting:', e);
+    }
+  }
+
+  public async getSetting(key: string): Promise<string | null> {
+    await this.init();
+    if (!this.db) return null;
+    try {
+      const stmt = this.db.prepare('SELECT value FROM settings WHERE key = ?');
+      stmt.bind([key]);
+      if (stmt.step()) {
+        const row = stmt.get();
+        stmt.free();
+        return row && row[0] !== undefined ? String(row[0]) : null;
+      }
+      stmt.free();
+    } catch (e) {
+      console.warn('[SQLite] Error getting setting:', e);
+    }
+    return null;
+  }
+
+  public async run(sql: string, params?: any[]): Promise<void> {
+    await this.init();
+    if (!this.db) return;
+    try {
+      if (params && params.length) {
+        this.db.run(sql, params);
+      } else {
+        this.db.run(sql);
+      }
+      await this.persist();
+    } catch (e) {
+      console.warn('[SQLite] Error running query:', sql, e);
+    }
+  }
+
+  public async get(sql: string, params?: any[]): Promise<any | null> {
+    await this.init();
+    if (!this.db) return null;
+    try {
+      const stmt = this.db.prepare(sql);
+      if (params && params.length) {
+        stmt.bind(params);
+      }
+      if (stmt.step()) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        return row;
+      }
+      stmt.free();
+    } catch (e) {
+      console.warn('[SQLite] Error getting query result:', sql, e);
+    }
+    return null;
   }
 }
 
