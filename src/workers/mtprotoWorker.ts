@@ -10,7 +10,7 @@ import { CryptoAccelerationEngine } from '../utils/cryptoAcceleration';
 
 export interface WorkerRpcRequest {
   id: string;
-  type: 'ENCRYPT_IGE' | 'DECRYPT_IGE' | 'SHA256' | 'PROCESS_DIFF' | 'PARSE_MESSAGES';
+  type: 'ENCRYPT_IGE' | 'DECRYPT_IGE' | 'SHA256' | 'PROCESS_DIFF' | 'PARSE_MESSAGES' | 'BATCH_COALESCE' | 'PARSE_ENTITIES';
   payload: any;
 }
 
@@ -67,6 +67,36 @@ if (typeof self !== 'undefined' && 'onmessage' in self) {
             out: Boolean(m.out),
             media: m.media ? true : false,
           }));
+          break;
+        }
+        case 'BATCH_COALESCE': {
+          const { updates } = payload;
+          const seenMessages = new Map<string, any>();
+          const otherUpdates: any[] = [];
+          for (const update of (updates || [])) {
+            if (update.type === 'message' && update.data?.id) {
+              seenMessages.set(`${update.chatId}_${update.data.id}`, update);
+            } else {
+              otherUpdates.push(update);
+            }
+          }
+          result = [...Array.from(seenMessages.values()), ...otherUpdates];
+          break;
+        }
+        case 'PARSE_ENTITIES': {
+          const { text } = payload;
+          const entities: any[] = [];
+          const urlRegex = /(https?:\/\/[^\s]+)/g;
+          let match;
+          while ((match = urlRegex.exec(text || '')) !== null) {
+            entities.push({
+              type: 'url',
+              offset: match.index,
+              length: match[0].length,
+              url: match[0],
+            });
+          }
+          result = entities;
           break;
         }
         default:

@@ -83,6 +83,55 @@ export class TelegramWorkerService {
     return (incoming || []).filter(msg => !existingSet.has(msg.id));
   }
 
+  public async parseMessages(rawList: any[]): Promise<any[]> {
+    if (this.isAvailable && this.worker) {
+      return this.sendRpc('PARSE_MESSAGES', { rawList });
+    }
+    return (rawList || []).map((m: any) => ({
+      id: m.id,
+      chatId: m.chat_id || m.chatId,
+      text: m.message || m.text || '',
+      senderId: m.sender_id || m.senderId,
+      date: m.date || Math.floor(Date.now() / 1000),
+      out: Boolean(m.out),
+      media: m.media ? true : false,
+    }));
+  }
+
+  public async batchCoalesce(updates: any[]): Promise<any[]> {
+    if (this.isAvailable && this.worker) {
+      return this.sendRpc('BATCH_COALESCE', { updates });
+    }
+    const seenMessages = new Map<string, any>();
+    const otherUpdates: any[] = [];
+    for (const update of (updates || [])) {
+      if (update.type === 'message' && update.data?.id) {
+        seenMessages.set(`${update.chatId}_${update.data.id}`, update);
+      } else {
+        otherUpdates.push(update);
+      }
+    }
+    return [...Array.from(seenMessages.values()), ...otherUpdates];
+  }
+
+  public async parseEntities(text: string): Promise<any[]> {
+    if (this.isAvailable && this.worker) {
+      return this.sendRpc('PARSE_ENTITIES', { text });
+    }
+    const entities: any[] = [];
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    let match;
+    while ((match = urlRegex.exec(text || '')) !== null) {
+      entities.push({
+        type: 'url',
+        offset: match.index,
+        length: match[0].length,
+        url: match[0],
+      });
+    }
+    return entities;
+  }
+
   private sendRpc(type: any, payload: any): Promise<any> {
     const id = `rpc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     return new Promise((resolve, reject) => {

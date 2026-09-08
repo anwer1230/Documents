@@ -96,6 +96,56 @@ export class HotColdCache {
     this.chatHotCache.clear();
     this.userHotCache.clear();
   }
+
+  /**
+   * Tier 1.5: Fetch hot messages from server Redis tier before touching SQLite disk
+   */
+  public async fetchServerHotMessages(chatId: string): Promise<any[] | null> {
+    try {
+      const res = await fetch(`/api/cache/hot-messages/${encodeURIComponent(chatId)}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.messages) && json.messages.length > 0) {
+          this.putHotMessages(chatId, json.messages);
+          return json.messages;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /**
+   * Sync local messages back to server Redis tier
+   */
+  public async syncToServerHotCache(chatId: string, messages: any[]): Promise<void> {
+    try {
+      await fetch(`/api/cache/hot-messages/${encodeURIComponent(chatId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }),
+      });
+    } catch (_) {}
+  }
+
+  /**
+   * Telemetry stats for multi-tier cache
+   */
+  public async getCacheTelemetry(): Promise<any> {
+    try {
+      const res = await fetch('/api/cache/stats');
+      if (res.ok) {
+        const serverStats = await res.json();
+        return {
+          l1ClientHotChats: this.messageHotCache.size,
+          ...serverStats,
+        };
+      }
+    } catch (_) {}
+    return {
+      l1ClientHotChats: this.messageHotCache.size,
+      mode: 'Client In-Memory LRU Cache',
+    };
+  }
 }
 
 export const hotColdCache = HotColdCache.getInstance();
