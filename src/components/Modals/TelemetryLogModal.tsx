@@ -21,6 +21,7 @@ import {
   DownloadCloud,
   FileText,
   KeyRound,
+  Search,
 } from 'lucide-react';
 import {
   TelemetryEvent,
@@ -49,6 +50,7 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
   const [logs, setLogs] = useState<TelemetryEvent[]>(() => getTelemetryLogs());
   const [archivedCount, setArchivedCount] = useState<number>(0);
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'network' | 'latency' | 'sync'>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   // Sort order: default to 'asc' (oldest to newest) as required
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [copied, setCopied] = useState<boolean>(false);
@@ -124,6 +126,19 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
       list = list.filter((l) => l.category === categoryFilter);
     }
 
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter((l) => {
+        const typeMatch = l.type?.toLowerCase().includes(q);
+        const categoryMatch = l.category?.toLowerCase().includes(q);
+        const reasonMatch = l.reason?.toLowerCase().includes(q);
+        const messageMatch = (l as any).message?.toLowerCase().includes(q);
+        const statusMatch = (l as any).status?.toLowerCase().includes(q);
+        const detailsMatch = l.details ? JSON.stringify(l.details).toLowerCase().includes(q) : false;
+        return typeMatch || categoryMatch || reasonMatch || messageMatch || statusMatch || detailsMatch;
+      });
+    }
+
     list.sort((a, b) => {
       const timeA = new Date(a.timestamp).getTime();
       const timeB = new Date(b.timestamp).getTime();
@@ -131,7 +146,7 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
     });
 
     return list;
-  }, [logs, categoryFilter, sortOrder]);
+  }, [logs, categoryFilter, searchQuery, sortOrder]);
 
   // Statistics
   const stats = useMemo(() => {
@@ -456,6 +471,39 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
           </div>
         </div>
 
+        {/* Real-time Search Input Field */}
+        <div className="px-5 py-2.5 bg-[#101822] border-t border-white/[0.08] flex items-center gap-3 shrink-0">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-gray-400">
+              <Search className="w-4 h-4 text-cyan-400" />
+            </div>
+            <input
+              id="telemetry-log-search-input"
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="البحث الفوري في السجلات بالنوع أو الفئة أو الرسالة (مثال: network, latency, sync_error, reconnect)..."
+              className="w-full pl-9 pr-9 py-2 bg-[#17212b] border border-cyan-500/20 focus:border-cyan-500/60 rounded-xl text-xs text-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-cyan-500/40 transition-all shadow-inner"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400 hover:text-white transition-colors"
+                title="مسح البحث"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-xl bg-cyan-950/60 border border-cyan-500/30 text-xs text-cyan-300 font-mono">
+              <span>{processedLogs.length}</span>
+              <span className="text-[11px] text-cyan-400/80">مطابقة</span>
+            </div>
+          )}
+        </div>
+
         {/* Action Toolbar */}
         <div className="px-5 py-2.5 border-y border-white/[0.08] bg-[#131b26] flex flex-wrap items-center justify-between gap-2 shrink-0">
           {/* Filter Pills & Sort Control */}
@@ -593,19 +641,38 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {processedLogs.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-center p-6 bg-white/[0.01] border border-dashed border-white/10 rounded-xl">
-              <Activity className="w-10 h-10 text-gray-500 mb-2" />
-              <p className="text-sm font-semibold text-gray-300 mb-1">لا توجد أحداث مسجلة حالياً</p>
-              <p className="text-xs text-gray-500 max-w-sm mb-3">
-                اضغط على زر "قياس الاستجابة (Ping)" لاختبار زمن الاتصال وتسجيل أول حدث قياس فوراً.
-              </p>
-              <button
-                type="button"
-                onClick={handleRunPing}
-                className="px-4 py-2 rounded-lg text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 flex items-center gap-1.5 shadow-sm"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>إجراء فحص Ping الآن</span>
-              </button>
+              {searchQuery ? (
+                <>
+                  <Search className="w-10 h-10 text-cyan-400/60 mb-2 animate-pulse" />
+                  <p className="text-sm font-semibold text-gray-200 mb-1">لا توجد نتائج مطابقة للبحث</p>
+                  <p className="text-xs text-gray-400 max-w-sm mb-3">
+                    لم يتم العثور على أي أحداث أو سجلات تتطابق مع: <strong className="text-cyan-300">"{searchQuery}"</strong>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-white/10 hover:bg-white/20 border border-white/10 transition-colors"
+                  >
+                    مسح تصفية البحث
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Activity className="w-10 h-10 text-gray-500 mb-2" />
+                  <p className="text-sm font-semibold text-gray-300 mb-1">لا توجد أحداث مسجلة حالياً</p>
+                  <p className="text-xs text-gray-500 max-w-sm mb-3">
+                    اضغط على زر "قياس الاستجابة (Ping)" لاختبار زمن الاتصال وتسجيل أول حدث قياس فوراً.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleRunPing}
+                    className="px-4 py-2 rounded-lg text-xs font-bold text-black bg-cyan-400 hover:bg-cyan-300 flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>إجراء فحص Ping الآن</span>
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             processedLogs.map((item, index) => {
