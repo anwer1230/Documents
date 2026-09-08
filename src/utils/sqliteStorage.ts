@@ -149,6 +149,8 @@ class TelegramSQLiteDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_date ON messages(chat_id, date);
+      CREATE INDEX IF NOT EXISTS idx_messages_chat_id_timestamp ON messages(chat_id, timestamp);
     `);
 
     this.persist();

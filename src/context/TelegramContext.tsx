@@ -5145,19 +5145,21 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           // Live on-demand fetch if still empty or newly opened
           const activeSessionStr = SecureSessionStorage.getItem<string>('tg_session_string') || '';
           const activePhone = currentUser.phone || '';
-          if (activeSessionStr || activePhone) {
-            const res = await fetch('/api/telegram/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                peerId: activeChatId,
-                limit: 40,
-                phone: activePhone,
-                sessionString: activeSessionStr,
-              }),
-            });
-            const data = await res.json();
-            if (isSubscribed && data.success && Array.isArray(data.messages) && data.messages.length > 0) {
+          const res = await fetch('/api/telegram/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              peerId: activeChatId,
+              chatId: activeChatId,
+              limit: 40,
+              phone: activePhone,
+              sessionString: activeSessionStr,
+            }),
+          }).catch(() => null);
+
+          if (res && res.ok) {
+            const data = await res.json().catch(() => null);
+            if (isSubscribed && data?.success && Array.isArray(data.messages) && data.messages.length > 0) {
               setMessages((prev) => ({
                 ...prev,
                 [activeChatId]: data.messages,

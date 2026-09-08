@@ -228,6 +228,25 @@ export class SQLiteDatabaseService {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS cached_messages (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          sender_id TEXT,
+          sender_name TEXT,
+          text TEXT,
+          timestamp TEXT,
+          date TEXT,
+          raw_date INTEGER,
+          is_outgoing INTEGER DEFAULT 0,
+          status TEXT,
+          media_json TEXT,
+          reply_to_json TEXT,
+          created_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cached_messages_chat_date ON cached_messages(chat_id, date);
+        CREATE INDEX IF NOT EXISTS idx_cached_messages_chat_rawdate ON cached_messages(chat_id, raw_date);
       `);
 
       this.migrateInitialData();
@@ -849,6 +868,74 @@ export class SQLiteDatabaseService {
     } catch (e) {
       console.error(`[SQLite] deleteBatch(${id}) error:`, e);
       return false;
+    }
+  }
+
+  public saveCachedMessages(chatId: string, messages: any[]): void {
+    if (!this.db || !chatId || !Array.isArray(messages) || messages.length === 0) return;
+    try {
+      this.db.exec('BEGIN TRANSACTION');
+      const now = Date.now();
+      for (const m of messages) {
+        if (!m || !m.id) continue;
+        this.db.run(
+          `INSERT OR REPLACE INTO cached_messages (
+            id, chat_id, sender_id, sender_name, text, timestamp, date, raw_date, is_outgoing, status, media_json, reply_to_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            String(m.id),
+            String(chatId),
+            m.senderId ? String(m.senderId) : null,
+            m.senderName || '',
+            m.text || '',
+            m.timestamp || '',
+            m.date || '',
+            typeof m.rawDate === 'number' ? m.rawDate : 0,
+            m.isOutgoing ? 1 : 0,
+            m.status || 'read',
+            m.media ? JSON.stringify(m.media) : null,
+            m.replyTo ? JSON.stringify(m.replyTo) : null,
+            now,
+          ]
+        );
+      }
+      this.db.exec('COMMIT');
+    } catch (e) {
+      try {
+        this.db?.exec('ROLLBACK');
+      } catch (_) {}
+      console.warn(`[SQLite] saveCachedMessages(${chatId}) warning:`, e);
+    }
+  }
+
+  public getCachedMessages(chatId: string, limit = 50): any[] {
+    if (!this.db || !chatId) return [];
+    try {
+      const rows = this.db.all(
+        `SELECT * FROM cached_messages
+        WHERE chat_id = ?
+        ORDER BY raw_date ASC, created_at ASC
+        LIMIT ?`,
+        [String(chatId), limit]
+      );
+
+      return (rows || []).map((r: any) => ({
+        id: r.id,
+        chatId: r.chat_id,
+        senderId: r.sender_id,
+        senderName: r.sender_name,
+        text: r.text,
+        timestamp: r.timestamp,
+        date: r.date,
+        rawDate: r.raw_date,
+        isOutgoing: Boolean(r.is_outgoing),
+        status: r.status,
+        media: r.media_json ? JSON.parse(r.media_json) : undefined,
+        replyTo: r.reply_to_json ? JSON.parse(r.reply_to_json) : undefined,
+      }));
+    } catch (e) {
+      console.warn(`[SQLite] getCachedMessages(${chatId}) warning:`, e);
+      return [];
     }
   }
 

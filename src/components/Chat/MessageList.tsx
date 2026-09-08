@@ -273,6 +273,7 @@ export const MessageList: React.FC = () => {
   const prevMessagesLengthRef = useRef<number>(0);
   const isUserNearBottomRef = useRef<boolean>(true);
   const activeChatIdRef = useRef<string | null>(activeChatId);
+  const lastVisitedChatIdRef = useRef<string | null>(null);
   const isInitialScrollDoneRef = useRef<boolean>(false);
   const lastVisibleIndexRef = useRef<number>(-1);
   const lastScrollSaveTimeRef = useRef<number>(0);
@@ -280,6 +281,9 @@ export const MessageList: React.FC = () => {
   const currentMessages = useMemo(() => {
     return (activeChatId && messages[activeChatId]) || [];
   }, [activeChatId, messages]);
+
+  const currentMessagesRef = useRef(currentMessages);
+  currentMessagesRef.current = currentMessages;
 
   const pinnedMessages = useMemo(() => {
     return currentMessages.filter((m) => m.isPinned);
@@ -320,10 +324,13 @@ export const MessageList: React.FC = () => {
     return items;
   }, [currentMessages, readInboxMaxId, hasMoreOnServer, isLoadingOlder, olderSkeletons]);
 
+  const groupedItemsRef = useRef(groupedItems);
+  groupedItemsRef.current = groupedItems;
+
   // Deterministic O(1) row height calculator eliminating ResizeObserver state recalculation storms
   const getRowHeight = useCallback((index: number) => {
-    return estimateItemHeight(groupedItems[index]);
-  }, [groupedItems]);
+    return estimateItemHeight(groupedItemsRef.current[index]);
+  }, []);
 
   // Map: Message ID -> Index in groupedItems (mandatory for virtualized lists to locate message positions)
   const messageIdToIndexMap = useMemo(() => {
@@ -336,6 +343,9 @@ export const MessageList: React.FC = () => {
     }
     return map;
   }, [groupedItems]);
+
+  const messageIdToIndexMapRef = useRef(messageIdToIndexMap);
+  messageIdToIndexMapRef.current = messageIdToIndexMap;
 
   // Load more older messages from MTProto API stream
   const handleLoadOlder = useCallback(async () => {
@@ -367,10 +377,11 @@ export const MessageList: React.FC = () => {
     }
   }, [groupedItems.length]);
 
-  // Scroll to bottom helper
+  // Scroll to bottom helper - stabilized against message state changes
   const scrollToBottom = useCallback((behavior: 'smooth' | 'instant' = 'smooth') => {
-    if (groupedItems.length === 0) return;
-    const lastIndex = groupedItems.length - 1;
+    const items = groupedItemsRef.current;
+    if (items.length === 0) return;
+    const lastIndex = items.length - 1;
 
     listRef.current?.scrollToRow({
       index: lastIndex,
@@ -392,7 +403,8 @@ export const MessageList: React.FC = () => {
     isUserNearBottomRef.current = true;
 
     if (activeChatId && el) {
-      const latestMsgId = currentMessages[currentMessages.length - 1]?.id;
+      const msgs = currentMessagesRef.current;
+      const latestMsgId = msgs[msgs.length - 1]?.id;
       chatStore.saveLastReadPosition(activeChatId, {
         lastReadMessageId: latestMsgId,
         scrollTop: el.scrollHeight,
@@ -400,12 +412,14 @@ export const MessageList: React.FC = () => {
         isNearBottom: true,
       });
     }
-  }, [groupedItems.length, activeChatId, currentMessages]);
+  }, [activeChatId]);
 
   // Performs official Telegram scroll restoration upon opening or receiving messages
   const performInitialScroll = useCallback(() => {
     const el = listRef.current?.element;
-    if (!el || groupedItems.length === 0 || !activeChatId) return;
+    const items = groupedItemsRef.current;
+    const idMap = messageIdToIndexMapRef.current;
+    if (!el || items.length === 0 || !activeChatId) return;
 
     const savedPos = chatStore.getLastReadPosition(activeChatId);
     const savedNumericPos = chatStore.getScrollPosition(activeChatId);
@@ -413,7 +427,7 @@ export const MessageList: React.FC = () => {
     // Rule 1: If never opened before (neither in lastReadPositions nor ScrollPositions), immediately scroll to bottom
     if (!savedPos && savedNumericPos === undefined) {
       listRef.current?.scrollToRow({
-        index: groupedItems.length - 1,
+        index: items.length - 1,
         align: 'end',
         behavior: 'instant',
       });
@@ -427,7 +441,7 @@ export const MessageList: React.FC = () => {
     // Rule 2: If user was previously at bottom, scroll directly to bottom
     if (savedPos?.isNearBottom) {
       listRef.current?.scrollToRow({
-        index: groupedItems.length - 1,
+        index: items.length - 1,
         align: 'end',
         behavior: 'instant',
       });
@@ -441,10 +455,10 @@ export const MessageList: React.FC = () => {
     // Rule 3: Use Message ID -> Index map to scroll to exact message
     const targetMsgId = savedPos?.lastReadMessageId || (savedNumericPos ? String(savedNumericPos) : undefined);
     if (targetMsgId) {
-      let targetIndex = messageIdToIndexMap.get(targetMsgId);
+      let targetIndex = idMap.get(targetMsgId);
       if (targetIndex === undefined) {
         // Fallback linear search
-        targetIndex = groupedItems.findIndex((item) => String(item.message?.id) === targetMsgId);
+        targetIndex = items.findIndex((item) => String(item.message?.id) === targetMsgId);
       }
 
       if (targetIndex !== undefined && targetIndex !== -1) {
@@ -473,7 +487,7 @@ export const MessageList: React.FC = () => {
     } else {
       // STRICT RULE: NEVER jump to top or scrollTop = 0! Default to bottom
       listRef.current?.scrollToRow({
-        index: groupedItems.length - 1,
+        index: items.length - 1,
         align: 'end',
         behavior: 'instant',
       });
@@ -483,59 +497,58 @@ export const MessageList: React.FC = () => {
     }
 
     isInitialScrollDoneRef.current = true;
-  }, [activeChatId, groupedItems, messageIdToIndexMap]);
+  }, [activeChatId]);
 
-  // Handle activeChatId switching & scroll restoration
+  // Handle activeChatId switching & scroll restoration without re-triggering loops
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
     if (!activeChatId) return;
 
-    isInitialScrollDoneRef.current = false;
-    setShowScrollBottom(false);
-    setUnreadStreamCount(0);
-    setReadInboxMaxId(undefined);
-    prevMessagesLengthRef.current = currentMessages.length;
+    // Reset view flags and mark read ONLY when activeChatId changes to a new chat
+    if (lastVisitedChatIdRef.current !== activeChatId) {
+      lastVisitedChatIdRef.current = activeChatId;
+      isInitialScrollDoneRef.current = false;
+      setShowScrollBottom(false);
+      setUnreadStreamCount(0);
+      setReadInboxMaxId(undefined);
+      prevMessagesLengthRef.current = currentMessagesRef.current.length;
 
-    chatStore.markChatVisitedInCurrentSession(activeChatId);
-    markChatAsRead(activeChatId);
+      chatStore.markChatVisitedInCurrentSession(activeChatId);
+      markChatAsRead(activeChatId);
+    }
 
-    if (groupedItems.length > 0) {
-      requestAnimationFrame(performInitialScroll);
-      const t1 = setTimeout(performInitialScroll, 40);
-      const t2 = setTimeout(performInitialScroll, 120);
+    // When items become available, perform the initial scroll cleanly
+    if (groupedItems.length > 0 && !isInitialScrollDoneRef.current) {
+      const raf = requestAnimationFrame(() => {
+        performInitialScroll();
+      });
+      const t = setTimeout(() => {
+        performInitialScroll();
+      }, 50);
       return () => {
-        clearTimeout(t1);
-        clearTimeout(t2);
+        cancelAnimationFrame(raf);
+        clearTimeout(t);
       };
     }
-  }, [activeChatId, markChatAsRead, performInitialScroll, groupedItems.length, currentMessages.length]);
+  }, [activeChatId, groupedItems.length, performInitialScroll, markChatAsRead]);
 
-  // Trigger initial scroll as soon as messages are hydrated from IndexedDB / SQLite
-  useLayoutEffect(() => {
-    if (!activeChatId || groupedItems.length === 0) return;
-    if (!isInitialScrollDoneRef.current) {
-      performInitialScroll();
-      requestAnimationFrame(performInitialScroll);
-      const timer = setTimeout(performInitialScroll, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [activeChatId, groupedItems.length, performInitialScroll]);
-
-  // Save read position when unmounting or switching chats
+  // Save read position when unmounting or switching chats (NOT on every message receive!)
   useEffect(() => {
     return () => {
       const el = listRef.current?.element;
       const currentChatId = activeChatIdRef.current;
+      const items = groupedItemsRef.current;
+      const msgs = currentMessagesRef.current;
       if (el && currentChatId) {
         const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
         const isNear = distance <= 140;
         let lastMsgId: string | undefined = undefined;
-        if (isNear && currentMessages.length > 0) {
-          lastMsgId = currentMessages[currentMessages.length - 1]?.id;
-        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
+        if (isNear && msgs.length > 0) {
+          lastMsgId = msgs[msgs.length - 1]?.id;
+        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < items.length) {
           for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
-            if (groupedItems[i]?.message?.id) {
-              lastMsgId = groupedItems[i].message.id;
+            if (items[i]?.message?.id) {
+              lastMsgId = items[i].message.id;
               break;
             }
           }
@@ -548,7 +561,7 @@ export const MessageList: React.FC = () => {
         });
       }
     };
-  }, [groupedItems, currentMessages]);
+  }, [activeChatId]);
 
   // Handle incoming stream updates & outgoing messages with smart auto-scroll
   useEffect(() => {

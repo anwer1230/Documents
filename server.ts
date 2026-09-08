@@ -5811,16 +5811,25 @@ async function startServer() {
 
   // 8.1. MTProto messages.getHistory Dedicated Incremental Pagination Endpoint
   app.all(['/api/telegram/messages/fetch', '/api/telegram/messages', '/api/messages'], async (req, res) => {
-    const peerId = req.body?.peerId || (req.query?.peerId as string);
+    const peerId = req.body?.peerId || req.body?.chatId || (req.query?.peerId as string) || (req.query?.chatId as string);
     const phone = req.body?.phone || (req.query?.phone as string);
     const sessionString = req.body?.sessionString || (req.query?.sessionString as string);
     const limit = req.body?.limit || req.query?.limit || 30;
     const offsetId = req.body?.offsetId || req.query?.offsetId;
     const maxId = req.body?.maxId || req.query?.maxId;
     const minId = req.body?.minId || req.query?.minId;
+
     try {
       if (!peerId) {
-        return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required parameter: chatId or peerId',
+          rpc: 'messages.getHistory',
+          chatId: null,
+          messages: [],
+          count: 0,
+          hasMore: false,
+        });
       }
 
       // Safe guard: check if peerId is a local/mock chat that shouldn't hit real MTProto RPC
@@ -5839,170 +5848,289 @@ async function startServer() {
       ].includes(peerId) || peerId.startsWith('mock_') || peerId.startsWith('local_');
 
       if (isKnownLocalChat) {
-        return res.json({ success: true, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false, isLocal: true });
+        return res.json({
+          success: true,
+          rpc: 'messages.getHistory',
+          chatId: peerId,
+          messages: [],
+          count: 0,
+          hasMore: false,
+          isLocal: true,
+        });
       }
 
-      const client = await getClientForSession(sessionString, phone);
-      if (client && client.connected) {
-        const rawTarget = peerId === 'chat_saved_messages' || peerId === 'saved' ? 'me' : (peerId.replace('chat_', ''));
-        let targetEntity: any = rawTarget;
-
-        if (rawTarget === 'me' || rawTarget === 'self') {
-          targetEntity = 'me';
-        } else {
-          try {
-            targetEntity = await client.getInputEntity(rawTarget).catch(() => null);
-            if (!targetEntity) {
-              const numTarget = Number(rawTarget);
-              if (!isNaN(numTarget)) {
-                targetEntity = await client.getInputEntity(numTarget).catch(() => null);
-              }
-            }
-            if (!targetEntity) {
-              targetEntity = await client.getEntity(rawTarget).catch(() => null);
-            }
-          } catch (_) {
-            targetEntity = null;
-          }
-        }
-
-        if (!targetEntity && rawTarget !== 'me') {
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client || !client.connected) {
+        // Fallback to SQLite cached messages
+        const cached = sqliteDatabase.getCachedMessages(peerId, Number(limit) || 30);
+        if (cached && cached.length > 0) {
           return res.json({
             success: true,
             rpc: 'messages.getHistory',
             chatId: peerId,
-            messages: [],
-            count: 0,
+            messages: cached,
+            count: cached.length,
             hasMore: false,
-            unresolvedPeer: true,
+            source: 'sqlite_cache',
           });
         }
 
-        const requestLimit = Math.min(Math.max(Number(limit) || 30, 5), 100);
+        return res.status(401).json({
+          success: false,
+          error: 'Telegram client is not connected or authenticated',
+          rpc: 'messages.getHistory',
+          chatId: peerId,
+          messages: [],
+          count: 0,
+          hasMore: false,
+        });
+      }
+
+      // Check client authorization
+      const isAuthorized = await client.checkAuthorization().catch(() => false);
+      if (!isAuthorized) {
+        const cached = sqliteDatabase.getCachedMessages(peerId, Number(limit) || 30);
+        if (cached && cached.length > 0) {
+          return res.json({
+            success: true,
+            rpc: 'messages.getHistory',
+            chatId: peerId,
+            messages: cached,
+            count: cached.length,
+            hasMore: false,
+            source: 'sqlite_cache',
+          });
+        }
+
+        return res.status(401).json({
+          success: false,
+          error: 'Telegram session is expired or revoked (AUTH_KEY_UNREGISTERED)',
+          rpc: 'messages.getHistory',
+          chatId: peerId,
+          messages: [],
+          count: 0,
+          hasMore: false,
+        });
+      }
+
+      const rawTarget = peerId === 'chat_saved_messages' || peerId === 'saved' ? 'me' : (peerId.replace('chat_', ''));
+      let targetEntity: any = rawTarget;
+      let inputPeer: any = null;
+
+      if (rawTarget === 'me' || rawTarget === 'self') {
+        targetEntity = 'me';
+        inputPeer = new Api.InputPeerSelf();
+      } else {
+        try {
+          inputPeer = await client.getInputEntity(rawTarget).catch(() => null);
+          if (!inputPeer) {
+            const numTarget = Number(rawTarget);
+            if (!isNaN(numTarget)) {
+              inputPeer = await client.getInputEntity(numTarget).catch(() => null);
+            }
+          }
+          if (!inputPeer) {
+            targetEntity = await client.getEntity(rawTarget).catch(() => null);
+            if (targetEntity) {
+              inputPeer = await client.getInputEntity(targetEntity).catch(() => null);
+            }
+          }
+        } catch (err: any) {
+          console.warn(`[MTProto] getInputEntity resolution note for ${rawTarget}:`, err?.message || err);
+        }
+      }
+
+      if (!inputPeer && rawTarget !== 'me') {
+        const cached = sqliteDatabase.getCachedMessages(peerId, Number(limit) || 30);
+        return res.json({
+          success: true,
+          rpc: 'messages.getHistory',
+          chatId: peerId,
+          messages: cached || [],
+          count: (cached || []).length,
+          hasMore: false,
+          unresolvedPeer: true,
+        });
+      }
+
+      const requestLimit = Math.min(Math.max(Number(limit) || 30, 5), 100);
+      let raw: any[] = [];
+
+      // Primary MTProto RPC: client.invoke with GetHistory and getInputEntity
+      try {
+        if (inputPeer) {
+          const historyRes: any = await withTimeout(
+            client.invoke(
+              new Api.messages.GetHistory({
+                peer: inputPeer,
+                offsetId: offsetId && !isNaN(Number(offsetId)) ? Number(offsetId) : 0,
+                offsetDate: 0,
+                addOffset: 0,
+                limit: requestLimit,
+                maxId: maxId && !isNaN(Number(maxId)) ? Number(maxId) : 0,
+                minId: minId && !isNaN(Number(minId)) ? Number(minId) : 0,
+                hash: BigInt(0) as any,
+              })
+            ),
+            7000,
+            null
+          );
+
+          if (historyRes && Array.isArray(historyRes.messages)) {
+            raw = historyRes.messages;
+          } else if (Array.isArray(historyRes)) {
+            raw = historyRes;
+          }
+        }
+      } catch (invokeErr: any) {
+        console.warn(`[MTProto] client.invoke(GetHistory) note: ${invokeErr?.message || invokeErr}, falling back to getMessages.`);
+      }
+
+      // Secondary fallback: client.getMessages
+      if (!raw || raw.length === 0) {
         const options: any = { limit: requestLimit };
+        if (offsetId && !isNaN(Number(offsetId)) && Number(offsetId) > 0) options.offsetId = Number(offsetId);
+        if (maxId && !isNaN(Number(maxId)) && Number(maxId) > 0) options.maxId = Number(maxId);
+        if (minId && !isNaN(Number(minId)) && Number(minId) > 0) options.minId = Number(minId);
 
-        if (offsetId && !isNaN(Number(offsetId)) && Number(offsetId) > 0) {
-          options.offsetId = Number(offsetId);
-        }
-        if (maxId && !isNaN(Number(maxId)) && Number(maxId) > 0) {
-          options.maxId = Number(maxId);
-        }
-        if (minId && !isNaN(Number(minId)) && Number(minId) > 0) {
-          options.minId = Number(minId);
-        }
-
-        const raw = await withTimeout(
-          client.getMessages(targetEntity, options).catch((err: any) => {
-            console.log('[MTProto] Safe getMessages notice:', err?.message || err);
+        raw = await withTimeout(
+          client.getMessages(inputPeer || targetEntity, options).catch((err: any) => {
+            console.warn('[MTProto] Safe getMessages notice:', err?.message || err);
             return [];
           }),
           7000,
           []
         );
-        let myIdStr = 'user_me';
-        let myName = 'You';
-        try {
-          const me: any = await client.getMe();
-          if (me) {
-            myIdStr = String(me.id);
-            myName = [me.firstName || me.first_name, me.lastName || me.last_name].filter(Boolean).join(' ') || 'You';
+      }
+
+      let myIdStr = 'user_me';
+      let myName = 'You';
+      try {
+        const me: any = await client.getMe();
+        if (me) {
+          myIdStr = String(me.id);
+          myName = [me.firstName || me.first_name, me.lastName || me.last_name].filter(Boolean).join(' ') || 'You';
+        }
+      } catch (_) {}
+
+      const list = (raw || []).map((m: any) => {
+        const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
+        const mDate = new Date(msgTimestampSec * 1000);
+        const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const dateStr = mDate.toISOString().split('T')[0];
+
+        let mediaData: any = undefined;
+        if (m.media) {
+          if (m.media.photo) {
+            mediaData = { type: 'photo' };
+          } else if (m.media.document) {
+            const docAttr = m.media.document.attributes?.find((a: any) => a.fileName || a.title);
+            mediaData = {
+              type: 'document',
+              fileName: docAttr?.fileName || docAttr?.title || 'document',
+            };
+          } else if (m.media.voice) {
+            mediaData = { type: 'voice', duration: 15 };
+          } else if (m.media.poll) {
+            mediaData = {
+              type: 'poll',
+              pollData: {
+                question: m.media.poll?.question || 'Poll',
+                options: (m.media.poll?.answers || []).map((ans: any, idx: number) => ({
+                  id: String(idx),
+                  text: ans.text || `Option ${idx + 1}`,
+                  votes: 0,
+                  voters: [],
+                })),
+                totalVotes: 0,
+              },
+            };
           }
-        } catch (_) {}
+        }
 
-        const list = (raw || []).map((m: any) => {
-          const msgTimestampSec = m.date || Math.floor(Date.now() / 1000);
-          const mDate = new Date(msgTimestampSec * 1000);
-          const timeStr = mDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
-          const dateStr = mDate.toISOString().split('T')[0];
+        const isOut = Boolean(m.out);
+        const fromIdStr = m.fromId ? String(m.fromId.userId || m.fromId.channelId || m.fromId.chatId || '') : (m.senderId ? String(m.senderId) : '');
+        const senderEntity = (m as any).sender;
+        let senderName = isOut ? myName : 'طرف آخر';
+        let senderUsername = isOut ? undefined : senderEntity?.username;
+        let senderAvatar = '';
 
-          let mediaData: any = undefined;
-          if (m.media) {
-            if (m.media.photo) {
-              mediaData = { type: 'photo' };
-            } else if (m.media.document) {
-              const docAttr = m.media.document.attributes?.find((a: any) => a.fileName || a.title);
-              mediaData = {
-                type: 'document',
-                fileName: docAttr?.fileName || docAttr?.title || 'document',
-              };
-            } else if (m.media.voice) {
-              mediaData = { type: 'voice', duration: 15 };
-            } else if (m.media.poll) {
-              mediaData = {
-                type: 'poll',
-                pollData: {
-                  question: m.media.poll?.question || 'Poll',
-                  options: (m.media.poll?.answers || []).map((ans: any, idx: number) => ({
-                    id: String(idx),
-                    text: ans.text || `Option ${idx + 1}`,
-                    votes: 0,
-                    voters: [],
-                  })),
-                  totalVotes: 0,
-                },
-              };
-            }
+        if (!isOut && senderEntity) {
+          const name = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
+          if (name) senderName = name;
+          if (fromIdStr && avatarCache.has(fromIdStr)) {
+            senderAvatar = avatarCache.get(fromIdStr)!;
           }
+        }
 
-          const isOut = Boolean(m.out);
-          const fromIdStr = m.fromId ? String(m.fromId.userId || m.fromId.channelId || m.fromId.chatId || '') : (m.senderId ? String(m.senderId) : '');
-          const senderEntity = (m as any).sender;
-          let senderName = isOut ? myName : 'طرف آخر';
-          let senderUsername = isOut ? undefined : senderEntity?.username;
-          let senderAvatar = '';
+        return {
+          id: String(m.id),
+          chatId: peerId,
+          senderId: isOut ? myIdStr : (fromIdStr || peerId),
+          senderName,
+          senderUsername,
+          senderAvatar,
+          text: m.message || (mediaData ? `[${mediaData.type}]` : ''),
+          timestamp: timeStr,
+          date: dateStr,
+          epoch: mDate.getTime(),
+          rawDate: msgTimestampSec,
+          isOutgoing: isOut,
+          status: 'read',
+          media: mediaData,
+          replyTo: m.replyToMsgId
+            ? {
+                messageId: String(m.replyToMsgId),
+                senderName: 'Reply',
+                textSnippet: '...',
+              }
+            : undefined,
+        };
+      });
 
-          if (!isOut && senderEntity) {
-            const name = [senderEntity.firstName || senderEntity.first_name, senderEntity.lastName || senderEntity.last_name].filter(Boolean).join(' ') || senderEntity.title || senderEntity.username;
-            if (name) senderName = name;
-            if (fromIdStr && avatarCache.has(fromIdStr)) {
-              senderAvatar = avatarCache.get(fromIdStr)!;
-            }
-          }
+      // getMessages returns from newest to oldest; sort ascending for chronological rendering
+      const chronologicalList = [...list].reverse();
+      const hasMore = (raw || []).length >= requestLimit;
 
-          return {
-            id: String(m.id),
-            chatId: peerId,
-            senderId: isOut ? myIdStr : (fromIdStr || peerId),
-            senderName,
-            senderUsername,
-            senderAvatar,
-            text: m.message || (mediaData ? `[${mediaData.type}]` : ''),
-            timestamp: timeStr,
-            date: dateStr,
-            epoch: mDate.getTime(),
-            rawDate: msgTimestampSec,
-            isOutgoing: isOut,
-            status: 'read',
-            media: mediaData,
-            replyTo: m.replyToMsgId
-              ? {
-                  messageId: String(m.replyToMsgId),
-                  senderName: 'Reply',
-                  textSnippet: '...',
-                }
-              : undefined,
-          };
-        });
+      // Save to SQLite database cache for instant query performance and offline availability
+      if (chronologicalList.length > 0) {
+        sqliteDatabase.saveCachedMessages(peerId, chronologicalList);
+      }
 
-        // getMessages returns from newest to oldest; sort ascending for chronological rendering
-        const chronologicalList = [...list].reverse();
-        const hasMore = (raw || []).length >= requestLimit;
-
+      return res.json({
+        success: true,
+        rpc: 'messages.getHistory',
+        chatId: peerId,
+        messages: chronologicalList,
+        count: chronologicalList.length,
+        hasMore,
+        oldestMessageId: chronologicalList[0]?.id,
+        newestMessageId: chronologicalList[chronologicalList.length - 1]?.id,
+      });
+    } catch (e: any) {
+      console.error('[MTProto] /api/messages error:', e?.message || e);
+      const cached = sqliteDatabase.getCachedMessages(peerId, Number(limit) || 30);
+      if (cached && cached.length > 0) {
         return res.json({
           success: true,
           rpc: 'messages.getHistory',
           chatId: peerId,
-          messages: chronologicalList,
-          count: chronologicalList.length,
-          hasMore,
-          oldestMessageId: chronologicalList[0]?.id,
-          newestMessageId: chronologicalList[chronologicalList.length - 1]?.id,
+          messages: cached,
+          count: cached.length,
+          hasMore: false,
+          source: 'sqlite_cache_on_error',
         });
       }
-    } catch (e: any) {
-      console.log('[MTProto] messages/fetch note:', e?.message || e);
+      return res.status(500).json({
+        success: false,
+        error: e?.message || 'Internal Server Error while retrieving messages',
+        rpc: 'messages.getHistory',
+        chatId: peerId,
+        messages: [],
+        count: 0,
+        hasMore: false,
+      });
     }
-    return res.json({ success: false, rpc: 'messages.getHistory', chatId: peerId, messages: [], count: 0, hasMore: false });
   });
 
   // 8.3 MTProto On-Demand Avatar Fetch Endpoint (Supports binary JPEG streaming & JSON)
