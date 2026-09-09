@@ -14,6 +14,8 @@ allprojects {
         google()
         mavenCentral()
     }
+    // Enable R8 Full Mode for aggressive tree-shaking and optimization
+    project.ext.set("android.enableR8.fullMode", "true")
 }
 
 task clean(type: Delete) {

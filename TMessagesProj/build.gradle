@@ -98,6 +98,9 @@ dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
 }
 
+// Enable R8 Full Mode for aggressive tree-shaking and optimization
+project.ext.set("android.enableR8.fullMode", "true")
+
 android {
     compileSdkVersion 36
     buildToolsVersion '36.0.0'

@@ -1,4 +1,13 @@
 # =====================================================================
+# R8 Full Mode Optimization & Aggressive Tree-Shaking Configuration
+# =====================================================================
+-allowaccessmodification
+-repackageclasses ''
+
+# Optimization passes and attributes
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,Exceptions,SourceFile,LineNumberTable
+
+# =====================================================================
 # Native (JNI) & C++ Interop Rules
 # Prevents UnsatisfiedLinkError, NoSuchMethodError, and runtime crashes
 # =====================================================================
@@ -65,8 +74,76 @@
 -keep class com.google.android.exoplayer2.decoder.VideoDecoderOutputBuffer { *; }
 -keep class org.telegram.ui.Stories.recorder.FfmpegAudioWaveformLoader { *; }
 
-# Preserving critical reflection, JNI and annotation metadata
--keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,Exceptions
+# =====================================================================
+# Android Manifest & Lifecycle Components (R8 Full Mode Keep Constructors)
+# In R8 Full Mode, parameterless <init>() are stripped unless explicit
+# =====================================================================
+-keep public class * extends android.app.Activity {
+    public <init>();
+}
+-keep public class * extends android.app.Application {
+    public <init>();
+    public void onCreate();
+}
+-keep public class * extends android.app.Service {
+    public <init>();
+}
+-keep public class * extends android.content.BroadcastReceiver {
+    public <init>();
+}
+-keep public class * extends android.content.ContentProvider {
+    public <init>();
+}
+-keep public class * extends android.app.backup.BackupAgent {
+    public <init>();
+}
+-keep public class * extends androidx.fragment.app.Fragment {
+    public <init>();
+}
+-keep public class * extends android.app.Fragment {
+    public <init>();
+}
+
+# Custom Views inflated via XML reflection
+-keep public class * extends android.view.View {
+    public <init>(android.content.Context);
+    public <init>(android.content.Context, android.util.AttributeSet);
+    public <init>(android.content.Context, android.util.AttributeSet, int);
+    public void set*(...);
+}
+-keepclasseswithmembers class * extends android.view.View {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
+-keepclasseswithmembers class * extends android.view.View {
+    public <init>(android.content.Context, android.util.AttributeSet, int);
+}
+
+# =====================================================================
+# Serialization, Parcelables, Enums & Annotations (R8 Full Mode)
+# =====================================================================
+-keepclassmembers class * implements android.os.Parcelable {
+    static ** CREATOR;
+    <fields>;
+    <methods>;
+}
+
+-keepnames class * implements java.io.Serializable
+-keepclassmembers class * implements java.io.Serializable {
+    static final long serialVersionUID;
+    private static final java.io.ObjectStreamField[] serialPersistentFields;
+    !static !transient <fields>;
+    !private <fields>;
+    !private <methods>;
+    private void writeObject(java.io.ObjectOutputStream);
+    private void readObject(java.io.ObjectInputStream);
+    java.lang.Object writeReplace();
+    java.lang.Object readResolve();
+}
+
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
 
 # Keep AndroidX and Google Keep annotations
 -keep @androidx.annotation.Keep class * { *; }
@@ -78,27 +155,42 @@
 -keepclassmembernames class * {
     @com.google.android.gms.common.annotation.KeepName *;
 }
+
+# Gson serialization/deserialization reflection rules
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+-keepclassmembers enum * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# =====================================================================
+# Google Play & Third-Party Library Integration Rules
+# =====================================================================
 -keep class androidx.mediarouter.app.MediaRouteButton { *; }
 -keepclassmembers class ** {
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# https://developers.google.com/ml-kit/known-issues#android_issues
--keep class com.google.mlkit.nl.languageid.internal.LanguageIdentificationJni { *; }
+# Google Play Billing Client
+-keep class com.android.billingclient.api.** { *; }
+-keep class com.google.android.play.core.** { *; }
 
-# Constant folding for resource integers may mean that a resource passed to this method appears to be unused. Keep the method to prevent this from happening.
+# Stripe SDK
+-keep class com.stripe.android.** { *; }
+
+# MLKit
+-keep class com.google.mlkit.nl.languageid.internal.LanguageIdentificationJni { *; }
+-keep class com.google.mlkit.** { *; }
+
+# ExoPlayer reflection rules
 -keep class com.google.android.exoplayer2.upstream.RawResourceDataSource {
   public static android.net.Uri buildRawResourceUri(int);
 }
 
-# Methods accessed via reflection in DefaultExtractorsFactory
 -dontnote com.google.android.exoplayer2.ext.flac.FlacLibrary
 -keepclassmembers class com.google.android.exoplayer2.ext.flac.FlacLibrary {
-
 }
-
-# Some members of this class are being accessed from native methods. Keep them unobfuscated.
-# (VideoDecoderOutputBuffer is preserved in ExoPlayer JNI section)
 
 -dontnote com.google.android.exoplayer2.ext.opus.LibopusAudioRenderer
 -keepclassmembers class com.google.android.exoplayer2.ext.opus.LibopusAudioRenderer {
@@ -113,13 +205,11 @@
   <init>(android.os.Handler, com.google.android.exoplayer2.audio.AudioRendererEventListener, com.google.android.exoplayer2.audio.AudioProcessor[]);
 }
 
-# Constructors accessed via reflection in DefaultExtractorsFactory
 -dontnote com.google.android.exoplayer2.ext.flac.FlacExtractor
 -keepclassmembers class com.google.android.exoplayer2.ext.flac.FlacExtractor {
   <init>();
 }
 
-# Constructors accessed via reflection in DefaultDownloaderFactory
 -dontnote com.google.android.exoplayer2.source.dash.offline.DashDownloader
 -keepclassmembers class com.google.android.exoplayer2.source.dash.offline.DashDownloader {
   <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.offline.DownloaderConstructorHelper);
@@ -133,7 +223,6 @@
   <init>(android.net.Uri, java.util.List, com.google.android.exoplayer2.offline.DownloaderConstructorHelper);
 }
 
-# Constructors accessed via reflection in DownloadHelper
 -dontnote com.google.android.exoplayer2.source.dash.DashMediaSource$Factory
 -keepclasseswithmembers class com.google.android.exoplayer2.source.dash.DashMediaSource$Factory {
   <init>(com.google.android.exoplayer2.upstream.DataSource$Factory);
@@ -152,9 +241,11 @@
 -keep class com.huawei.updatesdk.**{ *; }
 -keep class com.huawei.hms.**{ *; }
 
-# Don't warn about checkerframework and Kotlin annotations
+# Don't warn about checkerframework, Kotlin annotations, and reflection targets
 -dontwarn org.checkerframework.**
 -dontwarn javax.annotation.**
+-dontwarn android.os.SystemProperties
+-dontwarn android.view.WindowManagerGlobal
 
 -keep class io.nano.tex.** {*;}
 
@@ -162,7 +253,3 @@
 -keep class org.scilab.forge.jlatexmath.** { *; }
 -keep class ru.noties.jlatexmath.** { *; }
 -dontwarn org.scilab.forge.jlatexmath.**
-
-# Use -keep to explicitly keep any other classes shrinking would remove
--dontoptimize
--dontobfuscate
