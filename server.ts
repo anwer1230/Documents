@@ -2329,6 +2329,64 @@ async function startServer() {
               timestamp: Date.now(),
             });
           }
+
+          // 2.5 Live Typing Status Listener (UpdateChatUserTyping, UpdateChannelUserTyping, UpdateUserTyping)
+          if (
+            update.className === 'UpdateChatUserTyping' ||
+            update._ === 'updateChatUserTyping' ||
+            update.className === 'UpdateChannelUserTyping' ||
+            update._ === 'updateChannelUserTyping' ||
+            update.className === 'UpdateUserTyping' ||
+            update._ === 'updateUserTyping'
+          ) {
+            const rawChatId = update.channelId || update.chatId || update.userId;
+            const chatId = rawChatId ? (String(rawChatId).startsWith('chat_') ? String(rawChatId) : `chat_${rawChatId}`) : '';
+            const userId = update.fromId
+              ? String(update.fromId.userId || update.fromId.channelId || update.fromId)
+              : update.userId ? String(update.userId) : '';
+            let actionType = 'typing';
+            if (update.action) {
+              const actionClass = String(update.action.className || update.action._ || '');
+              if (actionClass.includes('RecordAudio') || actionClass.includes('UploadAudio') || actionClass.includes('Voice')) {
+                actionType = 'record_audio';
+              } else if (actionClass.includes('RecordVideo') || actionClass.includes('UploadVideo')) {
+                actionType = 'record_video';
+              } else if (actionClass.includes('UploadPhoto') || actionClass.includes('UploadDocument')) {
+                actionType = 'upload_document';
+              }
+            }
+            const typingPayload = {
+              type: 'user_typing',
+              chatId,
+              userId,
+              action: actionType,
+              timestamp: Date.now(),
+            };
+            io.emit('user_typing', typingPayload);
+            broadcastTelegramUpdate(typingPayload);
+          }
+
+          // 2.6 Live Online Members Listener (UpdateChatOnlineMembers, UpdateChatParticipants, UpdateChannelOnlineMembers)
+          if (
+            update.className === 'UpdateChatOnlineMembers' ||
+            update._ === 'updateChatOnlineMembers' ||
+            update.className === 'UpdateChannelOnlineMembers' ||
+            update._ === 'updateChannelOnlineMembers' ||
+            update.className === 'UpdateChatParticipants' ||
+            update._ === 'updateChatParticipants'
+          ) {
+            const rawChatId = update.channelId || update.chatId;
+            const chatId = rawChatId ? (String(rawChatId).startsWith('chat_') ? String(rawChatId) : `chat_${rawChatId}`) : '';
+            const onlineCount = update.onlineCount || update.online_count || 0;
+            const onlinePayload = {
+              type: 'chat_online_count',
+              chatId,
+              onlineCount,
+              timestamp: Date.now(),
+            };
+            io.emit('chat_online_count', onlinePayload);
+            broadcastTelegramUpdate(onlinePayload);
+          }
         } catch (err) {
           console.warn('[TelegramClient] Raw update handler notice:', err);
         }
@@ -6562,6 +6620,72 @@ Please provide the concise summary.`;
 
   app.post('/api/telegram/chat/summarize', handleChatSummarize);
   app.post('/api/chat/summarize', handleChatSummarize);
+
+  // Live Telegram Chat & Online Members Info (GetFullChannel / GetFullChat RPC)
+  app.post('/api/telegram/chat/full-info', async (req, res) => {
+    try {
+      const { chatId, sessionString, phone } = req.body;
+      if (!chatId) {
+        return res.status(400).json({ error: 'chatId is required' });
+      }
+      const client = (await getClientForSession(sessionString, phone)) || mainTelegramClient;
+      if (!client) {
+        return res.json({ success: true, onlineCount: 0, participantsCount: 0 });
+      }
+      const cleanId = String(chatId).replace(/^chat_/, '');
+      let targetEntity: any = await client.getInputEntity(cleanId).catch(() => null);
+      if (!targetEntity && !isNaN(Number(cleanId))) {
+        targetEntity = await client.getInputEntity(Number(cleanId)).catch(() => null);
+      }
+      if (!targetEntity) {
+        targetEntity = cleanId;
+      }
+
+      let onlineCount = 0;
+      let participantsCount = 0;
+
+      // Try GetFullChannel for supergroups / channels
+      try {
+        const fullChannelRes: any = await client.invoke(new Api.channels.GetFullChannel({ channel: targetEntity })).catch(() => null);
+        if (fullChannelRes && fullChannelRes.fullChat) {
+          participantsCount = fullChannelRes.fullChat.participantsCount || 0;
+          onlineCount = fullChannelRes.fullChat.onlineCount || 0;
+        }
+      } catch (_) {}
+
+      // Try GetFullChat for basic groups
+      if (!participantsCount && !onlineCount) {
+        try {
+          const numId = Number(cleanId);
+          const fullChatRes: any = await client.invoke(new Api.messages.GetFullChat({ chatId: isNaN(numId) ? (targetEntity as any) : (numId as any) })).catch(() => null);
+          if (fullChatRes && fullChatRes.fullChat) {
+            participantsCount = fullChatRes.fullChat.participants?.participants?.length || fullChatRes.fullChat.participantsCount || 0;
+            onlineCount = fullChatRes.fullChat.participants?.onlineCount || 0;
+          }
+        } catch (_) {}
+      }
+
+      const canonicalChatId = String(chatId).startsWith('chat_') ? String(chatId) : `chat_${chatId}`;
+      const payload = {
+        type: 'chat_online_count',
+        chatId: canonicalChatId,
+        onlineCount,
+        participantsCount,
+        timestamp: Date.now(),
+      };
+      io.emit('chat_online_count', payload);
+      broadcastTelegramUpdate(payload);
+
+      return res.json({
+        success: true,
+        chatId: canonicalChatId,
+        onlineCount,
+        participantsCount,
+      });
+    } catch (err: any) {
+      return res.json({ success: false, error: err?.message || 'Failed to fetch chat info' });
+    }
+  });
 
   // Global Plus Settings Store for Multi-Session Cloud Sync
   let globalPlusSettingsStore: Record<string, any> = {};

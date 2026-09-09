@@ -295,11 +295,23 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   const currentMessages = useMemo(() => {
     const raw = propMessages || ((activeChatId && contextMessages[activeChatId]) || []);
-    if (!raw.length) return [];
+    if (!raw.length || !activeChatId) return [];
+
+    // Filter strictly by activeChatId to prevent any cross-chat message overlap
+    const cleanActiveId = activeChatId.replace(/^chat_/, '');
+    const chatFiltered = raw.filter((m) => {
+      if (!m) return false;
+      const mChatId = String(m.chatId || '').replace(/^chat_/, '');
+      const mPeerId = String(m.peerId || '').replace(/^chat_/, '');
+      if (mChatId && mChatId === cleanActiveId) return true;
+      if (mPeerId && mPeerId === cleanActiveId) return true;
+      if (m.chatId === activeChatId) return true;
+      return !mChatId && !mPeerId && propMessages !== undefined;
+    });
 
     // Deduplicate messages by unique ID to prevent duplicate rendering and overlap
     const map = new Map<string, any>();
-    for (const m of raw) {
+    for (const m of chatFiltered) {
       if (!m || m.id === undefined || m.id === null) continue;
       const key = String(m.id);
       const existing = map.get(key);
@@ -796,7 +808,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   }, []);
 
   return (
-    <div id="tg-message-list-root" className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
+    <div id="tg-message-list-root" key={activeChatId || 'empty'} className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Pinned Messages Bar */}
       {!hidePinnedBar && pinnedMessages.length > 0 && (
         <div

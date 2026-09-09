@@ -12,7 +12,7 @@ import { ChatSpeechRecognition } from './ChatSpeechRecognition';
 import { getTelegramEpoch } from '../../utils/dateUtils';
 
 export const ChatView: React.FC = () => {
-  const { activeChat, activeChatId, messages, settings, sendMessage, showToast } = useTelegram();
+  const { activeChat, activeChatId, messages, settings, sendMessage, showToast, typingStatus, typingChatId } = useTelegram();
   const [isRestrictedModalOpen, setIsRestrictedModalOpen] = useState(false);
   const [isSpeechDictationOpen, setIsSpeechDictationOpen] = useState(false);
 
@@ -23,11 +23,22 @@ export const ChatView: React.FC = () => {
   // using specific message ID to prevent duplicate rendering and overlap
   const currentMessages = useMemo(() => {
     const raw = (activeChatId && messages[activeChatId]) || [];
-    if (!raw.length) return [];
+    if (!raw.length || !activeChatId) return [];
+
+    // Filter strictly by activeChatId to prevent any cross-chat message overlap
+    const cleanActiveId = activeChatId.replace(/^chat_/, '');
+    const chatFiltered = raw.filter((m) => {
+      if (!m) return false;
+      const mChatId = String(m.chatId || '').replace(/^chat_/, '');
+      const mPeerId = String(m.peerId || '').replace(/^chat_/, '');
+      if (mChatId && mChatId === cleanActiveId) return true;
+      if (mPeerId && mPeerId === cleanActiveId) return true;
+      return m.chatId === activeChatId;
+    });
 
     // Deduplicate messages by unique ID to prevent duplicate rendering and overlap
     const map = new Map<string, any>();
-    for (const m of raw) {
+    for (const m of chatFiltered) {
       if (!m || m.id === undefined || m.id === null) continue;
       const key = String(m.id);
       const existing = map.get(key);
@@ -214,7 +225,7 @@ export const ChatView: React.FC = () => {
             <ChatHeader />
             <VoicePlaybackTopBar />
             <PinnedMessageBar />
-            <MessageList messages={currentMessages} hidePinnedBar={true} />
+            <MessageList key={activeChatId || 'no_chat'} messages={currentMessages} hidePinnedBar={true} />
 
             {/* Floating Quick Dictation Launcher (Visible when dictation is closed) */}
             {!isSpeechDictationOpen && (
@@ -239,6 +250,30 @@ export const ChatView: React.FC = () => {
               onInsertText={handleInsertDictatedText}
               chatTitle={activeChat.title}
             />
+
+            {/* Live Chat Typing Status Bar */}
+            <AnimatePresence>
+              {Boolean(typingChatId === activeChatId || (activeChatId && typingStatus?.[activeChatId])) && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="px-4 py-1.5 text-xs text-[#2481cc] flex items-center gap-2 bg-[var(--tg-theme-surface)]/90 backdrop-blur-md border-t border-[var(--tg-theme-border)]/40 shrink-0 select-none"
+                >
+                  <div className="flex gap-1 items-center">
+                    <span className="w-1.5 h-1.5 bg-[#2481cc] rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <span className="w-1.5 h-1.5 bg-[#2481cc] rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <span className="w-1.5 h-1.5 bg-[#2481cc] rounded-full animate-bounce" />
+                  </div>
+                  <span>
+                    {typingStatus?.[activeChatId!]?.action === 'record_audio'
+                      ? (isArabic ? 'يسجل رسالة صوتية...' : 'recording voice message...')
+                      : (isArabic ? 'جاري الكتابة...' : 'typing...')}
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <ChatInput />
           </motion.div>

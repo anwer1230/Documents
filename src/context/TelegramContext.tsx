@@ -131,6 +131,9 @@ interface TelegramContextType {
   forwardingMessage: Message | null;
   selectedMessageIds: string[];
   typingChatId: string | null;
+  typingStatus: Record<string, { userId: string; text?: string; action?: string; timestamp: number }>;
+  onlineCounts: Record<string, number>;
+  onlineCount: number;
   chatContextMenu: ChatContextMenu | null;
   messageContextMenu: MessageContextMenu | null;
   toasts: ToastItem[];
@@ -604,6 +607,45 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
   const [typingChatId, setTypingChatId] = useState<string | null>(null);
+  const [typingStatus, setTypingStatus] = useState<Record<string, { userId: string; text?: string; action?: string; timestamp: number }>>({});
+  const typingTimersRef = useRef<Record<string, any>>({});
+  const [onlineCounts, setOnlineCounts] = useState<Record<string, number>>({});
+
+  // Live Telegram Chat & Online Members Info fetcher on active chat change
+  useEffect(() => {
+    if (!activeChatId) return;
+    const targetChat = chats.find((c) => c.id === activeChatId);
+    if (!targetChat || targetChat.type === 'saved' || targetChat.type === 'bot') return;
+
+    let isMounted = true;
+    const fetchChatFullInfo = async () => {
+      try {
+        const sessionString = SecureSessionStorage.getItem<string>('tg_session_string') || '';
+        const res = await fetch('/api/telegram/chat/full-info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: activeChatId,
+            phone: currentUser.phone,
+            sessionString,
+          }),
+        });
+        const data = await res.json();
+        if (isMounted && data && data.success && typeof data.onlineCount === 'number') {
+          setOnlineCounts((prev) => ({
+            ...prev,
+            [activeChatId]: data.onlineCount,
+          }));
+        }
+      } catch (_) {}
+    };
+
+    fetchChatFullInfo();
+    return () => {
+      isMounted = false;
+    };
+  }, [activeChatId, currentUser.phone, chats]);
+
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders, setFolders] = useState<Folder[]>(DEFAULT_FOLDERS);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -2174,6 +2216,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const activeChat = chats.find((c) => c.id === activeChatId) || null;
+  const onlineCount = (activeChatId && onlineCounts[activeChatId]) || (activeChat?.onlineCount || 0);
 
   // Register NotificationEngine routing & audio triggers
   useEffect(() => {
@@ -4591,6 +4634,48 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return;
       }
 
+      if (update.type === 'user_typing') {
+        const rawCId = update.chatId || '';
+        if (!rawCId) return;
+        const cId = rawCId.startsWith('chat_') ? rawCId : `chat_${rawCId}`;
+        const userId = String(update.userId || '');
+        const action = String(update.action || 'typing');
+        setTypingStatus((prev) => ({
+          ...prev,
+          [cId]: { userId, action, timestamp: Date.now() },
+        }));
+        setTypingChatId(cId);
+        if (typingTimersRef.current[cId]) {
+          clearTimeout(typingTimersRef.current[cId]);
+        }
+        typingTimersRef.current[cId] = setTimeout(() => {
+          setTypingStatus((prev) => {
+            const next = { ...prev };
+            delete next[cId];
+            return next;
+          });
+          setTypingChatId((cur) => (cur === cId ? null : cur));
+        }, 5000);
+        return;
+      }
+
+      if (update.type === 'chat_online_count') {
+        const rawCId = update.chatId || '';
+        if (!rawCId) return;
+        const cId = rawCId.startsWith('chat_') ? rawCId : `chat_${rawCId}`;
+        const count = Number(update.onlineCount) || 0;
+        setOnlineCounts((prev) => ({
+          ...prev,
+          [cId]: count,
+        }));
+        if (typeof update.participantsCount === 'number' && update.participantsCount > 0) {
+          setChats((prev) =>
+            prev.map((c) => (c.id === cId ? { ...c, memberCount: update.participantsCount } : c))
+          );
+        }
+        return;
+      }
+
       if (
         update.type === 'edit_message' ||
         update.type === 'delete_messages' ||
@@ -4634,58 +4719,60 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       const peerIdStr = String(msg.peerId || update.peerId || '').replace(/^chat_/, '');
-      const targetChatId = msg.chatId || update.chatId || (peerIdStr ? `chat_${peerIdStr}` : '');
-      if (!targetChatId && !activeChatId) return;
+      const rawTarget = msg.chatId || update.chatId || (peerIdStr ? `chat_${peerIdStr}` : '');
+      if (!rawTarget) return;
+      const targetChatId = rawTarget.startsWith('chat_') ? rawTarget : `chat_${rawTarget}`;
+      msg.chatId = targetChatId;
+      if (peerIdStr) msg.peerId = peerIdStr;
 
       lastUpdateEpoch = Math.max(lastUpdateEpoch, update.epoch || Date.now());
 
       const isCurrentChat = Boolean(
         activeChatId && (
           targetChatId === activeChatId ||
-          `chat_${peerIdStr}` === activeChatId ||
-          (peerIdStr && activeChatId.replace(/^chat_/, '') === peerIdStr)
+          targetChatId.replace(/^chat_/, '') === activeChatId.replace(/^chat_/, '')
         )
       );
 
-      // 1. Update messages state for the target chat and active chat
+      // Clear typing indicator for this chat when a new message arrives from it
+      setTypingStatus((prev) => {
+        if (!prev[targetChatId]) return prev;
+        const next = { ...prev };
+        delete next[targetChatId];
+        return next;
+      });
+      setTypingChatId((cur) => (cur === targetChatId ? null : cur));
+
+      // 1. Update messages state STRICTLY for targetChatId only (preventing cross-chat leakage)
       setMessages((prev) => {
-        const chatsToUpdate = new Set<string>();
-        if (targetChatId) chatsToUpdate.add(targetChatId);
-        if (isCurrentChat && activeChatId) chatsToUpdate.add(activeChatId);
-
-        let nextState = { ...prev };
-        let modified = false;
-
-        chatsToUpdate.forEach((cId) => {
-          const existing = nextState[cId] || [];
-          if (existing.some((m) => m.id === msg.id)) {
-            // Already present, update status/fields if changed
-            nextState[cId] = existing.map((m) =>
-              m.id === msg.id ? { ...m, ...msg, isOutgoing: isOut } : m
-            );
-            modified = true;
-            return;
-          }
-
-          const merged = [...existing, { ...msg, isOutgoing: isOut }].sort(
-            (a, b) => getTelegramEpoch(a) - getTelegramEpoch(b)
-          );
-          nextState[cId] = merged;
-          modified = true;
-        });
-
-        // Persist incoming message to IndexedDB cache
-        chatsToUpdate.forEach((cId) => {
-          messageCache.putMessage(cId, { ...msg, isOutgoing: isOut }, update).catch(() => {});
-        });
-
-        // Update lastReadMessageId if user is viewing this chat and at the bottom
-        if (isCurrentChat && msg.id) {
-          checkAndUpdateLastReadIfAtBottom(activeChatId || targetChatId, msg.id);
+        const existing = prev[targetChatId] || [];
+        if (existing.some((m) => m.id === msg.id)) {
+          // Already present, update status/fields if changed
+          return {
+            ...prev,
+            [targetChatId]: existing.map((m) =>
+              m.id === msg.id ? { ...m, ...msg, isOutgoing: isOut, chatId: targetChatId } : m
+            ),
+          };
         }
 
-        return modified ? nextState : prev;
+        const merged = [...existing, { ...msg, isOutgoing: isOut, chatId: targetChatId }].sort(
+          (a, b) => getTelegramEpoch(a) - getTelegramEpoch(b)
+        );
+
+        return {
+          ...prev,
+          [targetChatId]: merged,
+        };
       });
+
+      // Persist incoming message to IndexedDB cache
+      messageCache.putMessage(targetChatId, { ...msg, isOutgoing: isOut, chatId: targetChatId }, update).catch(() => {});
+
+      // Update lastReadMessageId if user is viewing this chat and at the bottom
+      if (isCurrentChat && msg.id) {
+        checkAndUpdateLastReadIfAtBottom(targetChatId, msg.id);
+      }
 
       // 2. Update chat item in chats list and reorder to top
       setChats((prev) => {
@@ -4936,6 +5023,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       });
 
+      socket.on('user_typing', (payload: any) => {
+        handleIncomingUpdate({ ...payload, type: 'user_typing' });
+      });
+      socket.on('chat_online_count', (payload: any) => {
+        handleIncomingUpdate({ ...payload, type: 'chat_online_count' });
+      });
       socket.on('new_message', (update: any) => {
         handleIncomingUpdate(update);
       });
@@ -5793,6 +5886,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         forwardingMessage,
         selectedMessageIds,
         typingChatId,
+        typingStatus,
+        onlineCounts,
+        onlineCount,
         chatContextMenu,
         messageContextMenu,
         toasts,
