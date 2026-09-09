@@ -7,6 +7,8 @@ import { VoicePlaybackTopBar } from './VoicePlaybackTopBar';
 import { PinnedMessageBar } from './PinnedMessageBar';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
+import { MessageListContainer } from './MessageListContainer';
+import { FixedInputFooter } from './FixedInputFooter';
 import { RestrictedContentModal } from '../Modals/RestrictedContentModal';
 import { ChatSpeechRecognition } from './ChatSpeechRecognition';
 import { getTelegramEpoch } from '../../utils/dateUtils';
@@ -225,7 +227,9 @@ export const ChatView: React.FC = () => {
             <ChatHeader />
             <VoicePlaybackTopBar />
             <PinnedMessageBar />
-            <MessageList key={activeChatId || 'no_chat'} messages={currentMessages} hidePinnedBar={true} />
+            <MessageListContainer id="tg-chat-message-list-container">
+              <MessageList key={activeChatId || 'no_chat'} messages={currentMessages} hidePinnedBar={true} />
+            </MessageListContainer>
 
             {/* Floating Quick Dictation Launcher (Visible when dictation is closed) */}
             {!isSpeechDictationOpen && (
@@ -275,7 +279,9 @@ export const ChatView: React.FC = () => {
               )}
             </AnimatePresence>
 
-            <ChatInput />
+            <FixedInputFooter id="tg-chat-fixed-input-footer">
+              <ChatInput />
+            </FixedInputFooter>
           </motion.div>
         )}
       </AnimatePresence>

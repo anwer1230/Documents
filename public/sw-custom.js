@@ -335,6 +335,41 @@ self.addEventListener('message', async (event) => {
     showTelegramPushNotification(payload);
   }
 
+  // CACHE MANAGEMENT HANDLERS (Background cache lifecycle & reliability)
+  if (data.type === 'CACHE_MANAGEMENT_PURGE_OUTDATED') {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.map((key) => {
+        if (!key.includes('v13')) {
+          console.log('[SW] Purging outdated cache:', key);
+          return caches.delete(key);
+        }
+      })
+    );
+    await self.clients.claim();
+    if (event.source && event.source.postMessage) {
+      event.source.postMessage({ type: 'CACHE_MANAGEMENT_PURGED' });
+    }
+  }
+
+  if (data.type === 'CACHE_MANAGEMENT_CLEAR_ALL') {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+    console.log('[SW] All caches cleared by management message');
+    if (event.source && event.source.postMessage) {
+      event.source.postMessage({ type: 'CACHE_MANAGEMENT_CLEARED' });
+    }
+  }
+
+  if (data.type === 'CACHE_MANAGEMENT_PRECACHE' && Array.isArray(data.urls)) {
+    try {
+      const cache = await caches.open('telegram-drklo-v13.0.0');
+      await cache.addAll(data.urls);
+    } catch (err) {
+      console.warn('[SW] Precache error:', err);
+    }
+  }
+
   if (data.type === 'REQUEST_OFFLINE_MESSAGES') {
     const db = await openIndexedDB();
     if (db) {

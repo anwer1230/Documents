@@ -108,8 +108,8 @@ export interface ShowNotificationParams {
  * Handles notification dispatching, in-app banner creation, and chat navigation routing.
  */
 
-const SESSION_STORAGE_KEY_COUNT = "tg_inapp_left_swipe_count";
-const SESSION_STORAGE_KEY_MUTED = "tg_inapp_session_muted";
+const SESSION_STORAGE_KEY_COUNT = "tg_session_swipe_dismiss_count";
+const SESSION_STORAGE_KEY_MUTED = "tg_session_notifications_hidden";
 
 export class NotificationEngine {
   private static instance: NotificationEngine;
@@ -178,41 +178,55 @@ export class NotificationEngine {
   /**
    * Returns true if in-app banners are muted for this session after swiping left 3 times.
    */
+  /**
+   * Returns true if in-app banners are muted for this session after swiping to dismiss 3 times.
+   */
   public isSessionMuted(): boolean {
     try {
       if (typeof window === "undefined") return false;
-      return sessionStorage.getItem(SESSION_STORAGE_KEY_MUTED) === "true";
+      return (
+        sessionStorage.getItem(SESSION_STORAGE_KEY_MUTED) === "true" ||
+        sessionStorage.getItem("tg_inapp_session_muted") === "true"
+      );
     } catch {
       return false;
     }
   }
 
   /**
-   * Returns the count of left-swipe dismissals in the current session.
+   * Returns the count of swipe dismissals in the current session.
    */
-  public getSessionSwipeLeftCount(): number {
+  public getSessionSwipeCount(): number {
     try {
       if (typeof window === "undefined") return 0;
-      const val = sessionStorage.getItem(SESSION_STORAGE_KEY_COUNT);
+      const val =
+        sessionStorage.getItem(SESSION_STORAGE_KEY_COUNT) ||
+        sessionStorage.getItem("tg_inapp_left_swipe_count");
       return val ? parseInt(val, 10) || 0 : 0;
     } catch {
       return 0;
     }
   }
 
+  public getSessionSwipeLeftCount(): number {
+    return this.getSessionSwipeCount();
+  }
+
   /**
-   * Records a left-swipe dismissal.
-   * If swiped left 3 or more times, mutes in-app banners for the current session.
+   * Records a swipe dismissal gesture (left, right, or up).
+   * Automatically hides/mutes notifications after three swipes per session.
    */
-  public recordSwipeLeftDismiss(): { count: number; muted: boolean } {
+  public recordSwipeDismiss(_direction?: "left" | "right" | "up" | "button"): { count: number; muted: boolean } {
     try {
       if (typeof window === "undefined") return { count: 0, muted: false };
-      const currentCount = this.getSessionSwipeLeftCount();
+      const currentCount = this.getSessionSwipeCount();
       const newCount = currentCount + 1;
       sessionStorage.setItem(SESSION_STORAGE_KEY_COUNT, String(newCount));
+      sessionStorage.setItem("tg_inapp_left_swipe_count", String(newCount));
 
       if (newCount >= 3) {
         sessionStorage.setItem(SESSION_STORAGE_KEY_MUTED, "true");
+        sessionStorage.setItem("tg_inapp_session_muted", "true");
         this.activeNotifications = [];
         this.notifyListeners();
         return { count: newCount, muted: true };
@@ -223,6 +237,10 @@ export class NotificationEngine {
     }
   }
 
+  public recordSwipeLeftDismiss(): { count: number; muted: boolean } {
+    return this.recordSwipeDismiss("left");
+  }
+
   /**
    * Resets session mute so notifications can be shown again in this session if needed.
    */
@@ -231,9 +249,10 @@ export class NotificationEngine {
       if (typeof window === "undefined") return;
       sessionStorage.removeItem(SESSION_STORAGE_KEY_COUNT);
       sessionStorage.removeItem(SESSION_STORAGE_KEY_MUTED);
+      sessionStorage.removeItem("tg_inapp_left_swipe_count");
+      sessionStorage.removeItem("tg_inapp_session_muted");
     } catch {}
   }
-
   public setSoundEffectsEnabled(enabled: boolean): void {
     this.soundEffectsEnabled = enabled;
   }
@@ -469,10 +488,10 @@ export class NotificationEngine {
       this.notifyListeners();
     }
 
-    if (direction === "left") {
-      return this.recordSwipeLeftDismiss();
+    if (direction === "left" || direction === "right" || direction === "up") {
+      return this.recordSwipeDismiss(direction);
     }
-    return { count: this.getSessionSwipeLeftCount(), muted: this.isSessionMuted() };
+    return { count: this.getSessionSwipeCount(), muted: this.isSessionMuted() };
   }
 
   /**
