@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, ShieldAlert, Lock, Info, Mic } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
@@ -9,14 +9,46 @@ import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { RestrictedContentModal } from '../Modals/RestrictedContentModal';
 import { ChatSpeechRecognition } from './ChatSpeechRecognition';
+import { getTelegramEpoch } from '../../utils/dateUtils';
 
 export const ChatView: React.FC = () => {
-  const { activeChat, activeChatId, settings, sendMessage, showToast } = useTelegram();
+  const { activeChat, activeChatId, messages, settings, sendMessage, showToast } = useTelegram();
   const [isRestrictedModalOpen, setIsRestrictedModalOpen] = useState(false);
   const [isSpeechDictationOpen, setIsSpeechDictationOpen] = useState(false);
 
   const isArabic = settings.language === 'ar';
   const prevChatIdRef = useRef<string | null>(activeChatId);
+
+  // Ensure all message collections are sorted by date in ascending order,
+  // using specific message ID to prevent duplicate rendering and overlap
+  const currentMessages = useMemo(() => {
+    const raw = (activeChatId && messages[activeChatId]) || [];
+    if (!raw.length) return [];
+
+    // Deduplicate messages by unique ID to prevent duplicate rendering and overlap
+    const map = new Map<string, any>();
+    for (const m of raw) {
+      if (!m || m.id === undefined || m.id === null) continue;
+      const key = String(m.id);
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, m);
+      } else {
+        map.set(key, { ...existing, ...m });
+      }
+    }
+
+    // Sort strictly ascending by date (oldest first, newest last) using specific message ID
+    return Array.from(map.values()).sort((a, b) => {
+      const epochA = getTelegramEpoch(a);
+      const epochB = getTelegramEpoch(b);
+      if (epochA !== epochB) return epochA - epochB;
+      const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+      const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
+      return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
+    });
+  }, [activeChatId, messages]);
 
   // Track transition direction for natural native sliding
   useEffect(() => {
@@ -182,7 +214,7 @@ export const ChatView: React.FC = () => {
             <ChatHeader />
             <VoicePlaybackTopBar />
             <PinnedMessageBar />
-            <MessageList />
+            <MessageList messages={currentMessages} hidePinnedBar={true} />
 
             {/* Floating Quick Dictation Launcher (Visible when dictation is closed) */}
             {!isSpeechDictationOpen && (

@@ -244,11 +244,19 @@ const MessageRow = React.memo(({
   }
 ) as unknown as React.ComponentType<RowComponentProps<MessageRowCustomProps>>;
 
-export const MessageList: React.FC = () => {
+export interface MessageListProps {
+  messages?: any[];
+  hidePinnedBar?: boolean;
+}
+
+export const MessageList: React.FC<MessageListProps> = ({
+  messages: propMessages,
+  hidePinnedBar = false,
+}) => {
   const {
     activeChatId,
     activeChat,
-    messages,
+    messages: contextMessages,
     pinMessage,
     settings,
     loadMoreChatMessages,
@@ -286,10 +294,10 @@ export const MessageList: React.FC = () => {
   const lastScrollSaveTimeRef = useRef<number>(0);
 
   const currentMessages = useMemo(() => {
-    const raw = (activeChatId && messages[activeChatId]) || [];
+    const raw = propMessages || ((activeChatId && contextMessages[activeChatId]) || []);
     if (!raw.length) return [];
 
-    // Deduplicate messages by unique ID
+    // Deduplicate messages by unique ID to prevent duplicate rendering and overlap
     const map = new Map<string, any>();
     for (const m of raw) {
       if (!m || m.id === undefined || m.id === null) continue;
@@ -302,7 +310,7 @@ export const MessageList: React.FC = () => {
       }
     }
 
-    // Sort strictly ascending by date (oldest first, newest last)
+    // Sort strictly ascending by date (oldest first, newest last) using specific message ID
     return Array.from(map.values()).sort((a, b) => {
       const epochA = getTelegramEpoch(a);
       const epochB = getTelegramEpoch(b);
@@ -312,13 +320,35 @@ export const MessageList: React.FC = () => {
       if (numA !== numB) return numA - numB;
       return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
     });
-  }, [activeChatId, messages]);
+  }, [activeChatId, propMessages, contextMessages]);
 
   const currentMessagesRef = useRef(currentMessages);
   currentMessagesRef.current = currentMessages;
 
   const pinnedMessages = useMemo(() => {
-    return currentMessages.filter((m) => m.isPinned);
+    const rawPinned = currentMessages.filter((m) => Boolean(m.isPinned));
+    if (!rawPinned.length) return [];
+
+    // Deduplicate pinned messages by specific message ID to prevent duplicate rendering and overlap
+    const map = new Map<string, any>();
+    for (const m of rawPinned) {
+      if (!m || m.id === undefined || m.id === null) continue;
+      const key = String(m.id);
+      if (!map.has(key)) {
+        map.set(key, m);
+      }
+    }
+
+    // Sort strictly ascending by date (oldest first, newest last) using specific message ID
+    return Array.from(map.values()).sort((a, b) => {
+      const epochA = getTelegramEpoch(a);
+      const epochB = getTelegramEpoch(b);
+      if (epochA !== epochB) return epochA - epochB;
+      const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+      const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
+      return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
+    });
   }, [currentMessages]);
 
   const isArabic = settings.language === 'ar';
@@ -353,7 +383,18 @@ export const MessageList: React.FC = () => {
     }
 
     items.push(...baseItems);
-    return items;
+
+    // Deduplicate all grouped items by unique specific ID to prevent duplicate rendering and overlap in virtualized rows
+    const seenIds = new Set<string>();
+    const uniqueGrouped: GroupedItem[] = [];
+    for (const it of items) {
+      const uniqueKey = it.id ? String(it.id) : (it.message?.id ? `msg_${it.message.id}` : `idx_${uniqueGrouped.length}`);
+      if (seenIds.has(uniqueKey)) continue;
+      seenIds.add(uniqueKey);
+      uniqueGrouped.push(it);
+    }
+
+    return uniqueGrouped;
   }, [currentMessages, readInboxMaxId, hasMoreOnServer, isLoadingOlder, olderSkeletons]);
 
   const groupedItemsRef = useRef(groupedItems);
@@ -746,13 +787,18 @@ export const MessageList: React.FC = () => {
   }), [groupedItems, highlightedMessageId]);
 
   const getRowKey = useCallback((index: number, data: MessageRowCustomProps) => {
-    return data.items[index]?.id || index;
+    const item = data.items[index];
+    if (!item) return index;
+    if (item.type === 'message' && item.message?.id !== undefined && item.message?.id !== null) {
+      return `msg_${item.message.id}`;
+    }
+    return item.id ? String(item.id) : index;
   }, []);
 
   return (
     <div id="tg-message-list-root" className="relative flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* Pinned Messages Bar */}
-      {pinnedMessages.length > 0 && (
+      {!hidePinnedBar && pinnedMessages.length > 0 && (
         <div
           id="tg-pinned-bar"
           className="z-10 px-4 py-2 flex items-center justify-between border-b backdrop-blur-md shadow-xs select-none shrink-0"
@@ -796,7 +842,7 @@ export const MessageList: React.FC = () => {
 
       {/* Loading or Empty State */}
       {groupedItems.length === 0 ? (
-        activeChatId && (!messages[activeChatId] || isLoadingOlder) ? (
+        activeChatId && (!currentMessages.length || isLoadingOlder) ? (
           <div
             id="tg-messages-skeleton-area"
             className="flex-1 w-full h-full overflow-hidden select-none tg-wallpaper-pattern"
