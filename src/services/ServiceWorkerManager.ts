@@ -86,7 +86,7 @@ class ServiceWorkerManager {
             { action: "open_chat", title: "Open Chat" },
             { action: "mark_read", title: "Mark Read" },
           ],
-        });
+        } as NotificationOptions & { vibrate?: number[] });
         return true;
       }
 

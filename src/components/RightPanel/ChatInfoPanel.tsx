@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { messageCache, deriveIndexedMediaType } from '../../services/IndexedDBMessageCache';
+import { geminiApi } from '../../services/api';
 import { Message } from '../../types';
 
 export const ChatInfoPanel: React.FC = () => {
@@ -90,19 +91,14 @@ export const ChatInfoPanel: React.FC = () => {
         media: m.media ? { type: m.media.type } : undefined,
       }));
 
-      const res = await fetch('/api/telegram/chat/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chatId: activeChat.id,
-          chatTitle: activeChat.title,
-          messages: payloadMessages,
-          language: settings.language || 'ar',
-        }),
+      const data = await geminiApi.summarizeChat({
+        chatId: activeChat.id,
+        chatTitle: activeChat.title,
+        messages: payloadMessages,
+        language: settings.language || 'ar',
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.message || data.error || 'Failed to generate summary');
       }
 

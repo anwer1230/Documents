@@ -6644,6 +6644,75 @@ Please provide the concise summary.`;
   app.post('/api/telegram/chat/summarize', handleChatSummarize);
   app.post('/api/chat/summarize', handleChatSummarize);
 
+  // Gemini General AI Generation Endpoint
+  app.post(['/api/gemini/generate', '/api/ai/generate'], async (req, res) => {
+    try {
+      const {
+        prompt,
+        systemInstruction,
+        model = 'gemini-3.8-flash',
+        temperature,
+        maxOutputTokens,
+      } = req.body || {};
+
+      if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: 'MISSING_PROMPT',
+          message: 'A valid text prompt is required.',
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({
+          success: false,
+          error: 'GEMINI_API_KEY_NOT_CONFIGURED',
+          message: 'Gemini API key is not configured in server environment (GEMINI_API_KEY).',
+        });
+      }
+
+      const ai = getGeminiClient();
+      const selectedModel = model || 'gemini-3.8-flash';
+      const config: any = {};
+      if (systemInstruction) config.systemInstruction = systemInstruction;
+      if (typeof temperature === 'number') config.temperature = temperature;
+      if (typeof maxOutputTokens === 'number') config.maxOutputTokens = maxOutputTokens;
+
+      const response = await ai.models.generateContent({
+        model: selectedModel,
+        contents: prompt,
+        ...(Object.keys(config).length > 0 ? { config } : {}),
+      });
+
+      return res.json({
+        success: true,
+        text: response.text || '',
+        model: selectedModel,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.error('[Gemini API] Generate error:', err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'GEMINI_GENERATE_ERROR',
+        message: 'Failed to generate content with Gemini API.',
+      });
+    }
+  });
+
+  // Gemini API Status Endpoint
+  app.get(['/api/gemini/status', '/api/ai/status'], (req, res) => {
+    const hasKey = Boolean(process.env.GEMINI_API_KEY);
+    res.json({
+      success: true,
+      configured: hasKey,
+      hasGeminiApiKey: hasKey,
+      defaultModel: 'gemini-3.8-flash',
+      availableModels: ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview'],
+    });
+  });
+
   // Live Telegram Chat & Online Members Info (GetFullChannel / GetFullChat RPC)
   app.post('/api/telegram/chat/full-info', async (req, res) => {
     try {
