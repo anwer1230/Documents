@@ -43,6 +43,7 @@ import { notificationEngine } from '../services/NotificationEngine';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { storageSyncManager } from '../utils/StorageSyncManager';
 import { draftSyncService } from '../services/DraftSyncService';
+import { linkMonitorService } from '../services/LinkMonitorService';
 import { themeController } from '../core/ThemeController';
 import { logTelemetry } from '../utils/telemetry';
 import { PinnedAndForwardHelper } from '../core/PinnedAndForwardHelper';
@@ -3665,6 +3666,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const toggleAutoJoinLinks = () => {
     setAutoJoinLinksEnabled((prev) => {
       const next = !prev;
+      linkMonitorService.setEnabled(next);
       showToast(
         next
           ? (settings.language === 'ar' ? 'تم تفعيل الانضمام الآلي الفوري للروابط 🟢' : 'Instant Auto-Join activated 🟢')
@@ -5049,6 +5051,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             resolvedChatTitle,
             msg.senderName
           );
+          linkMonitorService.scanIncomingMessage(msg, resolvedChatTitle);
         }
 
         // Web Worker background evaluation for private chats (completely isolated from keyword monitor)

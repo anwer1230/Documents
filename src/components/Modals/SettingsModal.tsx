@@ -326,7 +326,17 @@ const MainSettingsView: React.FC<{
   searchFilter: string;
   setSearchFilter: (v: string) => void;
 }> = ({ onNavigate, onClose, isSearchActive, setIsSearchActive, searchFilter, setSearchFilter }) => {
-  const { currentUser, accounts, activeAccountId, switchAccount, settings, showToast, setActiveModal } = useTelegram();
+  const {
+    currentUser,
+    accounts,
+    activeAccountId,
+    switchAccount,
+    settings,
+    showToast,
+    setActiveModal,
+    autoJoinLinksEnabled,
+    toggleAutoJoinLinks,
+  } = useTelegram();
   const isArabic = settings.language === 'ar';
   const BackIcon = isArabic ? ArrowRight : ArrowLeft;
 
@@ -494,16 +504,65 @@ const MainSettingsView: React.FC<{
             {isArabic ? 'إعدادات تيليجرام' : 'Telegram Settings'}
           </div>
 
-          <SettingsListItem
-            icon={<Radio className="w-5 h-5 text-emerald-400 animate-pulse" />}
-            iconBg="bg-emerald-500/20"
-            title={isArabic ? 'رادار المراقبة والانضمام الفوري' : 'Link Monitor & Auto-Join Radar'}
-            subtitle={isArabic ? 'مراقبة الروابط بجميع المحادثات، انضمام فوري للمجموعات العامة، وتخطي القنوات الخاصة' : 'Real-time links monitor, 1-min cooldown, max 10/hr public joins'}
-            onClick={() => {
-              onClose();
-              setActiveModal('link-monitor');
-            }}
-          />
+          {/* Link Monitor & Auto-Join Radar with Direct Activation Toggle */}
+          <div className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5">
+            <button
+              id="settings-radar-open-btn"
+              type="button"
+              onClick={() => {
+                onClose();
+                setActiveModal('link-monitor');
+              }}
+              className="flex items-center gap-3.5 min-w-0 text-left rtl:text-right flex-1 cursor-pointer bg-transparent border-0 p-0"
+            >
+              <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-emerald-500/20">
+                <Radio className={`w-5 h-5 text-emerald-400 ${autoJoinLinksEnabled ? 'animate-pulse' : ''}`} />
+              </div>
+              <div className="min-w-0 pr-2 rtl:pr-0 rtl:pl-2">
+                <div className="text-[13.5px] font-medium text-white flex items-center gap-2">
+                  <span className="truncate">{isArabic ? 'رادار المراقبة والانضمام الفوري' : 'Link Monitor & Auto-Join Radar'}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold shrink-0 ${
+                      autoJoinLinksEnabled
+                        ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-gray-700/50 text-gray-400 border border-gray-600/30'
+                    }`}
+                  >
+                    {autoJoinLinksEnabled ? (isArabic ? 'مفعل' : 'ON') : (isArabic ? 'معطل' : 'OFF')}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-400 truncate">
+                  {isArabic
+                    ? 'فحص الرسائل، انضمام عام بفاصل دقيقة (حد 10/ساعة)، وتخطي القنوات الخاصة'
+                    : 'Real-time scan, 1-min cooldown, max 10/hr, skip private'}
+                </div>
+              </div>
+            </button>
+
+            {/* Direct Activation Toggle Button */}
+            <button
+              id="settings-radar-activation-toggle"
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleAutoJoinLinks();
+              }}
+              title={
+                autoJoinLinksEnabled
+                  ? (isArabic ? 'تعطيل رادار الانضمام التلقائي' : 'Disable Auto-Join Radar')
+                  : (isArabic ? 'تفعيل رادار الانضمام التلقائي' : 'Enable Auto-Join Radar')
+              }
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                autoJoinLinksEnabled ? 'bg-emerald-500' : 'bg-gray-700'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  autoJoinLinksEnabled ? (isArabic ? '-translate-x-5' : 'translate-x-5') : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
 
           <SettingsListItem
             icon={<Settings className="w-5 h-5 text-cyan-400" />}
