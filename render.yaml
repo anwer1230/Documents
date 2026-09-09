@@ -6,18 +6,26 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
+    healthCheckPath: /ping
+    autoDeploy: true
     envVars:
       - key: RENDER
         value: "true"
       - key: SESSION_SECRET
         generateValue: true
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_REPO
-        sync: false
+        value: anwer1230/Abu_Mlk
       - key: GITHUB_BRANCH
         value: main
-      - key: PORT
-        value: "10000"
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_B64
+        sync: false
