@@ -5394,7 +5394,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 data.updates.forEach(handleIncomingUpdate);
               }
             } catch (_) {}
-          }, 3000);
+          }, 15000);
         }
       };
 
