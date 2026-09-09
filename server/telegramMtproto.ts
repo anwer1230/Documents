@@ -703,6 +703,20 @@ export async function getTelegramMessages(chatId: string, sessionString?: string
     const myIdStr = String(me.id);
     const myName = [me.firstName, me.lastName].filter(Boolean).join(' ') || 'أنا';
 
+    let chatEntity: any = null;
+    let chatAvatar = "";
+    let chatTitle = "";
+    try {
+      chatEntity = await client.getEntity(chatId);
+      if (chatEntity) {
+        chatTitle = chatEntity.title || [chatEntity.firstName, chatEntity.lastName].filter(Boolean).join(" ") || "";
+        const photoBuf: any = await client.downloadProfilePhoto(chatEntity, { isBig: false }).catch(() => null);
+        if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+          chatAvatar = "data:image/jpeg;base64," + photoBuf.toString("base64");
+        }
+      }
+    } catch (_) {}
+
     const mappedMessages: any[] = [];
 
     for (const rawM of messages) {
@@ -721,7 +735,8 @@ export async function getTelegramMessages(chatId: string, sessionString?: string
       const senderEntity = m.sender as any;
       const fromIdObj = m.fromId as any;
       let senderId = isOut ? myIdStr : String(m.senderId || (fromIdObj?.userId || fromIdObj?.channelId || chatId));
-      let senderName = isOut ? myName : (senderEntity?.firstName ? [senderEntity.firstName, senderEntity.lastName].filter(Boolean).join(' ') : senderEntity?.title || 'طرف آخر');
+      let resolvedSenderTitle = senderEntity?.firstName ? [senderEntity.firstName, senderEntity.lastName].filter(Boolean).join(" ") : (senderEntity?.title || chatTitle || "مستخدم");
+      let senderName = isOut ? myName : (resolvedSenderTitle === "طرف آخر" ? (chatTitle || "مستخدم") : resolvedSenderTitle);
       let senderUsername = isOut ? me.username : senderEntity?.username;
       let senderAvatar = '';
 
@@ -732,6 +747,9 @@ export async function getTelegramMessages(chatId: string, sessionString?: string
             senderAvatar = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
           }
         } catch (_) {}
+      }
+      if (!isOut && !senderAvatar && chatAvatar) {
+        senderAvatar = chatAvatar;
       }
 
       const mDate = new Date((m.date || Math.floor(Date.now() / 1000)) * 1000);

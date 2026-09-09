@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ActiveCall,
@@ -525,6 +525,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   });
 
   // Cache-First Immediate Loading: Guarantee ZERO blank/white screen on startup or offline
+  const chatsRef = useRef<Chat[]>([]);
+  const messagesRef = useRef<Record<string, Message[]>>({});
+  const currentUserRef = useRef<any>(null);
+
   const [chats, setChats] = useState<Chat[]>(() => {
     if (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0) {
       chatStore.saveChats(initialActiveAcc.chats);
@@ -617,7 +621,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Live Telegram Chat & Online Members Info fetcher on active chat change
   useEffect(() => {
     if (!activeChatId) return;
-    const targetChat = chats.find((c) => c.id === activeChatId);
+    const targetChat = (chatsRef.current || []).find((c) => c.id === activeChatId);
     if (!targetChat || targetChat.type === 'saved' || targetChat.type === 'bot') return;
 
     let isMounted = true;
@@ -659,7 +663,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isMounted = false;
       clearInterval(interval);
     };
-  }, [activeChatId, currentUser.phone, chats]);
+  }, [activeChatId, currentUser.phone]);
+
+  chatsRef.current = chats;
+  messagesRef.current = messages;
+  currentUserRef.current = currentUser;
 
   const [activeFolderId, setActiveFolderId] = useState<string>('all');
   const [folders, setFolders] = useState<Folder[]>(DEFAULT_FOLDERS);
@@ -5433,7 +5441,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const shouldFetch = await messageCache.shouldFetchFromNetwork(activeChatId, 7000);
         if (!shouldFetch) return;
 
-        const currentList = messages[activeChatId] || [];
+        const currentList = messagesRef.current[activeChatId] || [];
         const newestId = currentList.length > 0 ? currentList[currentList.length - 1]?.id : undefined;
 
         const res = await fetch('/api/telegram/messages/fetch', {
@@ -5525,7 +5533,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       clearInterval(activeChatSyncInterval);
     };
-  }, [isAuthenticated, activeChatId, currentUser.phone, messages, settings.soundEffects]);
+  }, [isAuthenticated, activeChatId, currentUser.phone, settings.soundEffects]);
 
   // Synchronize channel/supergroup difference whenever a supergroup is opened
   useEffect(() => {

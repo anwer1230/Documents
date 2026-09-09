@@ -104,6 +104,25 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
   const isMultiSelectMode = selectedMessageIds.length > 0;
   const isArabic = settings.language === 'ar';
 
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+
+  const displaySenderName =
+    message.senderName && message.senderName !== 'طرف آخر'
+      ? message.senderName
+      : activeChat?.title || message.senderName || (isArabic ? 'مستخدم' : 'User');
+
+  const displayAvatar = !avatarLoadFailed
+    ? message.senderAvatar ||
+      (activeChat?.type === 'channel'
+        ? activeChat?.avatar
+        : !isOutgoing && activeChat?.avatar
+        ? activeChat.avatar
+        : '') ||
+      (!isOutgoing && (message.senderId || activeChat?.id)
+        ? `/api/telegram/avatar/${message.senderId || activeChat?.id}`
+        : '')
+    : '';
+
   const isStandaloneSticker =
     message.media?.type === 'sticker' && !message.text && !message.replyTo && !message.forwardedFrom;
   const bigEmojiCheck =
@@ -291,9 +310,9 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
         transition: swipeOffset ? 'none' : 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)',
       }}
       dir="ltr"
-      className={`group relative flex items-end gap-2 px-2 sm:px-3 py-0.5 select-none transition-colors w-full ${
+      className={`group relative flex items-end gap-2 px-2 sm:px-3 py-1 my-0.5 select-none transition-colors w-full ${
         isOutgoing ? 'justify-end' : 'justify-start'
-      } ${isSelected ? 'bg-sky-500/15' : ''}`}
+      } ${grouping?.isGroupStart || grouping?.isSingle ? 'mt-2' : 'mt-0.5'} ${isSelected ? 'bg-sky-500/15' : ''}`}
     >
       {/* Heart Burst Animation on Double-Tap */}
       {showHeartBurst && (
@@ -335,24 +354,25 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
         <button
           type="button"
           onClick={handleSenderClick}
-          title={message.senderName || (isArabic ? 'الملف الشخصي' : 'Profile')}
-          className="w-[35px] h-[35px] rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
+          title={displaySenderName || (isArabic ? 'الملف الشخصي' : 'Profile')}
+          className="w-[35px] h-[35px] rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-105 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
         >
-          {message.senderAvatar ? (
+          {displayAvatar ? (
             <img
-              src={message.senderAvatar}
-              alt={message.senderName || 'Avatar'}
-              className="w-full h-full object-cover"
+              src={displayAvatar}
+              alt={displaySenderName || 'Avatar'}
+              className="w-full h-full object-cover rounded-full"
               referrerPolicy="no-referrer"
+              onError={() => setAvatarLoadFailed(true)}
             />
           ) : (
             <div
               className="w-full h-full text-white font-bold text-xs flex items-center justify-center shadow-inner"
               style={{
-                backgroundColor: getPeerColor(String(message.senderId || message.senderName || 'U')),
+                backgroundColor: getPeerColor(String(message.senderId || displaySenderName || 'U')),
               }}
             >
-              {message.senderName?.charAt(0).toUpperCase() || 'U'}
+              {(displaySenderName || 'U').trim().charAt(0).toUpperCase()}
             </div>
           )}
         </button>
@@ -494,7 +514,7 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
                     color: getPeerColor(String(message.senderId || message.senderName || activeChat?.title)),
                   }}
                 >
-                  <span>{message.senderName || activeChat?.title}</span>
+                  <span>{displaySenderName}</span>
                   {message.senderUsername && (
                     <span className="text-[10px] font-normal text-gray-400 font-mono">
                       @{message.senderUsername}

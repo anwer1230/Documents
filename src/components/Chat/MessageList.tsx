@@ -51,71 +51,94 @@ interface GroupedItem {
  * Accurately calculates height in O(1) time without triggering ResizeObserver re-renders.
  */
 function estimateItemHeight(item?: GroupedItem): number {
-  if (!item) return 64;
-  if (item.type === 'date_divider') return 40;
-  if (item.type === 'unread_divider') return 34;
-  if (item.type === 'origin_badge') return 116;
+  if (!item) return 72;
+  if (item.type === 'date_divider') return 48;
+  if (item.type === 'unread_divider') return 42;
+  if (item.type === 'origin_badge') return 120;
   if (item.type === 'skeleton') {
-    return item.estimatedHeight || (item.skeletonVariant ? SKELETON_HEIGHTS[item.skeletonVariant] : 72);
+    return (item.estimatedHeight || (item.skeletonVariant ? SKELETON_HEIGHTS[item.skeletonVariant] : 72)) + 12;
   }
 
   const msg = item.message;
-  if (!msg) return 60;
+  if (!msg) return 72;
 
-  let height = 8; // py-1 padding (4px top + 4px bottom)
+  // Base container padding and comfortable vertical spacing between bubbles
+  let height = 20;
 
-  // Sender Name (in groups/channels)
-  if (!msg.isOutgoing && msg.senderName) {
-    height += 20;
+  // Group separation: if start of group or single message, add visual gap
+  if (item.isGroupStart || item.isSingle) {
+    height += 12;
   }
+
+  // Sender Name (in groups/channels) + sender rank / creator badge
+  if (!msg.isOutgoing && (msg.senderName || msg.senderRole || msg.senderRank)) {
+    height += 28;
+  }
+
   // Forwarded Header
   if (msg.forwardedFrom) {
-    height += 24;
+    height += 32;
   }
+
   // Reply Quote
   if (msg.replyTo) {
-    height += 38;
+    height += 52;
   }
 
   // Media attachments
   if (msg.media) {
     if (msg.media.type === 'photo' || msg.media.type === 'video') {
-      height += 220;
+      height += 260;
     } else if (msg.media.type === 'voice' || msg.media.type === 'audio') {
-      height += 72;
+      height += 84;
     } else if (msg.media.type === 'sticker') {
-      height += 140;
+      height += 150;
     } else if (msg.media.type === 'document' || msg.media.type === 'file') {
-      height += 68;
+      height += 88;
     } else if (msg.media.type === 'poll') {
-      const answersCount = msg.media.pollData?.answers?.length || 3;
-      height += 80 + answersCount * 36;
+      const answersCount = msg.media.pollData?.options?.length || msg.media.pollData?.answers?.length || 3;
+      height += 110 + answersCount * 44;
     }
   }
 
-  // Link preview card
-  if (msg.linkPreview) {
-    height += 110;
+  // Link preview card (pre-attached OR extracted from message text URLs)
+  const hasLink =
+    Boolean(msg.linkPreview) ||
+    Boolean(
+      msg.text &&
+        (msg.text.includes('http://') ||
+          msg.text.includes('https://') ||
+          msg.text.includes('t.me/'))
+    );
+  if (hasLink) {
+    height += 140;
   }
 
-  // Text content calculation
+  // Text content calculation (mobile bubble: ~22 Arabic chars per line with 26px line-height)
   if (msg.text) {
     const rawLines = msg.text.split('\n');
     let totalLines = 0;
     for (const line of rawLines) {
-      totalLines += Math.max(1, Math.ceil((line.length || 1) / 34));
+      totalLines += Math.max(1, Math.ceil((line.length || 1) / 22));
     }
-    height += Math.max(34, totalLines * 22 + 16);
+    // line height (26px) + vertical padding inside bubble (16px) + timestamp footer (22px)
+    height += totalLines * 26 + 38;
   } else if (!msg.media) {
-    height += 44;
+    height += 56;
   }
 
   // Reactions row
-  if (msg.reactions && Object.keys(msg.reactions).length > 0) {
-    height += 28;
+  const hasReactions =
+    (Array.isArray(msg.reactions) && msg.reactions.length > 0) ||
+    (msg.reactions && typeof msg.reactions === 'object' && Object.keys(msg.reactions).length > 0);
+  if (hasReactions) {
+    height += 36;
   }
 
-  return Math.min(Math.max(48, height), 800);
+  // Safety buffer ensuring message rows never touch or overlap
+  height += 14;
+
+  return Math.min(Math.max(68, height), 1200);
 }
 
 interface MessageRowCustomProps {
@@ -184,12 +207,13 @@ const MessageRow = React.memo(({
 
     if (item.message) {
       const msg = item.message;
+      const isGroupStart = item.isGroupStart || item.isSingle;
       return (
         <div
           style={style}
           data-msg-id={msg.id}
           dir="ltr"
-          className="px-2 sm:px-4 py-0.5 w-full"
+          className={`px-2 sm:px-4 py-1 w-full ${isGroupStart ? 'pt-2' : 'pt-0.5'}`}
         >
           <div
             id={`msg-bubble-container-${msg.id}`}
