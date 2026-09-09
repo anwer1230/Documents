@@ -418,7 +418,7 @@ function parsePushPayload(rawData) {
     'رسالة جديدة';
 
   const senderName = fcmData.sender_name || fcmData.senderName || parsed.senderName || title;
-  const avatar = fcmData.avatar || fcmNotification.icon || parsed.icon || parsed.avatar || '/telegram-logo.svg';
+  const avatar = fcmData.avatar || fcmNotification.icon || parsed.icon || parsed.avatar || '/icons/icon-192.png';
   const isSilent =
     fcmData.silent === true ||
     fcmData.silent === 'true' ||
@@ -619,7 +619,7 @@ self.addEventListener('push', (event) => {
 
     const notificationOptions = {
       body: alertBody,
-      icon: alertData.icon || '/telegram-logo.svg',
+      icon: alertData.icon || '/icons/icon-192.png',
       badge: '/telegram-logo.svg',
       tag: `tg_alert_${alertData.id || alertData.messageId || Date.now()}`,
       renotify: true,
@@ -665,8 +665,8 @@ self.addEventListener('push', (event) => {
   const notifData = rawData.data || rawData;
   const title = notifData.title || rawData.title || 'رسالة جديدة في تيليجرام';
   const body = notifData.body || notifData.text || rawData.body || rawData.text || 'لديك إشعار جديد في تيليجرام';
-  const icon = notifData.icon || rawData.icon || '/telegram-logo.svg';
-  const badge = notifData.badge || rawData.badge || '/telegram-logo.svg';
+  const icon = notifData.icon || rawData.icon || '/icons/icon-192.png';
+  const badge = notifData.badge || rawData.badge || '/icons/icon-192.png';
   const targetChatId = notifData.chatId || notifData.dialog_id || notifData.dialogId || '';
   const urlToOpen = notifData.url || (targetChatId ? `/?dialog_id=${encodeURIComponent(targetChatId)}#/chat/${encodeURIComponent(targetChatId)}` : '/');
 

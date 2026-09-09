@@ -22,7 +22,7 @@ import { useTelegram } from '../../context/TelegramContext';
 
 interface InAppNotificationBannerProps {
   notifications: InAppNotification[];
-  onDismiss: (id: string) => void;
+  onDismiss: (id: string, direction?: 'left' | 'right' | 'up' | 'button') => void;
 }
 
 /**
@@ -158,11 +158,11 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
           if (info.offset.x > threshold || info.velocity.x > velocityThreshold) {
             // Swiped right
             setExitDirection('right');
-            onDismiss(current.id);
+            onDismiss(current.id, 'right');
           } else if (info.offset.x < -threshold || info.velocity.x < -velocityThreshold) {
-            // Swiped left
+            // Swiped left (triggers 3-swipe session mute counter)
             setExitDirection('left');
-            onDismiss(current.id);
+            onDismiss(current.id, 'left');
           }
         }}
         className="fixed top-3 left-1/2 -translate-x-1/2 z-[9999] w-[95%] max-w-lg pointer-events-auto select-none touch-pan-y cursor-grab active:cursor-grabbing"
@@ -351,10 +351,10 @@ export const InAppNotificationBanner: React.FC<InAppNotificationBannerProps> = (
               onClick={(e) => {
                 e.stopPropagation();
                 setExitDirection(isArabic ? 'left' : 'right');
-                onDismiss(current.id);
+                onDismiss(current.id, 'button');
               }}
               className="shrink-0 p-1.5 rounded-xl text-gray-400 hover:text-white hover:bg-white/15 active:scale-90 transition-all cursor-pointer"
-              title={isArabic ? 'إخفاء الإشعار (أو اسحب يميناً/يساراً)' : 'Dismiss notification (or swipe)'}
+              title={isArabic ? 'إخفاء الإشعار (اسحب لليسار 3 مرات لإخفائها بالجلسة)' : 'Dismiss notification (swipe left 3 times to hide for session)'}
               aria-label={isArabic ? 'إغلاق الإشعار' : 'Close notification'}
             >
               <X className="w-4 h-4" />

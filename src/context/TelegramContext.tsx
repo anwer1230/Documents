@@ -139,7 +139,7 @@ interface TelegramContextType {
   messageContextMenu: MessageContextMenu | null;
   toasts: ToastItem[];
   inAppNotifications: InAppNotification[];
-  dismissNotification: (id: string) => void;
+  dismissNotification: (id: string, direction?: 'left' | 'right' | 'up' | 'button') => void;
   triggerNotification: (notif: Omit<InAppNotification, 'id' | 'timestamp'>) => void;
 
   // Link Monitor & Auto-Join Engine (رادار المراقبة والانضمام الفوري)
@@ -1657,6 +1657,16 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         status: granted ? 'connected' : 'permission_denied',
       }));
       if (granted) {
+        import('../services/WebPushManager').then(({ webPushManager }) => {
+          webPushManager.subscribeUserToPush({
+            phone: currentUser.phone,
+            sessionString: currentUser.sessionString || SecureSessionStorage.getItem<string>('tg_session_string') || '',
+            accountId: activeAccountId,
+          }).catch((subErr) => {
+            console.warn('[TelegramContext] Background push registration error:', subErr);
+          });
+        }).catch(() => {});
+
         showToast(
           settings.language === 'ar'
             ? 'تم تفعيل إشعارات Push وربطها بالجلسة بنجاح ✅'
@@ -2306,9 +2316,35 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     notificationEngine.setSoundEffectsEnabled(settings.soundEffects);
   }, [settings.soundEffects]);
 
+  // Auto-subscribe to Web Push background notifications if permission is already granted
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      import('../services/WebPushManager').then(({ webPushManager }) => {
+        webPushManager.checkAndAutoSubscribe().catch(() => {});
+      }).catch(() => {});
+    }
+  }, [activeAccountId, currentUser.id, currentUser.sessionString]);
+
   // Notification Helpers
-  const dismissNotification = (id: string) => {
-    notificationEngine.dismissNotification(id);
+  const dismissNotification = (id: string, direction?: 'left' | 'right' | 'up' | 'button') => {
+    const result = notificationEngine.dismissNotification(id, direction);
+    if (direction === 'left') {
+      if (result.muted) {
+        showToast(
+          settings.language === 'ar'
+            ? 'تم إخفاء إشعارات المحادثات أثناء فتح التطبيق لهذه الجلسة بعد تمريرها 3 مرات للشمال'
+            : 'In-app notifications hidden for this session (swiped left 3 times)',
+          '🔕'
+        );
+      } else {
+        showToast(
+          settings.language === 'ar'
+            ? `تم إخفاء الإشعار (${result.count}/3 مرات للشمال لكتم الإشعارات بالجلسة)`
+            : `Notification dismissed (${result.count}/3 swiped left)`,
+          '👈'
+        );
+      }
+    }
   };
 
   const triggerNotification = (notif: Omit<InAppNotification, 'id' | 'timestamp'>) => {

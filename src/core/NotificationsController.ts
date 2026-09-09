@@ -283,19 +283,48 @@ export class NotificationsController {
       this.listeners.forEach((l) => l(fullNotif));
     }
 
-    // HTML5 Desktop Notification
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      try {
-        const desktopNotif = new Notification(fullNotif.title, {
-          body: fullNotif.body,
-          icon: fullNotif.avatar || undefined,
-          tag: fullNotif.chatId || 'tg_incoming_msg',
-          silent: fullNotif.isSilent,
-        });
-        desktopNotif.onclick = () => {
-          window.focus();
-        };
-      } catch {}
+    // Native System Notification (ServiceWorker showNotification for Android/PWA/Background, fallback to new Notification)
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      const notifTitle = fullNotif.title;
+      const notifOptions: any = {
+        body: fullNotif.body,
+        icon: fullNotif.avatar || "/icons/icon-192.png",
+        badge: "/telegram-logo.svg",
+        tag: fullNotif.chatId ? `tg_chat_${fullNotif.chatId}` : "tg_incoming_msg",
+        silent: fullNotif.isSilent,
+        renotify: true,
+        vibrate: [200, 100, 200],
+        data: {
+          chatId: fullNotif.chatId,
+          dialog_id: fullNotif.chatId,
+          url: fullNotif.chatId ? `/?dialog_id=${encodeURIComponent(fullNotif.chatId)}#/chat/${encodeURIComponent(fullNotif.chatId)}` : "/",
+          timestamp: Date.now(),
+        },
+      };
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.ready
+          .then((reg) => {
+            if (reg && reg.showNotification) {
+              return reg.showNotification(notifTitle, notifOptions);
+            }
+          })
+          .catch(() => {
+            try {
+              const desktopNotif = new Notification(notifTitle, notifOptions);
+              desktopNotif.onclick = () => {
+                window.focus();
+              };
+            } catch {}
+          });
+      } else {
+        try {
+          const desktopNotif = new Notification(notifTitle, notifOptions);
+          desktopNotif.onclick = () => {
+            window.focus();
+          };
+        } catch {}
+      }
     }
   }
 

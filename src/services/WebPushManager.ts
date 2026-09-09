@@ -59,12 +59,28 @@ class WebPushManager {
    */
   public async checkAndAutoSubscribe(): Promise<void> {
     try {
-      if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('Notification' in window)) return;
-      const sessionString = localStorage.getItem('tg_session_string') || '';
-      if (!sessionString) return;
+      if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("Notification" in window)) return;
+      let sessionString = "";
+      try {
+        const { SecureSessionStorage } = await import("../utils/SecureSessionStorage");
+        sessionString = SecureSessionStorage.getItem<string>("tg_session_string") || "";
+      } catch {}
+      if (!sessionString) {
+        sessionString = localStorage.getItem("tg_session_string") || "";
+      }
+      let phone = "";
+      try {
+        const { SecureSessionStorage } = await import("../utils/SecureSessionStorage");
+        phone = SecureSessionStorage.getItem<string>("tg_phone") || "";
+      } catch {}
+      let accountId = "";
+      try {
+        const { SecureSessionStorage } = await import("../utils/SecureSessionStorage");
+        accountId = SecureSessionStorage.getItem<string>("tg_active_account_id_v3") || "";
+      } catch {}
 
-      if (Notification.permission === 'granted') {
-        await this.subscribeUserToPush({ sessionString });
+      if (Notification.permission === "granted") {
+        await this.subscribeUserToPush({ sessionString, phone, accountId });
       }
     } catch (_) {}
   }

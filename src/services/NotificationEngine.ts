@@ -107,6 +107,10 @@ export interface ShowNotificationParams {
  * NotificationEngine - Replicates NotificationsController.java
  * Handles notification dispatching, in-app banner creation, and chat navigation routing.
  */
+
+const SESSION_STORAGE_KEY_COUNT = "tg_inapp_left_swipe_count";
+const SESSION_STORAGE_KEY_MUTED = "tg_inapp_session_muted";
+
 export class NotificationEngine {
   private static instance: NotificationEngine;
   private activeNotifications: InAppNotification[] = [];
@@ -171,6 +175,65 @@ export class NotificationEngine {
     this.isMutedCheckHandler = checker;
   }
 
+  /**
+   * Returns true if in-app banners are muted for this session after swiping left 3 times.
+   */
+  public isSessionMuted(): boolean {
+    try {
+      if (typeof window === "undefined") return false;
+      return sessionStorage.getItem(SESSION_STORAGE_KEY_MUTED) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Returns the count of left-swipe dismissals in the current session.
+   */
+  public getSessionSwipeLeftCount(): number {
+    try {
+      if (typeof window === "undefined") return 0;
+      const val = sessionStorage.getItem(SESSION_STORAGE_KEY_COUNT);
+      return val ? parseInt(val, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Records a left-swipe dismissal.
+   * If swiped left 3 or more times, mutes in-app banners for the current session.
+   */
+  public recordSwipeLeftDismiss(): { count: number; muted: boolean } {
+    try {
+      if (typeof window === "undefined") return { count: 0, muted: false };
+      const currentCount = this.getSessionSwipeLeftCount();
+      const newCount = currentCount + 1;
+      sessionStorage.setItem(SESSION_STORAGE_KEY_COUNT, String(newCount));
+
+      if (newCount >= 3) {
+        sessionStorage.setItem(SESSION_STORAGE_KEY_MUTED, "true");
+        this.activeNotifications = [];
+        this.notifyListeners();
+        return { count: newCount, muted: true };
+      }
+      return { count: newCount, muted: false };
+    } catch {
+      return { count: 0, muted: false };
+    }
+  }
+
+  /**
+   * Resets session mute so notifications can be shown again in this session if needed.
+   */
+  public resetSessionMute(): void {
+    try {
+      if (typeof window === "undefined") return;
+      sessionStorage.removeItem(SESSION_STORAGE_KEY_COUNT);
+      sessionStorage.removeItem(SESSION_STORAGE_KEY_MUTED);
+    } catch {}
+  }
+
   public setSoundEffectsEnabled(enabled: boolean): void {
     this.soundEffectsEnabled = enabled;
   }
@@ -224,9 +287,17 @@ export class NotificationEngine {
       }
     }
 
-    // 2. Add to In-App notification list
-    this.activeNotifications = [...this.activeNotifications, notif];
-    this.notifyListeners();
+    // 2. Add to In-App notification list IF NOT muted for this session after 3 left swipes
+    const isMutedForSession = this.isSessionMuted();
+    if (!isMutedForSession) {
+      this.activeNotifications = [...this.activeNotifications, notif];
+      this.notifyListeners();
+
+      // Auto-dismiss after 5 seconds
+      setTimeout(() => {
+        this.dismissNotification(notif.id);
+      }, 5000);
+    }
 
     // 3. Post to central NotificationsController
     notificationsController.postNotification({
@@ -273,10 +344,7 @@ export class NotificationEngine {
     // 5. Broadcast to NotificationCenter
     NotificationCenter.getGlobalInstance().postNotificationName('notificationsCountUpdated');
 
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-      this.dismissNotification(notif.id);
-    }, 5000);
+
 
     return notif;
   }
@@ -287,6 +355,78 @@ export class NotificationEngine {
    * - Dismisses the banner
    * - Invokes navigationHandler to activate the ChatView thread immediately
    */
+  /**
+   * Dispatches a native OS system notification via ServiceWorker showNotification
+   * (essential for Android Chrome/PWA, iOS PWA, and desktop browsers in background)
+   */
+  private async dispatchSystemNotification(notif: InAppNotification, shouldSilence: boolean): Promise<void> {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const title = notif.title || "تيليجرام";
+    const body = notif.body || "";
+    const icon = notif.avatar || "/icons/icon-192.png";
+    const tag = notif.chatId ? `tg_chat_${notif.chatId}` : `tg_notif_${Date.now()}`;
+    const targetUrl = notif.chatId
+      ? `/?dialog_id=${encodeURIComponent(notif.chatId)}#/chat/${encodeURIComponent(notif.chatId)}`
+      : "/";
+
+    const options: any = {
+      body,
+      icon,
+      badge: "/telegram-logo.svg",
+      tag,
+      silent: shouldSilence,
+      renotify: true,
+      vibrate: [200, 100, 200],
+      data: {
+        chatId: notif.chatId,
+        dialog_id: notif.chatId,
+        messageId: notif.messageId,
+        senderName: notif.senderName,
+        url: targetUrl,
+        timestamp: Date.now(),
+      },
+      actions: [
+        { action: "open_chat", title: "فتح المحادثة" },
+        { action: "mark_read", title: "تحديد كمقروء" },
+      ],
+    };
+
+    // Priority 1: ServiceWorker registration showNotification (standard for background PWA & Android)
+    if ("serviceWorker" in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        if (reg && reg.showNotification) {
+          await reg.showNotification(title, options);
+          return;
+        }
+      } catch (swErr) {
+        console.warn("[NotificationEngine] ServiceWorker showNotification warning:", swErr);
+      }
+    }
+
+    // Priority 2: Standard HTML5 Notification fallback (desktop only)
+    try {
+      const osNotif = new Notification(title, {
+        body,
+        icon,
+        badge: "/telegram-logo.svg",
+        tag,
+        silent: shouldSilence,
+      });
+      osNotif.onclick = () => {
+        window.focus();
+        if (notif.chatId && this.navigationHandler) {
+          this.navigationHandler(notif.chatId);
+        }
+        osNotif.close();
+      };
+    } catch (e) {
+      console.warn("[NotificationEngine] OS Notification error:", e);
+    }
+  }
+
   public handleNotificationClick(notificationId: string): void {
     const target = this.activeNotifications.find((n) => n.id === notificationId);
     if (!target) return;
@@ -319,12 +459,20 @@ export class NotificationEngine {
   /**
    * Dismisses an in-app notification banner by ID
    */
-  public dismissNotification(notificationId: string): void {
+  public dismissNotification(
+    notificationId: string,
+    direction?: "left" | "right" | "up" | "button"
+  ): { count: number; muted: boolean } {
     const next = this.activeNotifications.filter((n) => n.id !== notificationId);
     if (next.length !== this.activeNotifications.length) {
       this.activeNotifications = next;
       this.notifyListeners();
     }
+
+    if (direction === "left") {
+      return this.recordSwipeLeftDismiss();
+    }
+    return { count: this.getSessionSwipeLeftCount(), muted: this.isSessionMuted() };
   }
 
   /**

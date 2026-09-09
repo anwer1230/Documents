@@ -146,7 +146,7 @@ class BackgroundNotificationDaemon {
       ? `${payload.senderName}: ${payload.body}`
       : payload.body;
 
-    const iconUrl = payload.avatar || '/telegram-logo.svg';
+    const iconUrl = payload.avatar || '/icons/icon-192.png';
 
     // 1. Play auditory and vibration feedback
     this.playNotificationSound();
@@ -158,6 +158,11 @@ class BackgroundNotificationDaemon {
 
     // 2. Try ServiceWorker registration showNotification (highest priority for Android mobile notification drawer)
     let dispatchedViaSW = false;
+    if (!this.serviceWorkerRegistration && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        this.serviceWorkerRegistration = await navigator.serviceWorker.ready;
+      } catch {}
+    }
     if (this.serviceWorkerRegistration && this.serviceWorkerRegistration.showNotification) {
       try {
         const swOptions: any = {

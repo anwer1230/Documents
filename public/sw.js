@@ -517,7 +517,7 @@ function parsePushPayload(rawData) {
     'New message received';
 
   const senderName = fcmData.sender_name || fcmData.senderName || parsed.senderName || title;
-  const avatar = fcmData.avatar || fcmNotification.icon || parsed.avatar || '/telegram-logo.svg';
+  const avatar = fcmData.avatar || fcmNotification.icon || parsed.avatar || '/icons/icon-192.png';
   const isSilent =
     fcmData.silent === true ||
     fcmData.silent === 'true' ||
