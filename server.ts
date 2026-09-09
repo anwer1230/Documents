@@ -5462,16 +5462,44 @@ async function startServer() {
       try {
         channelDiff = await getChannelDifference(channelId, pts, client);
       } catch (invokeErr: any) {
-        // If channel difference fails due to invalid PTS or PERSISTENT_TIMESTAMP_INVALID, retry with pts=0 or fallback
-        console.warn(`[MTProto] GetChannelDifference failed for ${channelId} (pts=${pts}):`, invokeErr?.message || invokeErr);
+        const errMsg = String(invokeErr?.message || invokeErr);
+        // Handle PERSISTENT_TIMESTAMP_EMPTY when pts=0 or timestamp has expired
+        if (errMsg.includes('PERSISTENT_TIMESTAMP_EMPTY') || Number(pts) <= 0) {
+          console.log(`[MTProto] Channel difference reset for ${channelId} (pts=${pts}): fallback to initial state`);
+          try {
+            const historyMsgs: any = await client.getMessages(targetEntity, { limit: 50 }).catch(() => []);
+            let latestPts = 0;
+            if (Array.isArray(historyMsgs) && historyMsgs.length > 0) {
+              const maxMsgPts = Math.max(...historyMsgs.map((m: any) => m.pts || 0));
+              if (maxMsgPts > 0) latestPts = maxMsgPts;
+            }
+            return res.json({
+              success: true,
+              empty: (historyMsgs || []).length === 0,
+              pts: latestPts,
+              messages: (historyMsgs || []).map((m: any) => ({
+                id: m.id,
+                text: m.message || '',
+                date: m.date,
+                senderId: m.fromId ? String(m.fromId.userId || m.fromId) : '',
+                pts: m.pts,
+              })),
+              isFinal: true,
+            });
+          } catch (_) {
+            return res.json({ success: true, empty: true, pts: 0, isFinal: true });
+          }
+        }
+
+        console.warn(`[MTProto] GetChannelDifference failed for ${channelId} (pts=${pts}):`, errMsg);
         if (pts && Number(pts) > 0) {
           try {
             channelDiff = await getChannelDifference(channelId, 0, client);
           } catch (retryErr: any) {
-            throw retryErr;
+            return res.json({ success: true, empty: true, pts: Number(pts) || 0, isFinal: true });
           }
         } else {
-          throw invokeErr;
+          return res.json({ success: true, empty: true, pts: Number(pts) || 0, isFinal: true });
         }
       }
 

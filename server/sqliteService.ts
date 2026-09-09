@@ -136,23 +136,38 @@ export class SQLiteDatabaseService {
       // Initialize sql.js synchronously via promise resolution if possible
       initSqlJs().then((SQL: any) => {
         const sqlDb = fileBuffer ? new SQL.Database(fileBuffer) : new SQL.Database();
+        let saveTimeout: NodeJS.Timeout | null = null;
+        let isSaving = false;
+
         const saveToDisk = () => {
+          if (isSaving) return;
+          isSaving = true;
           try {
             const data = sqlDb.export();
             fs.writeFileSync(this.dbFilePath, Buffer.from(data));
           } catch (err) {
             console.error('[SQLite] Failed to write sql.js database to disk:', err);
+          } finally {
+            isSaving = false;
           }
+        };
+
+        const scheduleSave = () => {
+          if (saveTimeout) return;
+          saveTimeout = setTimeout(() => {
+            saveTimeout = null;
+            saveToDisk();
+          }, 150);
         };
 
         this.db = {
           exec: (sql: string) => {
             sqlDb.run(sql);
-            saveToDisk();
+            scheduleSave();
           },
           run: (sql: string, params?: any[]) => {
             sqlDb.run(sql, params || []);
-            saveToDisk();
+            scheduleSave();
             return { changes: 1 };
           },
           all: <T = any>(sql: string, params?: any[]): T[] => {
@@ -887,8 +902,14 @@ export class SQLiteDatabaseService {
 
   public saveCachedMessages(chatId: string, messages: any[]): void {
     if (!this.db || !chatId || !Array.isArray(messages) || messages.length === 0) return;
+    let inTransaction = false;
     try {
-      this.db.exec('BEGIN TRANSACTION');
+      try {
+        this.db.exec('BEGIN TRANSACTION');
+        inTransaction = true;
+      } catch {
+        inTransaction = false;
+      }
       const now = Date.now();
       for (const m of messages) {
         if (!m || !m.id) continue;
@@ -913,12 +934,23 @@ export class SQLiteDatabaseService {
           ]
         );
       }
-      this.db.exec('COMMIT');
-    } catch (e) {
-      try {
-        this.db?.exec('ROLLBACK');
-      } catch (_) {}
-      console.warn(`[SQLite] saveCachedMessages(${chatId}) warning:`, e);
+      if (inTransaction) {
+        try {
+          this.db.exec('COMMIT');
+        } catch (commitErr: any) {
+          const errMsg = String(commitErr?.message || commitErr);
+          if (!errMsg.includes('no transaction is active')) {
+            console.warn(`[SQLite] commit notice in saveCachedMessages(${chatId}):`, errMsg);
+          }
+        }
+      }
+    } catch (e: any) {
+      if (inTransaction) {
+        try {
+          this.db?.exec('ROLLBACK');
+        } catch (_) {}
+      }
+      console.warn(`[SQLite] saveCachedMessages(${chatId}) warning:`, e?.message || e);
     }
   }
 
