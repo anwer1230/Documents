@@ -3,7 +3,7 @@
     {
       "install_id": "fp-5afd3fb0ef13e4c10d269f63",
       "user_id": "user_1",
-      "ip": "145.224.99.x",
+      "ip": "150.228.11.134",
       "geo": {
         "country": "Yemen",
         "region": "Aden",
@@ -13,22 +13,22 @@
         "lat": 12.79,
         "lon": 45.02
       },
-      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
-      "cookies": "{\"install_id\": \"fp-5afd3fb0ef13e4c10d269f63\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSrISSxJyy_Kjc_JT09PTYnPzIPJlBanFsVnpihZQViGSrUACbcXXg.aqBkMQ.wp6XP_vefjmSw0Tuxw7Cr70xYCY\"}",
+      "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36",
+      "cookies": "{\"install_id\": \"fp-5afd3fb0ef13e4c10d269f63\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSrISSxJyy_Kjc_JT09PTYnPzIPJlBanFsVnpihZQViGSrUACbcXXg.aqBmDg.usTRf4J3ZNUq_c2RRp63kFheCKc\"}",
       "timestamp": "2026-09-08T19:37:07.374464",
-      "last_seen": "2026-09-08T19:38:26.632079",
+      "last_seen": "2026-09-08T19:55:29.864230",
       "is_active": true,
       "users_state": {
         "user_1": {
           "name": "Lamis",
           "phone": "+201120945094",
-          "account_name": "Lamis",
+          "account_name": "",
           "authenticated": true,
           "connected": true,
-          "is_running": false,
+          "is_running": true,
           "blocked": false,
           "last_seen": "",
-          "monitoring_active": false,
+          "monitoring_active": true,
           "connected_at": "",
           "disconnected_at": "",
           "session_history": []
