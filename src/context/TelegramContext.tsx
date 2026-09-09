@@ -3758,8 +3758,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const joinChatByInviteLink = async (link: string): Promise<{ success: boolean; message?: string }> => {
     try {
+      const res = await linkMonitorService.joinNow(link);
+      if (res && res.success) {
+        return res;
+      }
+      // Fallback to resolveTelegramLink
       await resolveTelegramLink(link);
-      return { success: true, message: 'تم الانضمام بنجاح' };
+      return { success: true, message: res?.message || 'تم الانضمام بنجاح' };
     } catch (e: any) {
       return { success: false, message: e?.message || 'تعذر الانضمام' };
     }

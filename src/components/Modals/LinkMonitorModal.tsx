@@ -99,12 +99,6 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
 
   // Join Link Now manually
   const handleJoinNow = async (url: string) => {
-    const isPrivate = url.includes('+') || url.includes('joinchat') || url.includes('invite=');
-    if (isPrivate) {
-      showToast('🔒 هذا رابط قناة خاصة، رادار المراقبة لا ينضم للقنوات الخاصة', '⚠️');
-      return;
-    }
-
     setJoiningUrls((prev) => ({ ...prev, [url]: true }));
     try {
       const res = await joinChatByInviteLink(url);
@@ -135,9 +129,9 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
 
   // Compute stats
   const statTotal = links.length;
-  const statJoined = links.filter((l) => l.status === 'joined' || l.joined).length;
+  const statJoined = links.filter((l) => l.status === 'joined' || l.joined || l.status === 'already_member').length;
   const statSkippedPrivate = links.filter(
-    (l) => l.status === 'skipped_private_channel' || l.url.includes('+') || l.url.includes('joinchat')
+    (l) => l.status === 'skipped_private_channel'
   ).length;
   const statPending = links.filter((l) => l.status === 'pending').length;
 
@@ -323,11 +317,11 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                   ) : (
                     links.map((link) => {
                       const isJoined = link.status === 'joined' || link.joined;
-                      const isSkippedPrivate =
-                        link.status === 'skipped_private_channel' ||
-                        link.url.includes('+') ||
-                        link.url.includes('joinchat') ||
-                        link.url.includes('invite=');
+                      const isAlreadyMember = link.status === 'already_member';
+                      const isJoining = link.status === 'joining' || Boolean(joiningUrls[link.url]);
+                      const isSkippedPrivate = link.status === 'skipped_private_channel';
+                      const isPendingApproval = link.failReason?.includes('موافقة المشرف');
+                      const isFailed = link.status === 'failed';
                       const isPending = link.status === 'pending';
 
                       let badgeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
@@ -338,10 +332,26 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                         badgeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
                         badgeText = '✅ تم الانضمام بنجاح';
                         borderRightColor = 'border-r-emerald-500';
+                      } else if (isAlreadyMember) {
+                        badgeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+                        badgeText = '✅ أنت عضو بالفعل';
+                        borderRightColor = 'border-r-emerald-400';
+                      } else if (isJoining) {
+                        badgeClass = 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
+                        badgeText = '🔄 جارِ الانضمام...';
+                        borderRightColor = 'border-r-cyan-400';
+                      } else if (isPendingApproval) {
+                        badgeClass = 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+                        badgeText = '⏳ بانتظار موافقة المشرف';
+                        borderRightColor = 'border-r-blue-400';
                       } else if (isSkippedPrivate) {
                         badgeClass = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
                         badgeText = '🔒 قناة خاصة (تم التخطي)';
                         borderRightColor = 'border-r-purple-500';
+                      } else if (isFailed) {
+                        badgeClass = 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+                        badgeText = `❌ فشل (${link.failReason || 'خطأ'})`;
+                        borderRightColor = 'border-r-rose-500';
                       } else if (isPending) {
                         badgeClass = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
                         badgeText = '⏳ بانتظار دور الانضمام (فاصل دقيقة)';

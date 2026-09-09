@@ -514,9 +514,23 @@ export class ConnectionsManager {
           const channelId = request.channel?.channel_id || request.channel || 0;
           const accessHash = request.channel?.access_hash || '0';
           
-          // إرسال طلب انضمام حقيقي إلى الخادم الخلفي
-          const sessionString = this.session.sessionString || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '') : '');
-          const phone = this.session.phone || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '') : '');
+          // إرسال طلب انضمام حقيقي إلى الخادم الخلفي مع دعم كافة مفاتيح الجلسة المخزنة
+          const sessionString =
+            this.session.sessionString ||
+            (typeof window !== 'undefined'
+              ? localStorage.getItem('tg_session_string') ||
+                localStorage.getItem('telegram_session_string') ||
+                sessionStorage.getItem('tg_session_string') ||
+                ''
+              : '');
+          const phone =
+            this.session.phone ||
+            (typeof window !== 'undefined'
+              ? localStorage.getItem('tg_phone') ||
+                localStorage.getItem('telegram_phone') ||
+                sessionStorage.getItem('tg_phone') ||
+                ''
+              : '');
           
           if (!sessionString || !phone) {
             const err: TLRPC.TL_error = { code: 401, text: 'AUTH_KEY_UNREGISTERED' };
@@ -590,8 +604,22 @@ export class ConnectionsManager {
 
         if (reqType === 'TL_messages_importChatInvite' || reqType === 'messages.importChatInvite') {
           const hash = request.hash;
-          const sessionString = this.session.sessionString || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '') : '');
-          const phone = this.session.phone || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '') : '');
+          const sessionString =
+            this.session.sessionString ||
+            (typeof window !== 'undefined'
+              ? localStorage.getItem('tg_session_string') ||
+                localStorage.getItem('telegram_session_string') ||
+                sessionStorage.getItem('tg_session_string') ||
+                ''
+              : '');
+          const phone =
+            this.session.phone ||
+            (typeof window !== 'undefined'
+              ? localStorage.getItem('tg_phone') ||
+                localStorage.getItem('telegram_phone') ||
+                sessionStorage.getItem('tg_phone') ||
+                ''
+              : '');
           
           if (!sessionString || !phone) {
             const err: TLRPC.TL_error = { code: 401, text: 'AUTH_KEY_UNREGISTERED' };

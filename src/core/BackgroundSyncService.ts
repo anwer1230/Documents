@@ -657,6 +657,13 @@ export class BackgroundSyncService {
     this.isInstantAutoJoinEnabled = enabled;
     this.syncStateToWorker();
     this.notifyStateChange();
+    try {
+      localStorage.setItem('tg_radar_auto_join_enabled', String(enabled));
+      localStorage.setItem('tg_auto_join_enabled_v1', String(enabled));
+    } catch {}
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('tg-radar-toggle-sync', { detail: { enabled } }));
+    }
   }
 
   public isInstantJoinEnabled(): boolean {
@@ -678,22 +685,10 @@ export class BackgroundSyncService {
     return url.includes('+') || url.includes('joinchat') || url.includes('invite=');
   }
 
-  // Point 1: Rate-limited join function (queued sequentially with 10s cooldown)
+  // Point 1: Rate-limited join function (queued sequentially with cooldown)
   public async manualJoinDiscoveredLink(linkId: string): Promise<boolean> {
     const item = this.discoveredLinks.find((l) => l.id === linkId);
     if (!item) return false;
-
-    // Point 2: Prevent private channels immediately
-    if (this.isPrivateChannelLink(item.url)) {
-      item.status = 'failed';
-      item.failReason = 'PRIVATE_CHANNEL_NOT_ALLOWED';
-      item.autoJoined = false;
-      await telegramDb.discoveredLinks
-        .update(linkId, { status: 'failed', failReason: 'PRIVATE_CHANNEL_NOT_ALLOWED' })
-        .catch(() => {});
-      this.notifyStateChange();
-      return false;
-    }
 
     // Already joined
     if (item.status === 'joined') {
@@ -717,7 +712,7 @@ export class BackgroundSyncService {
     });
   }
 
-  // Sequential Queue Processor: enforces 10s delay between any join actions
+  // Sequential Queue Processor: enforces safety delay between any join actions
   private async processJoinQueue(): Promise<void> {
     if (this.isProcessingQueue) {
       return;
@@ -762,37 +757,44 @@ export class BackgroundSyncService {
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
 
-      // Point 2: Strictly verify not private channel before executing ("وان كان رابط قناه خاصة لاتنضم الية تتركه")
-      if (this.isPrivateChannelLink(item.url)) {
-        this.joinQueue.shift();
-        item.status = 'failed';
-        item.failReason = 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)';
-        item.autoJoined = false;
-        await telegramDb.discoveredLinks
-          .update(item.id, { status: 'failed', failReason: item.failReason })
-          .catch(() => {});
-        this.notifyStateChange();
-        queueItem.resolve(false);
-        continue;
-      }
-
       // Set status to joining
       item.status = 'joining';
       this.notifyStateChange();
 
       let success = false;
+      const isPrivate = this.isPrivateChannelLink(item.url);
       try {
-        const username = item.url
-          .replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\//i, '')
-          .replace(/^tg:\/\/resolve\?domain=/i, '')
-          .replace(/^@/, '')
-          .split('/')[0]
-          .split('?')[0];
+        if (isPrivate) {
+          let hash = '';
+          if (item.url.includes('+')) {
+            hash = item.url.split('+')[1].split('/')[0].split('?')[0];
+          } else if (item.url.includes('joinchat/')) {
+            hash = item.url.split('joinchat/')[1].split('/')[0].split('?')[0];
+          } else if (item.url.includes('invite=')) {
+            hash = item.url.split('invite=')[1].split('&')[0];
+          }
 
-        await connectionsManager.sendRequest({
-          _: 'TL_channels_joinChannel',
-          channel: { _: 'inputChannel', channel_id: username, access_hash: '0' },
-        });
+          if (hash) {
+            await connectionsManager.sendRequest({
+              _: 'TL_messages_importChatInvite',
+              hash,
+            });
+          } else {
+            throw new Error('INVITE_HASH_INVALID');
+          }
+        } else {
+          const username = item.url
+            .replace(/^https?:\/\/(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\//i, '')
+            .replace(/^tg:\/\/resolve\?domain=/i, '')
+            .replace(/^@/, '')
+            .split('/')[0]
+            .split('?')[0];
+
+          await connectionsManager.sendRequest({
+            _: 'TL_channels_joinChannel',
+            channel: { _: 'inputChannel', channel_id: username, access_hash: '0' },
+          });
+        }
 
         // Record join timestamps for rate limiter (1 min cooldown & 10/hr max)
         this.lastJoinTime = Date.now();
@@ -803,11 +805,14 @@ export class BackgroundSyncService {
         const groupTitle =
           item.sourceChatTitle && item.sourceChatTitle !== 'محادثة تلغرام'
             ? item.sourceChatTitle
-            : `@${username}`;
+            : isPrivate
+            ? 'مجموعة خاصة عبر رابط دعوة'
+            : `@${item.url.split('/').pop()}`;
         const hourlyCount = this.hourlyJoinTimestamps.length;
+        const typeText = isPrivate ? 'لمجموعة/قناة عبر رابط دعوة خاص' : 'لمجموعة عامة';
         const savedMessageText =
           `🔔 **رادار المراقبة والانضمام الفوري** ⚡\n\n` +
-          `✅ **تم الانضمام التلقائي بنجاح لمجموعة عامة:**\n` +
+          `✅ **تم الانضمام التلقائي بنجاح ${typeText}:**\n` +
           `👥 **اسم المجموعة:** ${groupTitle}\n` +
           `🔗 **الرابط:** ${item.url}\n` +
           `💬 **محادثة المصدر:** ${item.sourceChatTitle || 'محادثة'}\n` +
@@ -855,13 +860,24 @@ export class BackgroundSyncService {
         this.notifyStateChange();
         success = true;
       } catch (e: any) {
-        item.status = 'failed';
-        item.failReason = e?.text || 'INVITE_EXPIRED_OR_PRIVATE';
+        const errorText = e?.text || e?.message || 'JOIN_FAILED';
+        if (errorText.includes('ALREADY_PARTICIPANT') || errorText.includes('USER_ALREADY_PARTICIPANT')) {
+          item.status = 'joined';
+          item.failReason = undefined;
+          success = true;
+        } else if (errorText.includes('INVITE_REQUEST_SENT')) {
+          item.status = 'pending';
+          item.failReason = 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف ⏳';
+          success = true;
+        } else {
+          item.status = 'failed';
+          item.failReason = errorText;
+          success = false;
+        }
         await telegramDb.discoveredLinks
-          .update(item.id, { status: 'failed', failReason: item.failReason })
+          .update(item.id, { status: item.status, failReason: item.failReason })
           .catch(() => {});
         this.notifyStateChange();
-        success = false;
       }
 
       // Dequeue and resolve promise

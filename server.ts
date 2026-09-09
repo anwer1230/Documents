@@ -5025,8 +5025,8 @@ async function startServer() {
       });
     }
 
-    // الحصول على عميل MTProto للجلسة المحددة
-    const client = await getClientForSession(sessionString, phone);
+    // الحصول على عميل MTProto للجلسة المحددة مع دعم العميل الرئيسي كاحتياطي
+    const client = (await getClientForSession(sessionString, phone)) || (mainTelegramClient?.connected ? mainTelegramClient : null);
     if (!client || !client.connected) {
       return res.status(401).json({
         success: false,
@@ -5146,7 +5146,21 @@ async function startServer() {
           message: 'رابط الدعوة منتهي الصلاحية',
         });
       }
-      if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+      if (errMsg.includes('INVITE_REQUEST_SENT')) {
+        return res.status(200).json({
+          success: true,
+          status: 'pending_approval',
+          message: 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف',
+        });
+      }
+      if (errMsg.includes('CHANNELS_TOO_MUCH')) {
+        return res.status(400).json({
+          success: false,
+          error: 'CHANNELS_TOO_MUCH',
+          message: 'تم الوصول إلى الحد الأقصى للقنوات والمجموعات المسموح بها في حسابك',
+        });
+      }
+      if (errMsg.includes('USER_ALREADY_PARTICIPANT') || errMsg.includes('ALREADY_PARTICIPANT')) {
         return res.status(200).json({
           success: true,
           alreadyMember: true,

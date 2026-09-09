@@ -3,12 +3,12 @@
  *
  * Dedicated Link Monitor & Auto-Join Radar service.
  * - Scans incoming messages in real-time across all chats.
- * - Detects Telegram group & channel links.
- * - Strictly ignores private channel links (links containing /+, /joinchat/, or invite=).
- * - Identifies public group links for automatic joining.
+ * - Detects Telegram group & channel links (both public usernames and private invite links).
+ * - Configurable support for private invite links (+, /joinchat/, invite=).
  * - Enforces rate limiting: 1-minute cooldown between joins & maximum 10 joins per hour.
  * - Sends rich notification updates to the local user's private chat (Saved Messages).
  * - Triggers instant cloud cache synchronization upon successful joins.
+ * - Supports instant manual join (joinNow) bypassing queues.
  */
 
 import { ConnectionsManager } from '../core/ConnectionsManager';
@@ -31,6 +31,7 @@ export interface MonitoredLinkItem {
 
 export type LinkMonitorListener = (state: {
   enabled: boolean;
+  allowPrivateInvites: boolean;
   links: MonitoredLinkItem[];
   hourlyCount: number;
   lastJoinTime: number;
@@ -46,6 +47,7 @@ export class LinkMonitorService {
 
   // State
   private enabled: boolean = true;
+  private allowPrivateInvites: boolean = true;
   private links: MonitoredLinkItem[] = [];
   private lastJoinTime: number = 0;
   private hourlyJoinTimestamps: number[] = [];
@@ -84,7 +86,15 @@ export class LinkMonitorService {
         this.enabled = legacyEnabled !== null ? legacyEnabled === 'true' : true;
       }
 
-      // 2. Rate limit timestamps
+      // 2. Allow Private Invite links state (default true)
+      const savedPrivate = localStorage.getItem('tg_radar_allow_private_invites');
+      if (savedPrivate !== null) {
+        this.allowPrivateInvites = savedPrivate === 'true';
+      } else {
+        this.allowPrivateInvites = true;
+      }
+
+      // 3. Rate limit timestamps
       const savedLastTime = Number(localStorage.getItem('tg_radar_last_join_time')) || 0;
       this.lastJoinTime = savedLastTime;
 
@@ -97,7 +107,7 @@ export class LinkMonitorService {
         }
       }
 
-      // 3. Captured links cache
+      // 4. Captured links cache
       const savedLinks = localStorage.getItem('tg_radar_monitored_links');
       if (savedLinks) {
         const parsed = JSON.parse(savedLinks);
@@ -119,6 +129,7 @@ export class LinkMonitorService {
     try {
       localStorage.setItem('tg_radar_auto_join_enabled', String(this.enabled));
       localStorage.setItem('tg_auto_join_enabled_v1', String(this.enabled));
+      localStorage.setItem('tg_radar_allow_private_invites', String(this.allowPrivateInvites));
       localStorage.setItem('tg_radar_last_join_time', String(this.lastJoinTime));
       localStorage.setItem('tg_radar_hourly_joins', JSON.stringify(this.hourlyJoinTimestamps));
       localStorage.setItem('tg_radar_monitored_links', JSON.stringify(this.links.slice(0, 100)));
@@ -167,12 +178,41 @@ export class LinkMonitorService {
   }
 
   /**
+   * Whether auto-joining private invite links is allowed
+   */
+  public isAllowPrivateInvites(): boolean {
+    return this.allowPrivateInvites;
+  }
+
+  /**
+   * Sets whether auto-joining private invite links is allowed
+   */
+  public setAllowPrivateInvites(value: boolean): void {
+    this.allowPrivateInvites = value;
+    this.savePersistedState();
+    this.notifyListeners();
+  }
+
+  /**
+   * Gets the remaining cooldown time in seconds before next join
+   */
+  public getCooldownRemaining(): number {
+    if (!this.lastJoinTime) return 0;
+    const elapsed = Date.now() - this.lastJoinTime;
+    return Math.max(0, Math.ceil((this.COOLDOWN_MS - elapsed) / 1000));
+  }
+
+  /**
    * Gets the number of joins performed in the last 1 hour
    */
   public getHourlyCount(): number {
     const oneHourAgo = Date.now() - this.HOURLY_WINDOW_MS;
     this.hourlyJoinTimestamps = this.hourlyJoinTimestamps.filter((t) => t > oneHourAgo);
     return this.hourlyJoinTimestamps.length;
+  }
+
+  public getHourlyLimit(): number {
+    return this.MAX_HOURLY_JOINS;
   }
 
   /**
@@ -205,6 +245,7 @@ export class LinkMonitorService {
     this.listeners.add(listener);
     listener({
       enabled: this.enabled,
+      allowPrivateInvites: this.allowPrivateInvites,
       links: this.links,
       hourlyCount: this.getHourlyCount(),
       lastJoinTime: this.lastJoinTime,
@@ -217,6 +258,7 @@ export class LinkMonitorService {
   private notifyListeners(): void {
     const state = {
       enabled: this.enabled,
+      allowPrivateInvites: this.allowPrivateInvites,
       links: this.links,
       hourlyCount: this.getHourlyCount(),
       lastJoinTime: this.lastJoinTime,
@@ -236,7 +278,6 @@ export class LinkMonitorService {
 
   /**
    * Checks if a link points to a private channel or invite link
-   * Requirement: Strictly ignore private channel links ("وان كان رابط قناه خاصة لاتنضم الية تتركه")
    */
   public isPrivateChannelLink(url: string): boolean {
     if (!url) return false;
@@ -250,12 +291,34 @@ export class LinkMonitorService {
   }
 
   /**
+   * Extracts private invite hash from URL
+   */
+  public extractInviteHash(url: string): string | null {
+    if (!url) return null;
+    const plusMatch = url.match(/(?:\+|\/joinchat\/|invite=)([a-zA-Z0-9_-]{10,})/i);
+    if (plusMatch && plusMatch[1]) {
+      return plusMatch[1];
+    }
+    const clean = url
+      .replace(/^(https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/(joinchat\/|\+)?/i, '')
+      .split('?')[0]
+      .split('/')[0]
+      .trim();
+    if (clean && clean.length >= 10) {
+      return clean;
+    }
+    return null;
+  }
+
+  /**
    * Checks if a link is a public Telegram group or channel link
    */
   public isPublicGroupLink(url: string): boolean {
     if (!url || this.isPrivateChannelLink(url)) return false;
     const publicMatch = url.match(/(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/([a-zA-Z0-9_]{4,})/i);
-    return Boolean(publicMatch && !['joinchat', 'c', 'addstickers', 'proxy', 'share', 'login'].includes(publicMatch[1].toLowerCase()));
+    return Boolean(
+      publicMatch && !['joinchat', 'c', 'addstickers', 'proxy', 'share', 'login'].includes(publicMatch[1].toLowerCase())
+    );
   }
 
   /**
@@ -309,16 +372,21 @@ export class LinkMonitorService {
     const isPrivate = this.isPrivateChannelLink(url);
     const existingIndex = this.links.findIndex((l) => l.url.toLowerCase() === url.toLowerCase());
 
+    const shouldSkipPrivate = isPrivate && !this.allowPrivateInvites;
+
     const item: MonitoredLinkItem = {
-      id: existingIndex >= 0 ? this.links[existingIndex].id : 'radar_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+      id:
+        existingIndex >= 0
+          ? this.links[existingIndex].id
+          : 'radar_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
       url,
       sourceChatTitle: chatTitle || 'محادثة تلغرام',
       sourceChatId: message.chatId || 'chat_unknown',
       senderName: message.senderName || 'مستخدم',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      status: isPrivate ? 'skipped_private_channel' : 'pending',
-      failReason: isPrivate
-        ? 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)'
+      status: shouldSkipPrivate ? 'skipped_private_channel' : 'pending',
+      failReason: shouldSkipPrivate
+        ? 'قناة خاصة - تم التخطي (الانضمام للقنوات الخاصة معطل)'
         : undefined,
       autoJoined: false,
     };
@@ -338,39 +406,40 @@ export class LinkMonitorService {
 
     // Persist in IndexedDB
     try {
-      telegramDb.discoveredLinks.put({
-        id: item.id,
-        url: item.url,
-        sourceChatTitle: item.sourceChatTitle,
-        sourceChatId: item.sourceChatId,
-        senderName: item.senderName,
-        timestamp: item.timestamp,
-        status: item.status,
-        failReason: item.failReason,
-        autoJoined: item.autoJoined,
-      }).catch(() => {});
+      telegramDb.discoveredLinks
+        .put({
+          id: item.id,
+          url: item.url,
+          sourceChatTitle: item.sourceChatTitle,
+          sourceChatId: item.sourceChatId,
+          senderName: item.senderName,
+          timestamp: item.timestamp,
+          status: item.status,
+          failReason: item.failReason,
+          autoJoined: item.autoJoined,
+        })
+        .catch(() => {});
     } catch {}
 
-    // If it is a private channel link, STRICTLY SKIP IT (Do not join)
-    if (isPrivate) {
-      console.log(`[LinkMonitorService] Private channel link ignored: ${url}`);
+    // If private channel links are disabled by setting, skip it
+    if (shouldSkipPrivate) {
+      console.log(`[LinkMonitorService] Private channel link skipped per setting: ${url}`);
       return;
     }
 
-    // If auto-join radar is enabled and it is a public group link, enqueue for joining
-    if (this.enabled && this.isPublicGroupLink(url)) {
+    // If auto-join radar is enabled, enqueue for joining
+    if (this.enabled) {
       this.enqueueJoin(item);
     }
   }
 
   /**
-   * Enqueues a public link for rate-limited auto-joining
+   * Enqueues a link for rate-limited auto-joining
    */
   public enqueueJoin(item: MonitoredLinkItem): Promise<boolean> {
-    // If it's a private channel, refuse join immediately
-    if (this.isPrivateChannelLink(item.url)) {
+    if (this.isPrivateChannelLink(item.url) && !this.allowPrivateInvites) {
       item.status = 'skipped_private_channel';
-      item.failReason = 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)';
+      item.failReason = 'قناة خاصة - تم التخطي (الانضمام للقنوات الخاصة معطل)';
       this.savePersistedState();
       this.notifyListeners();
       return Promise.resolve(false);
@@ -402,11 +471,12 @@ export class LinkMonitorService {
         const queueEntry = this.joinQueue[0];
         const { item, resolve } = queueEntry;
 
-        // Verify again that it's not a private channel link
-        if (this.isPrivateChannelLink(item.url)) {
+        // Verify if private channel is allowed
+        const isPrivate = this.isPrivateChannelLink(item.url);
+        if (isPrivate && !this.allowPrivateInvites) {
           this.joinQueue.shift();
           item.status = 'skipped_private_channel';
-          item.failReason = 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)';
+          item.failReason = 'قناة خاصة - تم التخطي (الانضمام للقنوات الخاصة معطل)';
           this.savePersistedState();
           this.notifyListeners();
           resolve(false);
@@ -444,7 +514,20 @@ export class LinkMonitorService {
         item.status = 'joining';
         this.notifyListeners();
 
-        const success = await this.executePublicJoin(item);
+        let success = false;
+        if (isPrivate) {
+          const hash = this.extractInviteHash(item.url);
+          if (hash) {
+            success = await this.executePrivateJoin(item, hash);
+          } else {
+            item.status = 'failed';
+            item.failReason = 'تعذر استخراج رمز الدعوة';
+            this.savePersistedState();
+            this.notifyListeners();
+          }
+        } else {
+          success = await this.executePublicJoin(item);
+        }
 
         // Dequeue entry and resolve
         this.joinQueue.shift();
@@ -459,7 +542,9 @@ export class LinkMonitorService {
    * Executes public group join and sends updates to the user's private chat (Saved Messages)
    */
   private async executePublicJoin(item: MonitoredLinkItem): Promise<boolean> {
-    const publicMatch = item.url.match(/(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/([a-zA-Z0-9_]{4,})/i);
+    const publicMatch = item.url.match(
+      /(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me|telegram\.dog)\/([a-zA-Z0-9_]{4,})/i
+    );
     const username = publicMatch ? publicMatch[1] : '';
 
     if (!username) {
@@ -493,7 +578,7 @@ export class LinkMonitorService {
       this.notifyListeners();
 
       // Send notification update to user's private chat (Saved Messages)
-      await this.sendNotificationToPrivateChat(item, username);
+      await this.sendNotificationToPrivateChat(item, username, false);
 
       // Invoke cloud syncInitializationRoutine immediately so local cache updates
       if (typeof connectionsManager.syncInitializationRoutine === 'function') {
@@ -521,6 +606,12 @@ export class LinkMonitorService {
 
       if (errMsg.includes('ALREADY_PARTICIPANT') || errMsg.includes('USER_ALREADY_PARTICIPANT')) {
         item.status = 'already_member';
+      } else if (errMsg.includes('INVITE_REQUEST_SENT')) {
+        item.status = 'pending';
+        item.failReason = 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف ⏳';
+      } else if (errMsg.includes('CHANNELS_TOO_MUCH')) {
+        item.status = 'failed';
+        item.failReason = 'تم الوصول للحد الأقصى للقنوات والمجموعات في حسابك';
       } else {
         item.status = 'failed';
         item.failReason = errMsg;
@@ -533,19 +624,162 @@ export class LinkMonitorService {
   }
 
   /**
+   * Executes private invite link join via messages.importChatInvite
+   */
+  private async executePrivateJoin(item: MonitoredLinkItem, hash: string): Promise<boolean> {
+    try {
+      const connectionsManager = ConnectionsManager.getInstance();
+
+      // Send real MTProto import invite request
+      const res: any = await connectionsManager.sendRequest({
+        _: 'TL_messages_importChatInvite',
+        hash,
+      });
+
+      // Update rate-limiting timestamps
+      const joinTimestamp = Date.now();
+      this.lastJoinTime = joinTimestamp;
+      this.hourlyJoinTimestamps.push(joinTimestamp);
+
+      if (res?.status === 'pending_approval') {
+        item.status = 'pending';
+        item.failReason = 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف ⏳';
+        this.savePersistedState();
+        this.notifyListeners();
+        return true;
+      }
+
+      item.status = 'joined';
+      item.autoJoined = true;
+      item.joinedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      this.savePersistedState();
+      this.notifyListeners();
+
+      // Send notification update to user's private chat (Saved Messages)
+      await this.sendNotificationToPrivateChat(item, hash, true);
+
+      // Invoke cloud syncInitializationRoutine immediately so local cache updates
+      if (typeof connectionsManager.syncInitializationRoutine === 'function') {
+        connectionsManager.syncInitializationRoutine().catch(() => {});
+      }
+
+      // Dispatch global window event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('tg-radar-link-joined', {
+            detail: {
+              url: item.url,
+              groupTitle: item.sourceChatTitle || 'مجموعة خاصة',
+              joinedAt: item.joinedAt,
+              hourlyCount: this.getHourlyCount(),
+            },
+          })
+        );
+      }
+
+      return true;
+    } catch (err: any) {
+      console.warn('[LinkMonitorService] Failed to auto-join private group:', err);
+      const errMsg = err?.message || err?.text || 'خطأ أثناء الانضمام';
+
+      if (errMsg.includes('ALREADY_PARTICIPANT') || errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+        item.status = 'already_member';
+      } else if (errMsg.includes('INVITE_REQUEST_SENT')) {
+        item.status = 'pending';
+        item.failReason = 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف ⏳';
+      } else if (errMsg.includes('CHANNELS_TOO_MUCH')) {
+        item.status = 'failed';
+        item.failReason = 'تم الوصول للحد الأقصى للقنوات والمجموعات في حسابك';
+      } else {
+        item.status = 'failed';
+        item.failReason = errMsg;
+      }
+
+      this.savePersistedState();
+      this.notifyListeners();
+      return false;
+    }
+  }
+
+  /**
+   * Manual direct join bypassing queue restrictions
+   */
+  public async joinNow(urlOrItem: string | MonitoredLinkItem): Promise<{ success: boolean; message?: string }> {
+    const url = typeof urlOrItem === 'string' ? urlOrItem : urlOrItem.url;
+    let item: MonitoredLinkItem | undefined =
+      typeof urlOrItem === 'object' ? urlOrItem : this.links.find((l) => l.url.toLowerCase() === url.toLowerCase());
+
+    if (!item) {
+      item = {
+        id: 'radar_manual_' + Date.now(),
+        url,
+        sourceChatTitle: 'انضمام يدوي',
+        sourceChatId: 'manual',
+        senderName: 'أنا',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'joining',
+        autoJoined: false,
+      };
+      this.links.unshift(item);
+    } else {
+      item.status = 'joining';
+    }
+    this.savePersistedState();
+    this.notifyListeners();
+
+    const isPrivate = this.isPrivateChannelLink(url);
+    let success = false;
+
+    if (isPrivate) {
+      const hash = this.extractInviteHash(url);
+      if (hash) {
+        success = await this.executePrivateJoin(item, hash);
+      } else {
+        item.status = 'failed';
+        item.failReason = 'تعذر استخراج رمز الدعوة';
+        this.savePersistedState();
+        this.notifyListeners();
+        return { success: false, message: 'تعذر استخراج رمز الدعوة' };
+      }
+    } else {
+      success = await this.executePublicJoin(item);
+    }
+
+    if (item.status === 'already_member') {
+      return { success: true, message: 'أنت عضو بالفعل في هذه المجموعة/القناة' };
+    }
+    if (item.failReason?.includes('موافقة المشرف')) {
+      return { success: true, message: 'تم إرسال طلب الانضمام، بانتظار موافقة المشرف' };
+    }
+    if (success) {
+      return { success: true, message: 'تم الانضمام بنجاح!' };
+    }
+    return { success: false, message: item.failReason || 'فشل الانضمام للمجموعة' };
+  }
+
+  /**
    * Sends rich notification update to the local user's private chat (Saved Messages / chat_saved)
    */
-  private async sendNotificationToPrivateChat(item: MonitoredLinkItem, username: string): Promise<void> {
+  private async sendNotificationToPrivateChat(
+    item: MonitoredLinkItem,
+    targetIdentifier: string,
+    isPrivate: boolean
+  ): Promise<void> {
     const groupTitle =
       item.sourceChatTitle && item.sourceChatTitle !== 'محادثة تلغرام'
         ? item.sourceChatTitle
-        : `@${username}`;
+        : isPrivate
+        ? 'مجموعة خاصة عبر رابط دعوة'
+        : `@${targetIdentifier}`;
     const nowTime = item.joinedAt || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const hourlyCount = this.getHourlyCount();
 
+    const typeDesc = isPrivate ? 'لمجموعة/قناة عبر رابط دعوة خاص' : 'لمجموعة عامة';
+
     const notificationMessage =
       `🔔 **رادار المراقبة والانضمام الفوري (Link Monitor Radar)** ⚡\n\n` +
-      `✅ **تم الانضمام التلقائي بنجاح لمجموعة عامة:**\n` +
+      `✅ **تم الانضمام التلقائي بنجاح ${typeDesc}:**\n` +
       `👥 **اسم المجموعة:** ${groupTitle}\n` +
       `🔗 **الرابط:** ${item.url}\n` +
       `💬 **محادثة المصدر:** ${item.sourceChatTitle || 'محادثة'}\n` +
@@ -567,12 +801,12 @@ export class LinkMonitorService {
       console.warn('[LinkMonitorService] Failed to send notification to Saved Messages via RPC, trying endpoint:', sendErr);
       try {
         const sessionString =
-          localStorage.getItem('telegram_session_string') ||
           localStorage.getItem('tg_session_string') ||
+          localStorage.getItem('telegram_session_string') ||
           '';
         const phone =
-          localStorage.getItem('telegram_phone') ||
           localStorage.getItem('tg_phone') ||
+          localStorage.getItem('telegram_phone') ||
           '';
         if (sessionString && phone) {
           await fetch('/api/telegram/send-message', {
