@@ -156,7 +156,7 @@ interface TelegramContextType {
 
   // Authentication & Sessions
   isAuthenticated: boolean;
-  login: (data: { name: string; phone: string; username?: string; avatar?: string; bio?: string; sessionString?: string }) => void;
+  login: (data: { id?: string; name: string; phone: string; username?: string; avatar?: string; bio?: string; sessionString?: string }) => void;
   logout: (targetAccountId?: string) => void;
 
   // Multi-Account Management
@@ -1896,10 +1896,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     syncInitializationRoutine(targetAcc.user.phone, targetAcc.sessionString);
   };
 
-  const login = (data: { name: string; phone: string; username?: string; avatar?: string; bio?: string; sessionString?: string }) => {
-    const newId = `acc_${Date.now()}`;
+  const login = (data: { id?: string; name: string; phone: string; username?: string; avatar?: string; bio?: string; sessionString?: string }) => {
+    const cleanPhoneDigits = (data.phone || '').replace(/\D/g, '');
+    const defaultUserId = cleanPhoneDigits ? `user_${cleanPhoneDigits}` : `user_${Date.now()}`;
+    const defaultAccId = cleanPhoneDigits ? `acc_${cleanPhoneDigits}` : `acc_${Date.now()}`;
+    const newId = defaultAccId;
     const newUser: User = {
-      id: `user_${Date.now()}`,
+      id: data.id || defaultUserId,
       name: data.name.trim() || 'مستخدم تيليجرام',
       phone: data.phone.trim(),
       username: (data.username || '').replace(/^@/, '').trim() || undefined,

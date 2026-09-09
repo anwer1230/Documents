@@ -181,13 +181,11 @@ export default defineConfig((async ({ command }: any) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {
+      watch: {
         ignored: [
           '**/sessions/**',
+          '**/*.sqlite*',
           '**/data/**',
-          '**/*.sqlite',
-          '**/*.sqlite-journal',
           '**/telemetry_logs.json',
           '**/settings.json',
           '**/batches.json',

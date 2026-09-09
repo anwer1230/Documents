@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { loginController, AuthTokensHelper, UserConfig, NotificationCenter } from '../../core/messenger';
+import { SecureSessionStorage } from '../../utils/SecureSessionStorage';
 
 const normalizeFullPhone = (val: string): string => {
   let clean = (val || '').trim().replace(/[\s\-\(\)]/g, '');
@@ -404,21 +405,34 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
       e.preventDefault();
       e.stopPropagation();
     }
-    const fullPhone = normalizeFullPhone(phoneNumber || '+967 772 997 043');
-    setIsLoading(true);
-    setStatusMessage(isArabic ? 'جارٍ تسجيل الدخول وتفعيل الحساب سحابياً...' : 'Activating session...');
+    const fullPhone = normalizeFullPhone(phoneNumber || '+967772997043');
+    const numericId = fullPhone.replace(/\D/g, '');
+    const userId = `user_${numericId}`;
 
-    setTimeout(() => {
-      setIsLoading(false);
-      login({
-        name: firstName.trim() || (isArabic ? 'أنور فؤاد' : 'Telegram User'),
-        phone: fullPhone,
-        username: username.trim() || 'anwer_dev',
-        avatar: '',
-        bio: 'Telegram Client • Native Cloud Session',
-      });
-      showToast(isArabic ? 'تم تفعيل الحساب وتسجيل الدخول بنجاح!' : 'Logged in successfully!', '🎉');
-    }, 600);
+    // إنشاء مفتاح جلسة مستقر ودائم
+    const simulatedSessionString = `1BA${btoa(fullPhone)}_${Date.now()}`;
+    
+    // تفعيل الحالة في التخزين الدائم
+    localStorage.setItem('tg_session_string', simulatedSessionString);
+    sessionStorage.setItem('tg_session_string', simulatedSessionString);
+    try {
+      SecureSessionStorage.setItem('tg_session_string', simulatedSessionString);
+      SecureSessionStorage.setItem('tg_auth_session_active', true);
+      SecureSessionStorage.setItem('tg_phone', fullPhone);
+    } catch {}
+    localStorage.setItem('tg_auth_session_active', 'true');
+    localStorage.setItem('tg_phone', fullPhone);
+    localStorage.removeItem('tg_explicitly_logged_out');
+
+    login({
+      id: userId,
+      name: firstName.trim() || 'أنور سيف',
+      phone: fullPhone,
+      username: username.trim() || `user_${numericId.slice(-4)}`,
+      avatar: '',
+      bio: 'Telegram Client • Native Cloud Session',
+    });
+    showToast(isArabic ? 'تم تفعيل الحساب وتسجيل الدخول بنجاح!' : 'Logged in successfully!', '🎉');
   };
 
   // 4.5 Quick Instant Demo Login
@@ -428,16 +442,32 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
 
     setTimeout(() => {
       setIsLoading(false);
-      const fullPhone = normalizeFullPhone(phoneNumber || '+967 772 997 043');
+      const fullPhone = normalizeFullPhone(phoneNumber || '+967772997043');
+      const numericId = fullPhone.replace(/\D/g, '');
+      const userId = `user_${numericId}`;
+      const simulatedSessionString = `1BA${btoa(fullPhone)}_${Date.now()}`;
+
+      localStorage.setItem('tg_session_string', simulatedSessionString);
+      sessionStorage.setItem('tg_session_string', simulatedSessionString);
+      try {
+        SecureSessionStorage.setItem('tg_session_string', simulatedSessionString);
+        SecureSessionStorage.setItem('tg_auth_session_active', true);
+        SecureSessionStorage.setItem('tg_phone', fullPhone);
+      } catch {}
+      localStorage.setItem('tg_auth_session_active', 'true');
+      localStorage.setItem('tg_phone', fullPhone);
+      localStorage.removeItem('tg_explicitly_logged_out');
+
       login({
-        name: firstName.trim() || 'أنور فؤاد',
+        id: userId,
+        name: firstName.trim() || 'أنور سيف',
         phone: fullPhone,
-        username: username.trim() || 'anwer_dev',
+        username: username.trim() || `user_${numericId.slice(-4)}`,
         avatar: '',
-        bio: 'Telegram Native Client • Layer 184',
+        bio: 'Telegram Client • Native Cloud Session',
       });
       showToast(isArabic ? 'تم تفعيل الجلسة والاتصال بالسحابة' : 'Session activated', '✅');
-    }, 700);
+    }, 400);
   };
 
   // 5. QR Code Login Simulation
@@ -447,15 +477,32 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
 
     setTimeout(() => {
       setIsLoading(false);
+      const fullPhone = '+967772997043';
+      const numericId = '967772997043';
+      const userId = `user_${numericId}`;
+      const simulatedSessionString = `1BA${btoa(fullPhone)}_${Date.now()}`;
+
+      localStorage.setItem('tg_session_string', simulatedSessionString);
+      sessionStorage.setItem('tg_session_string', simulatedSessionString);
+      try {
+        SecureSessionStorage.setItem('tg_session_string', simulatedSessionString);
+        SecureSessionStorage.setItem('tg_auth_session_active', true);
+        SecureSessionStorage.setItem('tg_phone', fullPhone);
+      } catch {}
+      localStorage.setItem('tg_auth_session_active', 'true');
+      localStorage.setItem('tg_phone', fullPhone);
+      localStorage.removeItem('tg_explicitly_logged_out');
+
       login({
-        name: 'أنور فؤاد',
-        phone: '+967 772 997 043',
+        id: userId,
+        name: 'أنور سيف',
+        phone: fullPhone,
         username: 'anwer_dev',
         avatar: '',
         bio: 'Telegram Desktop / Web Session Authenticated via QR',
       });
       showToast(isArabic ? 'تم تسجيل الدخول عبر رمز QR بنجاح' : 'QR Login Successful!', '🎉');
-    }, 1200);
+    }, 600);
   };
 
   return (

@@ -5,7 +5,7 @@ import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
 
-// Guard against rapid chunk load reload loops (allow max 1 reload per 60s)
+// Guard against chunk load errors without forced reloads
 window.addEventListener('error', (event) => {
   const isChunkError =
     event?.message &&
@@ -14,26 +14,16 @@ window.addEventListener('error', (event) => {
       event.message.includes('error loading dynamically imported module'));
 
   if (isChunkError) {
-    const lastReload = Number(sessionStorage.getItem('last_chunk_reload') || 0);
-    const now = Date.now();
-
-    if (now - lastReload < 60000) {
-      console.warn('[App] Chunk error occurred, reload loop suppressed safely.');
-      return;
-    }
-
-    sessionStorage.setItem('last_chunk_reload', String(now));
-    console.warn('[App] Dynamic chunk missing, reloading once to synchronize latest assets...');
-    window.location.reload();
+    console.warn('[App] Chunk error occurred, suppressed safely to avoid unwanted reload loops.');
   }
 });
 
-// PWA Service Worker Registration & Web Push Init (Unified & Safe)
+// PWA Service Worker Registration & Web Push Init (Unified & Safe via virtual:pwa-register)
 if ('serviceWorker' in navigator) {
-  // Clean up any stale or conflicting standalone registrations
+  // Clean up any stale or conflicting legacy service workers (e.g., service-worker.js)
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     for (const reg of registrations) {
-      if (reg.active?.scriptURL.includes('service-worker.js') && reg.active?.scriptURL.includes('sw.js')) {
+      if (reg.active?.scriptURL.includes('service-worker.js')) {
         reg.unregister().catch(() => {});
       }
     }

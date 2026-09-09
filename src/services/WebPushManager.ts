@@ -44,7 +44,11 @@ class WebPushManager {
         navigator.serviceWorker.addEventListener('message', (event) => {
           if (event.data?.type === 'SESSION_REVOKED') {
             console.warn('[WebPushManager] SESSION_REVOKED received from ServiceWorker:', event.data);
-            this.handleLocalSessionPurge(event.data.reason || 'SESSION_REVOKED');
+            this.handleLocalSessionPurge(
+              event.data.reason || 'SESSION_REVOKED',
+              event.data.phone || event.data.phoneNumber,
+              event.data.sessionString || event.data.sessionKey
+            );
           }
         });
       }
@@ -290,8 +294,12 @@ class WebPushManager {
             payload.type === 'AUTH_KEY_UNREGISTERED' ||
             (payload.type === 'updateNewAuthorization' && payload.is_current_revoked)
           ) {
-            console.warn('[WebPushManager] SESSION_REVOKED event received from server:', payload);
-            this.handleLocalSessionPurge(payload.reason || 'SESSION_REVOKED');
+            console.warn('[WebPushManager] Revocation event received from server:', payload);
+            this.handleLocalSessionPurge(
+              payload.reason || 'SESSION_REVOKED',
+              payload.phone || payload.phoneNumber,
+              payload.sessionKey || payload.sessionString
+            );
           }
 
           // 2. Settings Synchronized event
@@ -316,10 +324,76 @@ class WebPushManager {
   }
 
   /**
-   * Purges local session from storage and notifies listeners
+   * Purges local session from storage and notifies listeners.
+   * Only executes if the revocation explicitly matches the active local session and phone.
    */
-  public handleLocalSessionPurge(reason: string = 'SESSION_REVOKED'): void {
+  public handleLocalSessionPurge(reason: string = 'SESSION_REVOKED', targetPhone?: string, targetSession?: string): void {
     try {
+      if (typeof window === 'undefined') return;
+
+      // Ignore transient network errors or vague reasons
+      const lowerReason = String(reason || '').toLowerCase();
+      if (
+        lowerReason.includes('timeout') ||
+        lowerReason.includes('network') ||
+        lowerReason.includes('offline') ||
+        lowerReason.includes('failed to fetch') ||
+        lowerReason.includes('502') ||
+        lowerReason.includes('503')
+      ) {
+        console.warn('[WebPushManager] Suppressed purge: Transient network error does not justify local session wipe.', reason);
+        return;
+      }
+
+      // Check current active session identifiers
+      let currentSession = '';
+      let currentPhone = '';
+      try {
+        currentSession = localStorage.getItem('tg_session_string') || sessionStorage.getItem('tg_session_string') || '';
+        currentPhone = localStorage.getItem('tg_phone') || sessionStorage.getItem('tg_phone') || '';
+      } catch {}
+
+      // If no active session, nothing to purge
+      if (!currentSession && !currentPhone) {
+        return;
+      }
+
+      // If target identifiers are specified, strictly ensure they correspond to current user
+      if (targetPhone || targetSession) {
+        const cleanTargetPhone = String(targetPhone || '').replace(/\D/g, '');
+        const cleanCurrentPhone = String(currentPhone || '').replace(/\D/g, '');
+
+        const phoneMatches = Boolean(
+          cleanTargetPhone &&
+          cleanCurrentPhone &&
+          (cleanTargetPhone === cleanCurrentPhone ||
+            cleanTargetPhone.endsWith(cleanCurrentPhone) ||
+            cleanCurrentPhone.endsWith(cleanTargetPhone))
+        );
+
+        const sessionMatches = Boolean(
+          targetSession &&
+          currentSession &&
+          (currentSession.includes(targetSession) ||
+            targetSession.includes(currentSession.substring(0, 15)))
+        );
+
+        if (!phoneMatches && !sessionMatches) {
+          console.warn('[WebPushManager] Ignored SESSION_REVOKED: Targeted account does not match current local session.', {
+            targetPhone,
+            targetSession,
+            currentPhone,
+          });
+          return;
+        }
+      } else {
+        // If neither phone nor session was specified, ignore generic broadcast to protect active session
+        if (reason !== 'EXPLICIT_USER_LOGOUT') {
+          console.warn('[WebPushManager] Ignored unverified broadcast SESSION_REVOKED without matching user phone/session.');
+          return;
+        }
+      }
+
       console.warn('[WebPushManager] Purging local session data. Reason:', reason);
 
       // 1. Clear all session tokens, auth accounts and cached data

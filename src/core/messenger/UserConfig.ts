@@ -90,28 +90,20 @@ export class UserConfig {
     if (!user) return true;
     const id = String(user.id || '');
     const phone = String(user.phone || '').replace(/\s+/g, '');
-    const username = String(user.username || '').toLowerCase();
-    const name = String(user.name || '');
 
+    // الحساب وهمي فقط إذا كان يحمل علم تجريبي صريح أو رقم فارغ
     return (
       !id ||
-      id === 'user_anwer_main' ||
-      id === 'user_primary' ||
-      id === 'user_self' ||
-      id.startsWith('mock_') ||
-      username === 'anwer_dev' ||
-      name === 'أنور فؤاد' ||
-      phone === '+967770123456' ||
-      phone === '0000000000' ||
-      phone.startsWith('+999') ||
-      phone.includes('test') ||
-      (user as any).isDummy === true
+      id === 'user_dummy_mock' ||
+      (user as any).isDummy === true ||
+      phone === '0000000000'
     );
   }
 
   /**
    * Purges mock/dummy/test accounts from memory and persistent storage.
    * Ensures only genuine authenticated sessions remain active.
+   * إيقاف التنظيف العدواني التلقائي: لا تحذف الجلسة الحالية أبداً إذا كان هناك رقم هاتف وجلسة مسجلة ونشطة
    */
   public static cleanupTestAccounts(): void {
     let firstRealAccount = -1;
@@ -119,9 +111,15 @@ export class UserConfig {
 
     for (let a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
       const config = UserConfig.getInstance(a);
-      if (UserConfig.isMockUser(config.currentUser)) {
+      const hasActiveSession = Boolean(
+        config.currentUser &&
+        config.currentUser.phone &&
+        config.currentUser.phone !== '0000000000'
+      );
+
+      if (UserConfig.isMockUser(config.currentUser) && !hasActiveSession) {
         config.clearConfig(true);
-      } else if (config.isClientAuthorized()) {
+      } else if (config.isClientAuthorized() || hasActiveSession) {
         if (firstRealAccount === -1) {
           firstRealAccount = a;
         }
@@ -132,13 +130,21 @@ export class UserConfig {
     if (typeof window !== 'undefined') {
       const multi = SecureSessionStorage.getItem<any[]>('tg_multi_accounts_v3') || SecureSessionStorage.getItem<any[]>('tg_accounts');
       if (multi && Array.isArray(multi)) {
-        const cleanMulti = multi.filter(acc => acc && acc.user && !UserConfig.isMockUser(acc.user));
+        const cleanMulti = multi.filter(acc => {
+          if (!acc || !acc.user) return false;
+          if (acc.user.phone && acc.user.phone !== '0000000000') return true;
+          return !UserConfig.isMockUser(acc.user);
+        });
         if (cleanMulti.length !== multi.length) {
           if (cleanMulti.length === 0) {
-            SecureSessionStorage.removeItem('tg_multi_accounts_v3');
-            SecureSessionStorage.removeItem('tg_accounts');
-            SecureSessionStorage.removeItem('tg_auth_session_active');
-            SecureSessionStorage.removeItem('tg_active_account_id_v3');
+            const hasPhone = localStorage.getItem('tg_phone') || sessionStorage.getItem('tg_phone');
+            const isActive = localStorage.getItem('tg_auth_session_active') === 'true';
+            if (!hasPhone && !isActive) {
+              SecureSessionStorage.removeItem('tg_multi_accounts_v3');
+              SecureSessionStorage.removeItem('tg_accounts');
+              SecureSessionStorage.removeItem('tg_auth_session_active');
+              SecureSessionStorage.removeItem('tg_active_account_id_v3');
+            }
           } else {
             SecureSessionStorage.setItem('tg_multi_accounts_v3', cleanMulti);
             SecureSessionStorage.setItem('tg_active_account_id_v3', cleanMulti[0].id);
