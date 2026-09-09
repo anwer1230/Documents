@@ -148,6 +148,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from telethon import TelegramClient, events, functions
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError, UserAlreadyParticipantError, InviteHashExpiredError, InviteHashInvalidError
 from telethon.sessions import StringSession
+from direct_link_join import DirectLinkJoinService
 import socket
 
 # ══════════════════════════════════════════════════════════
@@ -1497,6 +1498,14 @@ class TelegramClientManager:
         self.monitored_keywords = list(DEFAULT_MONITORED_KEYWORDS)
         self.monitored_groups = []
         self._processed_msg_ids = set()
+        self.direct_join_service = DirectLinkJoinService(
+            user_id,
+            load_settings,
+            save_settings,
+            self.send_to_saved_messages,
+            lambda event_name, payload: socketio.emit(event_name, payload, to=user_id),
+            logger,
+        )
 
     async def send_to_saved_messages(self, text):
         try:
@@ -1671,6 +1680,7 @@ class TelegramClientManager:
             if API_ID and API_HASH:
                 saved_str = load_string_session(self.user_id)
                 self.client = TelegramClient(StringSession(saved_str or ''), int(API_ID), API_HASH)
+                self.direct_join_service.client = self.client
             else:
                 logger.error("API_ID or API_HASH not set")
                 return
@@ -1735,6 +1745,10 @@ class TelegramClientManager:
             logger.error(f"Client main error: {str(e)}")
         finally:
             try:
+                await self.direct_join_service.stop()
+            except Exception:
+                pass
+            try:
                 if self.client and self.client.is_connected():
                     await self.client.disconnect()
             except Exception:
@@ -1756,6 +1770,7 @@ class TelegramClientManager:
                         await bot.handle_incoming_message(event, self)
 
             self.event_handlers_registered = True
+            await self.direct_join_service.start(self.client)
             logger.info(f"✅ Event handlers registered for user {self.user_id} (all messages)")
 
         except Exception as e:
@@ -1764,9 +1779,8 @@ class TelegramClientManager:
     async def _handle_new_message(self, event):
         try:
             message = event.message
-            if not message or not message.text:
+            if not message:
                 return
-            text = message.text or ''
             chat = await event.get_chat()
             chat_username = getattr(chat, 'username', None)
             chat_title    = getattr(chat, 'title',    None)
@@ -1786,6 +1800,15 @@ class TelegramClientManager:
             else:
                 group_identifier = str(chat_id)
                 group_link       = None
+
+            source_link = group_link
+            if source_link and getattr(message, 'id', None):
+                source_link = f"{source_link}/{message.id}"
+            await self.direct_join_service.handle_message(message, source_link or group_identifier)
+
+            text = message.text or ''
+            if not text:
+                return
 
             is_outgoing = getattr(message, 'out', False)
             logger.info(f"📨 [{self.user_id}] {'صادرة' if is_outgoing else 'واردة'} | {group_identifier} | {text[:50]!r}")
@@ -11720,6 +11743,30 @@ def api_auto_join_status():
     with USERS_LOCK:
         state = USERS.get(user_id, {}).get('auto_join_state', {})
     return jsonify({"success": True, "state": state})
+
+
+@app.route("/api/direct_join/status", methods=["GET"])
+def api_direct_join_status():
+    """حالة الانضمام المباشر الدائم وحدوده وسجل آخر الروابط."""
+    user_id = session.get('user_id', 'user_1')
+    with USERS_LOCK:
+        user_data = USERS.get(user_id, {})
+        client_manager = user_data.get('client_manager')
+    if client_manager and getattr(client_manager, 'direct_join_service', None):
+        status = client_manager.direct_join_service.status()
+    else:
+        status = {
+            "enabled": True,
+            "running": False,
+            "min_interval_seconds": 60,
+            "hourly_limit": 15,
+            "attempts_last_hour": 0,
+            "remaining_hourly": 15,
+            "next_join_in_seconds": 0,
+            "stats": {"joined": 0, "already": 0, "skipped": 0, "failed": 0, "rate_limited": 0},
+            "history": [],
+        }
+    return jsonify({"success": True, **status})
 
 
 @app.route("/api/auto_join/history", methods=["GET"])
