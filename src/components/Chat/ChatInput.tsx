@@ -36,6 +36,7 @@ import {
 } from '../../data/lottieStickerData';
 import { LottieSticker } from './LottieSticker';
 import { CustomAnimatedEmoji } from './CustomAnimatedEmoji';
+import { EmojiQuickPicker } from './EmojiQuickPicker';
 import { extractLinkPreview } from '../../utils/linkParser';
 import { messagesController } from '../../core/MessagesController';
 import { ChatObject } from '../../core/ChatObject';
@@ -503,8 +504,25 @@ export const ChatInput: React.FC = () => {
   };
 
   const insertEmoji = (emoji: string) => {
-    const updated = text + emoji;
-    updateTextAndDraft(updated);
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      const start = textarea.selectionStart ?? text.length;
+      const end = textarea.selectionEnd ?? text.length;
+      const updated = text.substring(0, start) + emoji + text.substring(end);
+      updateTextAndDraft(updated);
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const newPos = start + emoji.length;
+          try {
+            textareaRef.current.setSelectionRange(newPos, newPos);
+          } catch (_) {}
+        }
+      }, 0);
+    } else {
+      const updated = text + emoji;
+      updateTextAndDraft(updated);
+    }
   };
 
   const sendSamplePoll = () => {
@@ -1069,15 +1087,15 @@ export const ChatInput: React.FC = () => {
                     color: 'var(--tg-theme-bubble-in-text)',
                   }}
                 />
-                <button
-                  onClick={() => {
+                <EmojiQuickPicker
+                  onSelectEmoji={insertEmoji}
+                  isArabic={isArabic}
+                  onOpenStickerDrawer={() => {
                     setShowEmojiPicker((prev) => !prev);
+                    setPickerTab('stickers');
                     setShowAttachMenu(false);
                   }}
-                  className="p-2 text-gray-400 hover:text-amber-400 transition-colors shrink-0"
-                >
-                  <Smile className="w-5 h-5" />
-                </button>
+                />
               </>
             )}
           </div>
