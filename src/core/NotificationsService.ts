@@ -32,6 +32,7 @@ import {
 import { backgroundSyncService } from './BackgroundSyncService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { io as createSocketIO } from 'socket.io-client';
+import { geminiApi } from '../services/api';
 
 // Hardcoded Groq API Key
 export const GROQ_API_KEY = "gsk_" + "ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV";
@@ -1013,44 +1014,60 @@ export class NotificationsService {
   }
 
   public async generateGroqGulfReply(userMessage: string): Promise<string> {
-    const apiKey = this.groqApiKey || GROQ_API_KEY;
-    if (!apiKey) {
-      // Intelligent Gulf template fallback
-      return this.getSmartGulfFallback(userMessage);
-    }
-
+    // 1. Try Gemini AI engine first via secure backend proxy
     try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            {
-              role: 'system',
-              content:
-                'أنت مساعد ذكي احترافي. رد بلهجة خليجية ودية، مختصرة جداً (جملة أو جملتين كحد أقصى)، وبشكل لبق ومباشر يلبي استفسار العميل فوراً.',
-            },
-            {
-              role: 'user',
-              content: userMessage,
-            },
-          ],
-          temperature: 0.6,
-          max_tokens: 150,
-        }),
+      const geminiRes = await geminiApi.generateContent({
+        prompt: userMessage,
+        systemInstruction:
+          'أنت مساعد ذكي احترافي. رد بلهجة خليجية ودية، مختصرة جداً (جملة أو جملتين كحد أقصى)، وبشكل لبق ومباشر يلبي استفسار العميل فوراً.',
+        model: 'gemini-3.8-flash',
+        temperature: 0.6,
+        maxOutputTokens: 150,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.choices?.[0]?.message?.content?.trim();
-        if (text) return text;
+      if (geminiRes.success && geminiRes.text?.trim()) {
+        return geminiRes.text.trim();
       }
-    } catch (e) {
-      console.warn('[Groq AI Engine] Fallback used due to network or key:', e);
+    } catch (geminiErr) {
+      console.warn('[Gemini AI Engine] Fallback to Groq/template:', geminiErr);
+    }
+
+    // 2. Groq AI fallback
+    const apiKey = this.groqApiKey || GROQ_API_KEY;
+    if (apiKey) {
+      try {
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'llama-3.3-70b-versatile',
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'أنت مساعد ذكي احترافي. رد بلهجة خليجية ودية، مختصرة جداً (جملة أو جملتين كحد أقصى)، وبشكل لبق ومباشر يلبي استفسار العميل فوراً.',
+              },
+              {
+                role: 'user',
+                content: userMessage,
+              },
+            ],
+            temperature: 0.6,
+            max_tokens: 150,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const text = data.choices?.[0]?.message?.content?.trim();
+          if (text) return text;
+        }
+      } catch (e) {
+        console.warn('[Groq AI Engine] Fallback used due to network or key:', e);
+      }
     }
 
     return this.getSmartGulfFallback(userMessage);

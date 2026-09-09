@@ -1,4 +1,5 @@
 import { AiComposeTone, AiToneId } from '../../types';
+import { geminiApi } from '../../services/api';
 
 export const GROQ_API_KEY = "gsk_" + "ZNr7uNRZ6EyZUASH1oBdWGdyb3FYwxJpzik4OICbSNCIntD4wFFV";
 
@@ -144,6 +145,26 @@ class AiTonesController {
     const toneObj = AI_COMPOSE_TONES.find((t) => t.id === toneId);
     const toneDescription = isArabic ? (toneObj?.descriptionAr || toneId) : (toneObj?.description || toneId);
 
+    // 1. Try official Gemini AI through secure backend API
+    try {
+      const geminiRes = await geminiApi.generateContent({
+        prompt: text.trim(),
+        systemInstruction: isArabic
+          ? `أنت خبير في إعادة صياغة النصوص وتعديل الأسلوب والنبرة باللغة العربية. أعد صياغة النص المعطى حسب النبرة المطلوبة: "${toneDescription}". أخرج النص المصاغ فقط بدون أي مقدمات أو تعليقات أو علامات تنصيص زائدة.`
+          : `You are an expert in text rewriting and stylistic tone transformation. Rewrite the given text according to the requested tone: "${toneDescription}". Output only the rewritten text without conversational filler or extra quotes.`,
+        model: 'gemini-3.8-flash',
+        temperature: 0.7,
+        maxOutputTokens: 300,
+      });
+
+      if (geminiRes.success && geminiRes.text?.trim()) {
+        return geminiRes.text.trim();
+      }
+    } catch (geminiErr) {
+      console.warn('[AiTonesController] Gemini API error, attempting fallback:', geminiErr);
+    }
+
+    // 2. Fallback to Groq API
     try {
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',

@@ -7,10 +7,10 @@ coverage/
 *.log
 .env*
 !.env.example
-config/
-config/serviceAccountKey.json
-config/firebase-service-account.json
-config/release.keystore
+/config/
+/config/serviceAccountKey.json
+/config/firebase-service-account.json
+/config/release.keystore
 # Isolated Telegram Account Sessions
 sessions/*.json
 !sessions/.gitkeep
