@@ -6,11 +6,6 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import module from 'module';
-import { fileURLToPath } from 'url';
-
-// ESM Module Path Resolution
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Guard against ERR_INVALID_ARG_VALUE in Node.js v20+ when createRequire is invoked with relative or empty paths
 if (module && typeof module.createRequire === 'function') {
