@@ -13,6 +13,20 @@ window.addEventListener('error', (event) => {
   }
 });
 
+// Register service-worker.js to handle background push notifications and asset caching for offline reliability
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/service-worker.js', { scope: '/' })
+      .then((registration) => {
+        console.log('[Service Worker] service-worker.js registered for offline reliability:', registration.scope);
+      })
+      .catch((error) => {
+        console.warn('[Service Worker] service-worker.js registration error:', error);
+      });
+  });
+}
+
 // PWA Service Worker Registration with automatic update checks (Google AI Studio pattern)
 if ('serviceWorker' in navigator) {
   const updateSW = registerSW({
