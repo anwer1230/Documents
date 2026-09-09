@@ -4,8 +4,8 @@
 
 class TelegramAudioEngine {
   private ctx: AudioContext | null = null;
-  private volume: number = 80; // 0 to 100 percentage
-  private isMuted: boolean = false;
+  private volume: number = 0; // 0 to 100 percentage (muted by default)
+  private isMuted: boolean = true;
 
   public setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(100, typeof vol === 'number' ? vol : 80));

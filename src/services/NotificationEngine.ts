@@ -113,7 +113,7 @@ export class NotificationEngine {
   private listeners = new Set<(notifications: InAppNotification[]) => void>();
   private navigationHandler: ((chatId: string, replyMessage?: { messageId: string; senderName: string; textSnippet: string }) => void) | null = null;
   private isMutedCheckHandler: ((chatId: string) => boolean) | null = null;
-  private soundEffectsEnabled = true;
+  private soundEffectsEnabled = false;
 
   public static getInstance(): NotificationEngine {
     if (!NotificationEngine.instance) {

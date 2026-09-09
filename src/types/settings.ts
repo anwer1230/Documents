@@ -21,11 +21,11 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  notificationSound: 'classic',
-  enableSendSound: true,
+  notificationSound: 'silent',
+  enableSendSound: false,
   enableClickSound: true,
-  muteChatSounds: false,
-  soundVolume: 80,
+  muteChatSounds: true,
+  soundVolume: 0,
   dataSaver: false,
   autoDownloadMedia: true,
   preloadThumbnails: true,

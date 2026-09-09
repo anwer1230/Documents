@@ -1641,13 +1641,13 @@ const NotificationsSoundsView: React.FC<{ onBack: () => void }> = ({ onBack }) =
   const { settings, updateSettings, showToast, triggerNotification, fcmDiagnostic, setSettingsSubPage, activeChatId } = useTelegram();
   const isArabic = settings.language === 'ar';
 
-  const isMuted = Boolean(settings.muteChatSounds);
-  const soundVolume = typeof settings.soundVolume === 'number' ? settings.soundVolume : 80;
+  const isMuted = settings.muteChatSounds !== undefined ? Boolean(settings.muteChatSounds) : true;
+  const soundVolume = typeof settings.soundVolume === 'number' ? settings.soundVolume : 0;
 
   const [privateChats, setPrivateChats] = useState(true);
   const [groups, setGroups] = useState(true);
   const [channels, setChannels] = useState(true);
-  const [inAppSounds, setInAppSounds] = useState(true);
+  const [inAppSounds, setInAppSounds] = useState(settings.inAppSounds ?? false);
   const [inAppVibrate, setInAppVibrate] = useState(true);
 
   const handleToggleMute = () => {
@@ -1833,7 +1833,7 @@ const NotificationsSoundsView: React.FC<{ onBack: () => void }> = ({ onBack }) =
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {soundOptions.map((opt) => {
-                const isSelected = (settings.notificationSound || 'classic') === opt.id;
+                const isSelected = (settings.notificationSound || 'silent') === opt.id;
                 return (
                   <button
                     key={opt.id}

@@ -49,10 +49,10 @@ export class NotificationsController {
   
   private settings: NotificationSettings = {
     enabled: true,
-    sound: true,
+    sound: false,
     vibrate: true,
     previewText: true,
-    inAppSounds: true,
+    inAppSounds: false,
     inAppVibrate: true,
     inAppPreview: true,
     priorityAlerts: true,

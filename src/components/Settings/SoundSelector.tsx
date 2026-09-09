@@ -14,8 +14,8 @@ const SOUND_OPTIONS = [
 
 export const SoundSelector: React.FC = () => {
   const { settings, updateSettings } = useSettingsStore();
-  const isMuted = Boolean(settings.muteChatSounds);
-  const soundVolume = typeof settings.soundVolume === 'number' ? settings.soundVolume : 80;
+  const isMuted = settings.muteChatSounds !== undefined ? Boolean(settings.muteChatSounds) : true;
+  const soundVolume = typeof settings.soundVolume === 'number' ? settings.soundVolume : 0;
 
   const handleSoundChange = (value: string) => {
     updateSettings({ notificationSound: value as any });
@@ -170,7 +170,7 @@ export const SoundSelector: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
           {SOUND_OPTIONS.map((opt) => {
-            const isSelected = settings.notificationSound === opt.value;
+            const isSelected = (settings.notificationSound || 'silent') === opt.value;
             return (
               <button
                 key={opt.value}

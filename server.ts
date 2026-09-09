@@ -1230,7 +1230,7 @@ async function startServer() {
       registeredFcmTokens.forEach((t) => targetTokens.add(t));
     }
 
-    const soundName = payload.sound || 'default';
+    const soundName = payload.sound || 'silent';
     const channelId = `tg_fcm_channel_${soundName}`;
     const soundFile = soundName === 'silent' ? undefined : `${soundName}.mp3`;
     const stringData: Record<string, string> = {
@@ -11465,12 +11465,12 @@ Please provide the concise summary.`;
     const { chatId } = req.params;
     const record = fcmChatNotificationStore.get(chatId) || {
       chatId,
-      sound: 'default',
+      sound: 'silent',
       vibration: 'default',
       priority: 'default',
       enabled: true,
-      fcmChannelId: 'tg_fcm_channel_default',
-      soundFile: 'default.mp3',
+      fcmChannelId: 'tg_fcm_channel_silent',
+      soundFile: '',
       lastSyncedAt: new Date().toISOString(),
     };
     res.json({
@@ -11488,17 +11488,17 @@ Please provide the concise summary.`;
   // 2. Update & Synchronize Firebase Cloud Messaging channel for a specific chat
   app.post('/api/telegram/firebase/chat-notification-settings', (req, res) => {
     try {
-      const { chatId, sound = 'default', vibration = 'default', priority = 'default', enabled = true } = req.body;
+      const { chatId, sound = 'silent', vibration = 'default', priority = 'default', enabled = true } = req.body;
       if (!chatId) {
         return res.status(400).json({ success: false, error: 'chatId is required' });
       }
 
-      const fcmChannelId = `tg_fcm_channel_${sound || 'default'}`;
-      const soundFile = sound === 'silent' ? '' : `${sound || 'default'}.mp3`;
+      const fcmChannelId = `tg_fcm_channel_${sound || 'silent'}`;
+      const soundFile = sound === 'silent' ? '' : `${sound || 'silent'}.mp3`;
 
       const record: ChatFcmNotificationRecord = {
         chatId,
-        sound: sound || 'default',
+        sound: sound || 'silent',
         vibration: vibration || 'default',
         priority: priority || 'default',
         enabled: enabled !== false,

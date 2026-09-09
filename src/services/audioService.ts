@@ -2,9 +2,9 @@
 
 class AudioService {
   private audioContext: AudioContext | null = null;
-  private currentSound: string = 'classic';
-  private volume: number = 80; // 0 to 100
-  private isMuted: boolean = false;
+  private currentSound: string = 'silent';
+  private volume: number = 0; // 0 to 100
+  private isMuted: boolean = true;
 
   constructor() {
     // Lazy initialized on first user interaction if needed
