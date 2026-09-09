@@ -750,10 +750,10 @@ const MessageBubbleComponent: React.FC<MessageBubbleProps> = ({
               </div>
             )}
 
-            {/* Metadata footer: Secret Badge + (edited) + Pinned + Time + Read status */}
+            {/* Metadata footer: Secret Badge + (edited) + Pinned + Time + Read status (Official Telegram 11sp) */}
             <div
               dir="ltr"
-              className="flex items-center gap-1 text-[10px] mt-1 select-none justify-end opacity-70"
+              className="flex items-center gap-1 text-[11px] mt-1 select-none justify-end opacity-80"
             >
               {message.isSecret && (
                 <span className="inline-flex items-center gap-0.5 text-emerald-400 text-[9px] font-bold">

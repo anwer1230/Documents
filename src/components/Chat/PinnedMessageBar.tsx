@@ -38,8 +38,8 @@ const PinnedMessageBarComponent: React.FC = () => {
       }}
     >
       <div className="flex items-center gap-2.5 min-w-0 flex-1">
-        {/* Accent Bar */}
-        <div className="w-0.5 h-6 rounded-full bg-[#2481cc] shrink-0" />
+        {/* Accent Bar (Official Telegram 2dp x 24dp) */}
+        <div className="w-[2px] h-[24px] rounded-full bg-[#2481cc] shrink-0" />
 
         <Pin className="w-3.5 h-3.5 text-[#2481cc] shrink-0" />
 
