@@ -16,6 +16,8 @@ import {
   AlertTriangle,
   Clock,
   LogIn,
+  Shield,
+  Lock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTelegram } from '../../context/TelegramContext';
@@ -34,12 +36,15 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
     clearCapturedLinks,
     showToast,
     joinChatByInviteLink,
+    radarHourlyCount,
+    radarLastJoinTime,
   } = useTelegram();
 
   const [isEnabled, setIsEnabled] = useState<boolean>(autoJoinLinksEnabled);
   const [links, setLinks] = useState<CapturedLink[]>(capturedLinks);
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const [joiningUrls, setJoiningUrls] = useState<Record<string, boolean>>({});
+  const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
 
   useEffect(() => {
     setIsEnabled(autoJoinLinksEnabled);
@@ -47,15 +52,32 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
     setLastUpdate(new Date().toLocaleTimeString('ar-SA'));
   }, [autoJoinLinksEnabled, capturedLinks, isOpen]);
 
+  // Live Cooldown Timer (1 minute = 60s)
+  useEffect(() => {
+    const updateCooldown = () => {
+      if (!radarLastJoinTime) {
+        setCooldownRemaining(0);
+        return;
+      }
+      const elapsed = Date.now() - radarLastJoinTime;
+      const remaining = Math.max(0, Math.ceil((60000 - elapsed) / 1000));
+      setCooldownRemaining(remaining);
+    };
+
+    updateCooldown();
+    const timer = setInterval(updateCooldown, 1000);
+    return () => clearInterval(timer);
+  }, [radarLastJoinTime]);
+
   // Toggle monitor
   const handleToggle = async () => {
     const nextState = !isEnabled;
     setIsEnabled(nextState);
     toggleAutoJoinLinks();
     if (nextState) {
-      showToast('✅ تم تفعيل مراقبة الروابط والانضمام الفوري', '✨');
+      showToast('⚡ تم تفعيل رادار المراقبة والانضمام الفوري', '✨');
     } else {
-      showToast('⏹ تم إيقاف مراقبة الروابط', 'info');
+      showToast('⏹ تم إيقاف رادار المراقبة', 'info');
     }
   };
 
@@ -63,7 +85,7 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
   const handleRefresh = () => {
     setLastUpdate(new Date().toLocaleTimeString('ar-SA'));
     setLinks([...capturedLinks]);
-    showToast('🔄 تم تحديث البيانات', 'info');
+    showToast('🔄 تم تحديث قائمة الرادار', 'info');
   };
 
   // Clear All
@@ -75,18 +97,23 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
     }
   };
 
-  // Join Link Now
+  // Join Link Now manually
   const handleJoinNow = async (url: string) => {
+    const isPrivate = url.includes('+') || url.includes('joinchat') || url.includes('invite=');
+    if (isPrivate) {
+      showToast('🔒 هذا رابط قناة خاصة، رادار المراقبة لا ينضم للقنوات الخاصة', '⚠️');
+      return;
+    }
+
     setJoiningUrls((prev) => ({ ...prev, [url]: true }));
     try {
       const res = await joinChatByInviteLink(url);
       if (res.success) {
         showToast(res.message || '✅ تم الانضمام وتم إرسال الإشعار للرسائل المحفوظة!', '✨');
-        // Update local link status
         setLinks((prev) =>
           prev.map((l) =>
             l.url === url
-              ? { ...l, status: 'joined', status_text: '✅ منضم', joined: true }
+              ? { ...l, status: 'joined', status_text: '✅ تم الانضمام بنجاح', joined: true }
               : l
           )
         );
@@ -108,10 +135,10 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
 
   // Compute stats
   const statTotal = links.length;
-  const statValid = links.filter((l) => l.status === 'valid' || !l.status).length;
-  const statInvalid = links.filter((l) => l.status === 'invalid').length;
   const statJoined = links.filter((l) => l.status === 'joined' || l.joined).length;
-  const statAlready = links.filter((l) => l.status === 'already').length;
+  const statSkippedPrivate = links.filter(
+    (l) => l.status === 'skipped_private_channel' || l.url.includes('+') || l.url.includes('joinchat')
+  ).length;
   const statPending = links.filter((l) => l.status === 'pending').length;
 
   if (!isOpen) return null;
@@ -153,38 +180,54 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                 className="bg-white/[0.05] hover:bg-white/[0.1] border border-white/10 rounded-lg px-3 py-1.5 text-[#e8eaf6] text-[0.8rem] flex items-center gap-1.5 transition-all"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
-                <span>العودة للرئيسية</span>
+                <span>إغلاق</span>
               </button>
-              <h4 className="text-[1.05rem] font-bold text-cyan-400 m-0 flex items-center gap-2">
-                <Radio className="w-4 h-4 text-cyan-400" />
-                <span>مراقبة وانضمام فوري</span>
+              <h4 className="text-[1.05rem] font-bold text-emerald-400 m-0 flex items-center gap-2">
+                <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
+                <span>رادار المراقبة والانضمام الفوري</span>
               </h4>
             </div>
 
             <span
               id="statusBadge"
-              className={`badge px-2.5 py-1 rounded-full text-[0.7rem] font-bold ${
+              className={`badge px-3 py-1 rounded-full text-[0.7rem] font-bold flex items-center gap-1.5 ${
                 isEnabled
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                   : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
               }`}
             >
-              {isEnabled ? '🟢 نشط' : '⏹ متوقف'}
+              <span className={`w-2 h-2 rounded-full ${isEnabled ? 'bg-emerald-400 animate-ping' : 'bg-gray-500'}`} />
+              {isEnabled ? 'رادار يعمل دائماً ومستقلاً' : 'متوقف'}
             </span>
           </div>
 
           {/* Main Card */}
           <div className="p-3 sm:p-4 overflow-y-auto flex-1 space-y-3">
+            {/* Rules and Description Card */}
+            <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-xl p-3 text-[0.78rem] text-emerald-200/90 flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 font-bold text-emerald-300">
+                <Shield className="w-4 h-4 text-emerald-400" />
+                <span>ضوابط وقواعد الرادار الصارمة:</span>
+              </div>
+              <ul className="list-disc list-inside space-y-1 text-[0.73rem] text-gray-300 mr-2">
+                <li><strong className="text-white">مراقبة منفصلة ودائمة:</strong> فحص أي رابط ينزل بأي محادثة بالخلفية بدون توقف.</li>
+                <li><strong className="text-white">انضمام فوري للمجموعات العامة:</strong> ينضم تلقائياً ويرسل إشعاراً كاملاً إلى محادثة الرسائل المحفوظة الخاصة بك.</li>
+                <li><strong className="text-white">تخطي القنوات الخاصة:</strong> إذا كان رابط قناة خاصة يُترك ويتخطاه الرادار تلقائياً ولا ينضم إليه.</li>
+                <li><strong className="text-white">فاصل أمني دقيقة واحدة:</strong> لا ينضم لأكثر من مجموعة خلال أقل من 60 ثانية لحماية الحساب.</li>
+                <li><strong className="text-white">حد أقصى 10 انضمامات/ساعة:</strong> يمنع الحظر التلقائي عبر مراقبة حد الـ 10 مجموعات كل ساعة.</li>
+              </ul>
+            </div>
+
             <div className="bg-white/[0.03] border border-white/[0.08] rounded-xl overflow-hidden backdrop-blur-md">
               {/* Card Header with Main Toggle */}
               <div className="px-4 py-3 bg-white/[0.04] border-b border-white/[0.06] flex items-center justify-between flex-wrap gap-2">
                 <h6 className="text-[0.9rem] font-bold text-white flex items-center gap-2 m-0">
-                  <LinkIcon className="w-4 h-4 text-cyan-400" />
-                  <span>مراقبة الروابط والانضمام الفوري</span>
+                  <LinkIcon className="w-4 h-4 text-emerald-400" />
+                  <span>تشغيل المراقبة الآلية المباشرة</span>
                 </h6>
                 <div className="flex items-center gap-2">
                   <span className="text-[0.75rem] text-gray-400" id="toggleLabel">
-                    {isEnabled ? 'مفعّل' : 'متوقف'}
+                    {isEnabled ? 'مفعّل دائم' : 'متوقف'}
                   </span>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -201,31 +244,43 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
 
               {/* Card Body */}
               <div className="p-3 sm:p-4 space-y-3">
-                {/* 6 Stat Boxes */}
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2" id="statsRow">
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-cyan-400" id="statTotal">{statTotal}</div>
-                    <div className="text-[0.65rem] text-gray-400">إجمالي</div>
+                {/* 4 Stat Boxes & Rate Limits */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" id="statsRow">
+                  <div className="bg-white/[0.04] rounded-xl p-2.5 text-center border border-white/5">
+                    <div className="text-[1.3rem] font-bold text-cyan-400" id="statTotal">{statTotal}</div>
+                    <div className="text-[0.7rem] text-gray-400">إجمالي الروابط المرصودة</div>
                   </div>
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-emerald-400" id="statValid">{statValid}</div>
-                    <div className="text-[0.65rem] text-gray-400">✅ سليم</div>
+                  <div className="bg-white/[0.04] rounded-xl p-2.5 text-center border border-white/5">
+                    <div className="text-[1.3rem] font-bold text-emerald-400" id="statJoined">{statJoined}</div>
+                    <div className="text-[0.7rem] text-emerald-400">✅ منضم (مجموعات عامة)</div>
                   </div>
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-rose-400" id="statInvalid">{statInvalid}</div>
-                    <div className="text-[0.65rem] text-gray-400">❌ غير صالح</div>
+                  <div className="bg-white/[0.04] rounded-xl p-2.5 text-center border border-white/5">
+                    <div className="text-[1.3rem] font-bold text-purple-400" id="statSkipped">{statSkippedPrivate}</div>
+                    <div className="text-[0.7rem] text-purple-300">🔒 قنوات خاصة متخطاة</div>
                   </div>
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-emerald-400" id="statJoined">{statJoined}</div>
-                    <div className="text-[0.65rem] text-gray-400">✅ منضم</div>
+                  <div className="bg-white/[0.04] rounded-xl p-2.5 text-center border border-white/5">
+                    <div className="text-[1.3rem] font-bold text-amber-400">
+                      {radarHourlyCount ?? 0} <span className="text-xs text-gray-400 font-normal">/ 10</span>
+                    </div>
+                    <div className="text-[0.7rem] text-amber-300">انضمامات الساعة الحالية</div>
                   </div>
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-amber-400" id="statAlready">{statAlready}</div>
-                    <div className="text-[0.65rem] text-gray-400">📌 منضم مسبقاً</div>
+                </div>
+
+                {/* Cooldown & Rate Limit Status Bar */}
+                <div className="bg-black/40 border border-white/5 rounded-lg p-2.5 flex items-center justify-between text-[0.75rem] flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className={`w-4 h-4 ${cooldownRemaining > 0 ? 'text-amber-400 animate-spin' : 'text-emerald-400'}`} />
+                    <span>
+                      فاصل الأمان بين الانضمام والآخر:
+                      {cooldownRemaining > 0 ? (
+                        <strong className="text-amber-300 mr-1.5 font-mono">انتظار {cooldownRemaining} ثانية (فاصل دقيقة)</strong>
+                      ) : (
+                        <strong className="text-emerald-400 mr-1.5">جاهز للانضمام الفوري فور ظهور رابط عام</strong>
+                      )}
+                    </span>
                   </div>
-                  <div className="bg-white/[0.04] rounded-xl p-2 text-center border border-white/5">
-                    <div className="text-[1.2rem] font-bold text-gray-400" id="statPending">{statPending}</div>
-                    <div className="text-[0.65rem] text-gray-400">⏳ قيد الفحص</div>
+                  <div className="text-gray-400 font-mono text-[0.7rem]">
+                    معدل الأمان: أقصى 10 انضمام/ساعة
                   </div>
                 </div>
 
@@ -236,18 +291,18 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                     className="bg-white/[0.1] hover:bg-white/[0.18] border border-white/15 text-[#e8eaf6] text-[0.78rem] px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all"
                   >
                     <RotateCw className="w-3.5 h-3.5" />
-                    <span>تحديث</span>
+                    <span>تحديث القائمة</span>
                   </button>
                   <button
                     onClick={handleClearAll}
                     className="bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-[0.78rem] px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>مسح الكل</span>
+                    <span>مسح السجل</span>
                   </button>
                   {lastUpdate && (
-                    <span className="text-[0.65rem] text-gray-400 mr-auto" id="lastUpdate">
-                      آخر تحديث: {lastUpdate}
+                    <span className="text-[0.68rem] text-gray-400 mr-auto" id="lastUpdate">
+                      آخر فحص: {lastUpdate}
                     </span>
                   )}
                 </div>
@@ -259,36 +314,37 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                 >
                   {links.length === 0 ? (
                     <div className="text-center py-10 text-gray-500">
-                      <LinkIcon className="w-10 h-10 mx-auto mb-2 opacity-25" />
-                      <div className="font-bold text-[0.85rem]">لا توجد روابط مسجلة</div>
-                      <small className="text-[0.7rem] text-gray-500">فعّل المراقبة لبدء رصد الروابط</small>
+                      <LinkIcon className="w-10 h-10 mx-auto mb-2 opacity-25 text-emerald-400" />
+                      <div className="font-bold text-[0.85rem] text-gray-300">الرادار يرصد المحادثات الآن...</div>
+                      <small className="text-[0.72rem] text-gray-500">
+                        أي رابط ينزل بأي محادثة سيتم التقاطه هنا فورياً وفحصه
+                      </small>
                     </div>
                   ) : (
                     links.map((link) => {
                       const isJoined = link.status === 'joined' || link.joined;
-                      const isAlready = link.status === 'already';
-                      const isInvalid = link.status === 'invalid';
+                      const isSkippedPrivate =
+                        link.status === 'skipped_private_channel' ||
+                        link.url.includes('+') ||
+                        link.url.includes('joinchat') ||
+                        link.url.includes('invite=');
                       const isPending = link.status === 'pending';
 
                       let badgeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
-                      let badgeText = '✅ سليم';
+                      let badgeText = '✅ مجموعة عامة';
                       let borderRightColor = 'border-r-cyan-500';
 
                       if (isJoined) {
                         badgeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
-                        badgeText = '✅ منضم';
+                        badgeText = '✅ تم الانضمام بنجاح';
                         borderRightColor = 'border-r-emerald-500';
-                      } else if (isAlready) {
-                        badgeClass = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
-                        badgeText = '📌 منضم مسبقاً';
-                        borderRightColor = 'border-r-amber-500';
-                      } else if (isInvalid) {
-                        badgeClass = 'bg-rose-500/20 text-rose-300 border-rose-500/30';
-                        badgeText = '❌ غير صالح';
-                        borderRightColor = 'border-r-rose-500';
+                      } else if (isSkippedPrivate) {
+                        badgeClass = 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+                        badgeText = '🔒 قناة خاصة (تم التخطي)';
+                        borderRightColor = 'border-r-purple-500';
                       } else if (isPending) {
-                        badgeClass = 'bg-gray-500/20 text-gray-300 border-gray-500/30';
-                        badgeText = '⏳ قيد الفحص';
+                        badgeClass = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+                        badgeText = '⏳ بانتظار دور الانضمام (فاصل دقيقة)';
                         borderRightColor = 'border-r-amber-400';
                       }
 
@@ -298,12 +354,12 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                           className={`bg-white/[0.04] hover:bg-white/[0.08] rounded-lg p-2.5 sm:p-3 border-r-4 ${borderRightColor} border-t border-b border-l border-white/5 text-[0.78rem] transition-all flex justify-between items-start gap-2 flex-wrap`}
                         >
                           <div className="flex-1 min-w-0">
-                            <div className="url">
+                            <div className="url flex items-center gap-2">
                               <a
                                 href={link.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-indigo-400 hover:text-indigo-300 break-all font-mono"
+                                className="text-cyan-400 hover:text-cyan-300 break-all font-mono"
                               >
                                 {link.url}
                               </a>
@@ -341,7 +397,7 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                             </div>
 
                             {link.join_status && (
-                              <div className="text-[0.65rem] text-emerald-400 mt-1">
+                              <div className={`text-[0.65rem] mt-1 ${isSkippedPrivate ? 'text-purple-300' : 'text-emerald-400'}`}>
                                 {link.join_status}
                               </div>
                             )}
@@ -354,7 +410,7 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                                 : 'منذ قليل'}
                             </div>
                             <div className="flex items-center gap-1">
-                              {!isJoined && !isAlready && (
+                              {!isJoined && !isSkippedPrivate && (
                                 <button
                                   type="button"
                                   disabled={joiningUrls[link.url]}

@@ -78,6 +78,62 @@ export class ConnectionsManager {
     return ConnectionsManager.instances.get(accountNum)!;
   }
 
+  /**
+   * Static callback hook for external synchronization routine injection (e.g. from TelegramContext)
+   */
+  public static syncInitializationRoutine?: (phoneOverride?: string, sessionStringOverride?: string) => Promise<void> | void;
+
+  /**
+   * Invokes the syncInitializationRoutine immediately after a successful response from join requests
+   * (TL_channels_joinChannel or TL_messages_importChatInvite), ensuring the local cache reflects
+   * the new channel membership.
+   */
+  public async syncInitializationRoutine(phoneOverride?: string, sessionStringOverride?: string): Promise<void> {
+    const phone = phoneOverride || this.session.phone || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_phone') || localStorage.getItem('tg_phone') || '') : '');
+    const sessionString = sessionStringOverride || this.session.sessionString || (typeof window !== 'undefined' ? (localStorage.getItem('telegram_session_string') || localStorage.getItem('tg_session_string') || '') : '');
+
+    try {
+      // 1. Delegate to static handler if registered (e.g. from TelegramContext)
+      if (typeof ConnectionsManager.syncInitializationRoutine === 'function') {
+        await ConnectionsManager.syncInitializationRoutine(phone, sessionString);
+        return;
+      }
+
+      // 2. Delegate to global window handler if available
+      if (typeof window !== 'undefined' && typeof (window as any).syncInitializationRoutine === 'function') {
+        await (window as any).syncInitializationRoutine(phone, sessionString);
+        return;
+      }
+
+      // 3. Fallback: Perform direct background synchronization via MTProto /api/telegram/sync-light
+      // to ensure the local SQLite/IndexedDB cache reflects the new channel membership
+      if (sessionString) {
+        const res = await fetch('/api/telegram/sync-light', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, sessionString }),
+        });
+        if (res.ok) {
+          const syncData = await res.json().catch(() => ({}));
+          if (syncData.success && Array.isArray(syncData.chats)) {
+            try {
+              telegramDB.saveChats(syncData.chats);
+            } catch (dbErr) {
+              console.warn('[ConnectionsManager] Failed to cache chats in SQLite:', dbErr);
+            }
+          }
+        }
+      }
+
+      // 4. Dispatch custom event so any UI listeners rehydrate immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tg-sync-initialization', { detail: { phone, sessionString } }));
+      }
+    } catch (err) {
+      console.warn('[ConnectionsManager] Error in syncInitializationRoutine:', err);
+    }
+  }
+
   public constructor(accountNum: number = 0) {
     this.accountNum = accountNum;
     this.initSession();
@@ -488,7 +544,7 @@ export class ConnectionsManager {
             }
             return res.json();
           })
-          .then((data) => {
+          .then(async (data) => {
             if (data.success) {
               // معالجة الاستجابة الناجحة من الخادم
               const success: any = {
@@ -499,6 +555,26 @@ export class ConnectionsManager {
               };
               notifySuccess(success);
               this.updateListeners.forEach((l) => l(success));
+
+              // Persist joined chat in local database immediately if available
+              if (data.joinedChat) {
+                try {
+                  telegramDB.saveChats([data.joinedChat]);
+                } catch (dbErr) {
+                  console.warn('[ConnectionsManager] Failed to cache joined channel in SQLite:', dbErr);
+                }
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('tg-joined-chat', { detail: data.joinedChat }));
+                }
+              }
+
+              // Invoke syncInitializationRoutine immediately after successful response to ensure local cache reflects channel membership
+              try {
+                await this.syncInitializationRoutine(phone, sessionString);
+              } catch (syncErr) {
+                console.warn('[ConnectionsManager] syncInitializationRoutine error after joinChannel:', syncErr);
+              }
+
               resolve(success as T);
             } else {
               throw new Error(data.error || data.message || 'JOIN_FAILED');
@@ -541,7 +617,7 @@ export class ConnectionsManager {
             }
             return res.json();
           })
-          .then((data) => {
+          .then(async (data) => {
             if (data.success) {
               const success: any = {
                 _: 'TL_updates',
@@ -551,6 +627,26 @@ export class ConnectionsManager {
               };
               notifySuccess(success);
               this.updateListeners.forEach((l) => l(success));
+
+              // Persist joined chat in local database immediately if available
+              if (data.joinedChat) {
+                try {
+                  telegramDB.saveChats([data.joinedChat]);
+                } catch (dbErr) {
+                  console.warn('[ConnectionsManager] Failed to cache joined invite in SQLite:', dbErr);
+                }
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('tg-joined-chat', { detail: data.joinedChat }));
+                }
+              }
+
+              // Invoke syncInitializationRoutine immediately after successful response to ensure local cache reflects channel membership
+              try {
+                await this.syncInitializationRoutine(phone, sessionString);
+              } catch (syncErr) {
+                console.warn('[ConnectionsManager] syncInitializationRoutine error after importChatInvite:', syncErr);
+              }
+
               resolve(success as T);
             } else {
               throw new Error(data.error || data.message || 'INVITE_FAILED');

@@ -701,36 +701,6 @@ export const NavigationDrawer: React.FC = () => {
                     </motion.button>
                   );
                 })()}
-
-                {/* 7. رادار ومراقبة الروابط */}
-                {(() => {
-                  const isActive = activeModal === 'link-monitor';
-                  return (
-                    <motion.button
-                      whileTap={{ scale: 0.98 }}
-                      id="drawer-link-monitor"
-                      onClick={() => handleItemClick(() => setActiveModal('link-monitor'))}
-                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
-                        isActive
-                          ? 'active bg-sky-500/20 text-sky-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-sky-400'
-                          : 'hover:bg-sky-500/10 text-gray-100 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-4">
-                        <Radio className={`w-5 h-5 shrink-0 ${isActive ? 'text-sky-300' : 'text-sky-400'} group-hover:scale-110 transition-transform`} />
-                        <div className="flex flex-col text-left rtl:text-right">
-                          <span className="font-semibold">{isArabic ? 'رادار ومراقبة الروابط' : 'Link Monitor Radar'}</span>
-                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
-                            {isArabic ? 'التقاط فوري وروابط المجموعات والقنوات' : 'Real-time invite link sniffer & auto-join'}
-                          </span>
-                        </div>
-                      </div>
-                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-sky-500/25 text-sky-200 border border-sky-400/30 rounded font-mono">
-                        RADAR
-                      </span>
-                    </motion.button>
-                  );
-                })()}
               </div>
 
               {/* Core Folders & Calls Group */}
@@ -866,6 +836,36 @@ export const NavigationDrawer: React.FC = () => {
                       </div>
                       <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/25 text-cyan-200 border border-cyan-400/30 rounded font-mono">
                         WEB
+                      </span>
+                    </motion.button>
+                  );
+                })()}
+
+                {/* رادار المراقبة والانضمام الفوري (ضمن الإعدادات الرئيسية) */}
+                {(() => {
+                  const isActive = activeModal === 'link-monitor';
+                  return (
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      id="drawer-radar-settings-item"
+                      onClick={() => handleItemClick(() => setActiveModal('link-monitor'))}
+                      className={`w-full flex items-center justify-between px-4 py-3 text-[13.5px] font-medium transition-all group ${
+                        isActive
+                          ? 'active bg-emerald-500/20 text-emerald-300 font-semibold border-r-4 rtl:border-r-0 rtl:border-l-4 border-emerald-400'
+                          : 'hover:bg-emerald-500/10 text-emerald-400 hover:text-emerald-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Radio className={`w-5 h-5 shrink-0 ${isActive ? 'text-emerald-300' : 'text-emerald-400'} group-hover:scale-110 transition-transform`} />
+                        <div className="flex flex-col text-left rtl:text-right">
+                          <span className="font-semibold">{isArabic ? 'رادار المراقبة والانضمام الفوري' : 'Link Monitor & Auto-Join Radar'}</span>
+                          <span className="text-[10px] text-gray-400 leading-none mt-0.5">
+                            {isArabic ? 'مراقبة الروابط، فاصل دقيقة، حد 10/ساعة' : '1m cooldown, 10/hr rate limit'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[9px] font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 rounded font-mono">
+                        RADAR
                       </span>
                     </motion.button>
                   );

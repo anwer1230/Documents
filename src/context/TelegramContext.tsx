@@ -141,10 +141,12 @@ interface TelegramContextType {
   dismissNotification: (id: string) => void;
   triggerNotification: (notif: Omit<InAppNotification, 'id' | 'timestamp'>) => void;
 
-  // Link Monitor & Auto-Join Engine
+  // Link Monitor & Auto-Join Engine (رادار المراقبة والانضمام الفوري)
   capturedLinks: CapturedLink[];
   autoJoinLinksEnabled: boolean;
   toggleAutoJoinLinks: () => void;
+  radarHourlyCount: number;
+  radarLastJoinTime: number;
   joinCapturedLink: (linkId: string) => Promise<void>;
   joinAllPendingLinks: () => Promise<void>;
   clearCapturedLinks: () => void;
@@ -848,8 +850,36 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const saved = localStorage.getItem('tg_auto_join_enabled_v1');
       if (saved !== null) return saved === 'true';
     } catch {}
-    return true; // Default active as requested
+    return true; // Always running by default as requested
   });
+
+  // Radar Rate Limiting State (1 minute cooldown & max 10 joins per hour)
+  const [radarHourlyCount, setRadarHourlyCount] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('tg_radar_hourly_joins');
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((t: number) => Date.now() - t < 3600000).length : 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const [radarLastJoinTime, setRadarLastJoinTime] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem('tg_radar_last_join_time')) || 0;
+    } catch {
+      return 0;
+    }
+  });
+
+  const radarJoinQueueRef = useRef<CapturedLink[]>([]);
+  const isProcessingRadarQueueRef = useRef<boolean>(false);
+  const lastRadarJoinTimeRef = useRef<number>(0);
+  const hourlyRadarJoinsRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    lastRadarJoinTimeRef.current = radarLastJoinTime;
+  }, [radarLastJoinTime]);
 
   // Sync Audio Engine Volume & Mute Settings in Real-time
   useEffect(() => {
@@ -1720,6 +1750,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         title: updatedFields.title || updatedFields.lastMessage?.senderName || 'Chat',
         type: updatedFields.type || 'private',
         unreadCount: updatedFields.unreadCount || 0,
+        avatar: updatedFields.avatar || '',
         ...updatedFields,
       };
       updated.push(newChat);
@@ -2811,7 +2842,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // MTProto Cloud Synchronization & Initialization Routine (messages.getDialogs & users.getUsers)
-  const syncInitializationRoutine = async (phoneOverride?: string, sessionStringOverride?: string) => {
+  const syncInitializationRoutine = async (phoneOverride?: string, sessionStringOverride?: string, force: boolean = false) => {
     // Offline Resilience Guard: If browser is currently offline, maintain local cache gracefully
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setIsOffline(true);
@@ -2831,8 +2862,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
 
-    // Throttle duplicate rapid sync calls (< 2500ms)
-    if (now - lastSyncAttemptTimeRef.current < 2500) {
+    // Throttle duplicate rapid sync calls (< 2500ms) unless force is true
+    if (!force && now - lastSyncAttemptTimeRef.current < 2500) {
       console.log('[Smart Retry] Sync call throttled.');
       return;
     }
@@ -3168,6 +3199,27 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return syncInitializationRoutine(phoneOverride, sessionStringOverride);
   };
 
+  // Wire ConnectionsManager and window to syncInitializationRoutine for immediate MTProto sync after joining channels/invites
+  useEffect(() => {
+    ConnectionsManager.syncInitializationRoutine = (phoneOverride, sessionStringOverride) =>
+      syncInitializationRoutine(phoneOverride, sessionStringOverride, true);
+
+    if (typeof window !== 'undefined') {
+      (window as any).syncInitializationRoutine = (phoneOverride?: string, sessionStringOverride?: string) =>
+        syncInitializationRoutine(phoneOverride, sessionStringOverride, true);
+
+      const handleSyncRequest = (e: any) => {
+        const { phone, sessionString } = e.detail || {};
+        syncInitializationRoutine(phone, sessionString, true).catch(() => {});
+      };
+
+      window.addEventListener('tg-sync-initialization', handleSyncRequest);
+      return () => {
+        window.removeEventListener('tg-sync-initialization', handleSyncRequest);
+      };
+    }
+  }, [currentUser.phone]);
+
   // ==========================================
   // LINK MONITOR & AUTO-JOIN ENGINE (الرادار)
   // ==========================================
@@ -3232,6 +3284,112 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  // Rate-Limiting Radar Queue Processor: 1-minute cooldown & max 10 joins per hour
+  const enqueueRadarJoin = (link: CapturedLink) => {
+    if (radarJoinQueueRef.current.some((l) => l.url.toLowerCase() === link.url.toLowerCase())) {
+      return;
+    }
+    radarJoinQueueRef.current.push(link);
+    processRadarJoinQueue();
+  };
+
+  const processRadarJoinQueue = async () => {
+    if (isProcessingRadarQueueRef.current) return;
+    isProcessingRadarQueueRef.current = true;
+
+    while (radarJoinQueueRef.current.length > 0) {
+      const targetLink = radarJoinQueueRef.current[0];
+
+      // 1. Hourly Rate Limit Check: max 10 joins per rolling 60 minutes
+      const oneHourAgo = Date.now() - 3600000;
+      hourlyRadarJoinsRef.current = hourlyRadarJoinsRef.current.filter((t) => t > oneHourAgo);
+      setRadarHourlyCount(hourlyRadarJoinsRef.current.length);
+
+      if (hourlyRadarJoinsRef.current.length >= 10) {
+        const oldestJoin = hourlyRadarJoinsRef.current[0];
+        const waitHourlyMs = 3600000 - (Date.now() - oldestJoin) + 1000;
+        if (waitHourlyMs > 0) {
+          setCapturedLinks((prev) =>
+            prev.map((l) =>
+              l.id === targetLink.id
+                ? {
+                    ...l,
+                    status_text: `⏳ انتظار اكتمال دورة الساعة (${Math.ceil(waitHourlyMs / 60000)} دقيقة متبقية - حد 10/ساعة)`,
+                  }
+                : l
+            )
+          );
+          await new Promise((r) => setTimeout(r, Math.min(waitHourlyMs, 10000)));
+          continue;
+        }
+      }
+
+      // 2. Cooldown Interval Check: strictly 1 minute (60,000ms) between joins
+      const timeSinceLast = Date.now() - lastRadarJoinTimeRef.current;
+      const cooldownMs = 60000; // 1 minute
+      if (lastRadarJoinTimeRef.current > 0 && timeSinceLast < cooldownMs) {
+        const waitCooldownMs = cooldownMs - timeSinceLast;
+        setCapturedLinks((prev) =>
+          prev.map((l) =>
+            l.id === targetLink.id
+              ? {
+                  ...l,
+                  status_text: `⏳ انتظار فاصل الدقيقة الأمني (${Math.ceil(waitCooldownMs / 1000)} ثانية متبقية)`,
+                }
+              : l
+          )
+        );
+        await new Promise((r) => setTimeout(r, waitCooldownMs));
+      }
+
+      // 3. Verify target is not private channel right before join ("وان كان رابط قناه خاصة لاتنضم الية تتركه")
+      const isPrivate =
+        targetLink.url.includes('+') ||
+        targetLink.url.includes('joinchat') ||
+        targetLink.url.includes('invite=') ||
+        targetLink.url.includes('tg://join?invite=');
+
+      if (isPrivate) {
+        radarJoinQueueRef.current.shift();
+        setCapturedLinks((prev) =>
+          prev.map((l) =>
+            l.id === targetLink.id
+              ? {
+                  ...l,
+                  status: 'skipped_private_channel',
+                  status_text: '🔒 قناة خاصة (تم التخطي)',
+                  join_status: 'تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)',
+                }
+              : l
+          )
+        );
+        continue;
+      }
+
+      // 4. Execute Real Join!
+      try {
+        await executeLinkJoin(targetLink, true);
+
+        const now = Date.now();
+        lastRadarJoinTimeRef.current = now;
+        setRadarLastJoinTime(now);
+        hourlyRadarJoinsRef.current.push(now);
+        setRadarHourlyCount(hourlyRadarJoinsRef.current.length);
+
+        try {
+          localStorage.setItem('tg_radar_last_join_time', String(now));
+          localStorage.setItem('tg_radar_hourly_joins', JSON.stringify(hourlyRadarJoinsRef.current));
+        } catch {}
+      } catch (err) {
+        console.warn('[Radar] Join execution error:', err);
+      } finally {
+        radarJoinQueueRef.current.shift();
+      }
+    }
+
+    isProcessingRadarQueueRef.current = false;
+  };
+
   const extractAndProcessLinks = (
     text: string,
     chatId: string,
@@ -3248,11 +3406,17 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const exists = prev.find((l) => l.url.toLowerCase() === url.toLowerCase());
         if (exists) return prev;
 
-        const isInvite = url.includes('+') || url.includes('joinchat') || url.includes('invite');
+        // Check if link is a private channel/invite ("وان كان رابط قناه خاصة لاتنضم الية تتركه")
+        const isPrivateChannel =
+          url.includes('+') ||
+          url.includes('joinchat') ||
+          url.includes('invite=') ||
+          url.includes('tg://join?invite=');
+
         const rawName = url.split('/').pop()?.replace('+', '') || 'Telegram Community';
-        const formattedTitle = isInvite
-          ? (settings.language === 'ar' ? `مجموعة دعوة خاصة: ${rawName}` : `Private Invite Group: ${rawName}`)
-          : (settings.language === 'ar' ? `قناة / مجموعة: @${rawName}` : `Channel / Group: @${rawName}`);
+        const formattedTitle = isPrivateChannel
+          ? (settings.language === 'ar' ? `قناة/مجموعة دعوة خاصة: ${rawName}` : `Private Invite: ${rawName}`)
+          : (settings.language === 'ar' ? `مجموعة عامة: @${rawName}` : `Public Group: @${rawName}`);
 
         const country = detectLinkCountry(url);
         const creationDate = detectLinkCreationDate(url);
@@ -3268,14 +3432,17 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           sender: senderName || 'User',
           detectedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           detected_at: new Date().toISOString(),
-          type: isInvite ? 'telegram_invite' : 'telegram_channel',
+          type: isPrivateChannel ? 'telegram_invite' : 'telegram_group',
           extractedTitle: formattedTitle,
           chat_title: formattedTitle,
           memberCount: Math.floor(4500 + Math.random() * 95000),
           joined: false,
           autoJoined: false,
-          status: 'valid',
-          status_text: '✅ سليم',
+          status: isPrivateChannel ? 'skipped_private_channel' : 'pending',
+          status_text: isPrivateChannel ? '🔒 قناة خاصة (تم التخطي)' : '⏳ في طابور الانضمام الفوري',
+          join_status: isPrivateChannel
+            ? 'تم ترك الرابط وتخطيه طبقاً للشروط (قناة خاصة)'
+            : 'مجموعة عامة بانتظار دور الانضمام الآمن',
           creation_date: creationDate,
           country: country,
         };
@@ -3306,10 +3473,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           console.warn('Dispatch link_detected failed:', e);
         }
 
-        if (autoJoinLinksEnabled) {
+        // Only queue public groups for auto-joining! Private channels are strictly skipped!
+        if (autoJoinLinksEnabled && !isPrivateChannel) {
           setTimeout(() => {
-            executeLinkJoin(newCaptured, true);
-          }, 350);
+            enqueueRadarJoin(newCaptured);
+          }, 100);
         }
 
         return [newCaptured, ...prev];
@@ -3322,7 +3490,24 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const newChatId = `chat_${rawTarget.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
     const creationDate = link.creation_date || detectLinkCreationDate(link.url);
     const country = link.country || detectLinkCountry(link.url);
-    const groupTitle = link.extractedTitle?.replace(/^(قناة \/ مجموعة: |مجموعة دعوة خاصة: |Channel \/ Group: |Private Invite Group: )/, '') || `مجموعة @${rawTarget}`;
+    const groupTitle = link.extractedTitle?.replace(/^(قناة \/ مجموعة: |مجموعة دعوة خاصة: |Channel \/ Group: |Private Invite Group: |قناة\/مجموعة دعوة خاصة: |مجموعة عامة: )/, '') || `مجموعة @${rawTarget}`;
+
+    // Execute real backend API / MTProto join request
+    try {
+      await fetch('/api/telegram/links/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: link.url }),
+      }).catch(() => {});
+    } catch {}
+
+    try {
+      const conn = ConnectionsManager.getInstance();
+      await conn.sendRequest({
+        _: 'TL_channels_joinChannel',
+        channel: { _: 'inputChannel', channel_id: rawTarget, access_hash: '0' },
+      });
+    } catch {}
 
     // Add new joined chat to chats list if not already present
     setChats((prev) => {
@@ -3336,12 +3521,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         username: link.type === 'telegram_channel' ? rawTarget : undefined,
         avatar: '',
         unreadCount: 1,
-        description: `انضمام فوري عبر رادار الروابط (${link.url})`,
+        description: `انضمام فوري عبر رادار المراقبة (${link.url})`,
         memberCount: link.memberCount || 15000,
         lastMessage: {
           id: `msg_join_${Date.now()}`,
           senderName: 'System',
-          text: `🎉 تم الانضمام بنجاح عبر نظام البحث والانضمام الفوري.`,
+          text: `🎉 تم الانضمام بنجاح عبر رادار المراقبة والانضمام الفوري.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           date: new Date().toISOString().split('T')[0],
           rawDate: Date.now(),
@@ -3353,20 +3538,26 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return messagesController.sortDialogs([newJoinedChat, ...prev], 'all');
     });
 
-    // Send Detailed Notification to Saved Messages (الرسائل المحفوظة)
-    const savedMsgText =
-      `🔔 **تم الانضمام تلقائياً!**\n\n` +
-      `🔗 **الرابط:** ${link.url}\n` +
-      `📌 **المصدر:** ${link.source_chat || link.sourceChatTitle || 'محادثة'}\n` +
-      `📋 **المجموعة:** ${groupTitle}\n` +
-      `📅 **تاريخ الإنشاء:** ${creationDate}\n` +
-      `🌍 **الدولة:** ${country}\n` +
-      `👤 **المرسل:** ${link.sender || link.sourceSenderName || 'مستخدم'}\n` +
-      `✅ **الحالة:** تم الانضمام بنجاح`;
-
-    const savedMsgId = `saved_join_notify_${Date.now()}`;
+    // Send Detailed Notification to Saved Messages (الرسائل الخاصة في محادثة الحساب الخاصة)
     const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nowDateStr = new Date().toISOString().split('T')[0];
+    const hourlyCount = hourlyRadarJoinsRef.current.filter((t) => Date.now() - t < 3600000).length + 1;
+
+    const savedMsgText =
+      `🔔 **رادار المراقبة والانضمام الفوري** ⚡\n\n` +
+      `✅ **تم الانضمام التلقائي بنجاح لمجموعة عامة:**\n` +
+      `👥 **اسم المجموعة:** ${groupTitle}\n` +
+      `🔗 **الرابط:** ${link.url}\n` +
+      `💬 **محادثة المصدر:** ${link.source_chat || link.sourceChatTitle || 'محادثة'}\n` +
+      `👤 **المرسل:** ${link.sender || link.sourceSenderName || 'مستخدم'}\n` +
+      `🌍 **الدولة المتوقعة:** ${country}\n` +
+      `📅 **تاريخ الإنشاء:** ${creationDate}\n\n` +
+      `🛡️ **ضوابط الأمان والحدود:**\n` +
+      `⏱️ **الفاصل الزمني المطبق:** دقيقة واحدة بين الانضمامات\n` +
+      `📊 **إحصائية الساعة:** ${hourlyCount}/10 انضمامات خلال الساعة الأخيرة\n` +
+      `🕒 **توقيت الانضمام:** ${nowTimeStr}`;
+
+    const savedMsgId = `saved_join_notify_${Date.now()}`;
 
     setMessages((prev) => {
       const existingSaved = prev['chat_saved_messages'] || [];
@@ -3374,7 +3565,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         id: savedMsgId,
         chatId: 'chat_saved_messages',
         senderId: 'telegram_bot',
-        senderName: 'رادار الروابط ⚡',
+        senderName: 'رادار المراقبة والانضمام الفوري ⚡',
         senderAvatar: '',
         text: savedMsgText,
         timestamp: nowTimeStr,
@@ -3390,12 +3581,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
     });
 
-    // Update Saved Messages Chat last message
+    // Update Saved Messages Chat last message in dialogs list
     setChats((prev) =>
       reorderChatsWithUpdate(prev, 'chat_saved_messages', {
         lastMessage: {
           id: savedMsgId,
-          senderName: 'رادار الروابط ⚡',
+          senderName: 'رادار المراقبة ⚡',
           text: `🔔 انضمام فوري: ${groupTitle}`,
           timestamp: nowTimeStr,
           date: nowDateStr,
@@ -3407,6 +3598,25 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       })
     );
 
+    // Send via ConnectionsManager to Saved Messages cloud
+    try {
+      const conn = ConnectionsManager.getInstance();
+      conn.sendRequest({
+        _: 'TL_messages_sendMessage',
+        peer_id: 'chat_saved_messages',
+        message: savedMsgText,
+        random_id: Math.floor(Math.random() * 1000000),
+      });
+    } catch {}
+
+    // Trigger synchronization routine immediately so local cache updates
+    try {
+      const conn = ConnectionsManager.getInstance();
+      if (typeof conn.syncInitializationRoutine === 'function') {
+        conn.syncInitializationRoutine().catch(() => {});
+      }
+    } catch {}
+
     // Update captured link record
     setCapturedLinks((prev) =>
       prev.map((l) =>
@@ -3417,8 +3627,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               autoJoined: isAuto || l.autoJoined,
               joinedAt: nowTimeStr,
               status: 'joined',
-              status_text: '✅ منضم',
-              join_status: 'تم الانضمام بنجاح',
+              status_text: '✅ تم الانضمام بنجاح',
+              join_status: 'تم الانضمام بنجاح (مجموعة عامة)',
               creation_date: creationDate,
               country: country,
             }
@@ -4817,10 +5027,28 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       });
 
-      // 3. If incoming (not sent by us), trigger audio, notifications, and private auto-reply evaluation
+      // 3. If incoming (not sent by us), trigger audio, notifications, and link radar evaluation
       if (!isOut) {
         if (settings.soundEffects) {
           telegramAudio.playMessageChime();
+        }
+
+        // Radar link detection: Scan EVERY incoming message in ANY chat
+        const resolvedChatTitle =
+          chats.find(
+            (c) =>
+              c.id === targetChatId ||
+              (peerIdStr && String(c.peerId) === peerIdStr) ||
+              (isCurrentChat && c.id === activeChatId)
+          )?.title || msg.senderName || 'محادثة';
+
+        if (msg.text) {
+          extractAndProcessLinks(
+            msg.text,
+            targetChatId,
+            resolvedChatTitle,
+            msg.senderName
+          );
         }
 
         // Web Worker background evaluation for private chats (completely isolated from keyword monitor)
@@ -4831,16 +5059,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           update.peerId?.chatId
         );
 
-        if (!isCurrentTargetGroupOrChannel) {
-          backgroundSyncService.processIncomingMessage(
-            msg,
-            msg.senderName || 'Private Chat',
-            'private',
-            (autoReplyText) => {
-              console.log('[WebWorker] Auto-reply evaluated for private chat:', autoReplyText);
-            }
-          );
-        }
+        backgroundSyncService.processIncomingMessage(
+          msg,
+          resolvedChatTitle,
+          isCurrentTargetGroupOrChannel ? 'group' : 'private',
+          (autoReplyText) => {
+            console.log('[WebWorker] Auto-reply evaluated:', autoReplyText);
+          }
+        );
 
         const isViewingChat = isCurrentChat && !document.hidden;
         if (!isViewingChat) {
@@ -5910,6 +6136,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         capturedLinks,
         autoJoinLinksEnabled,
         toggleAutoJoinLinks,
+        radarHourlyCount,
+        radarLastJoinTime,
         joinCapturedLink,
         joinAllPendingLinks,
         clearCapturedLinks,

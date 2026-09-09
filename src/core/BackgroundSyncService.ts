@@ -228,11 +228,13 @@ export class BackgroundSyncService {
 
   private isAutoResponderGlobal = true;
   private isLiveLinkDiscoverActive = true;
-  private isInstantAutoJoinEnabled = false;
+  private isInstantAutoJoinEnabled = true; // Always running by default
   private discoveredLinks: LiveDiscoveredLink[] = [];
 
-  // Rate Limiting & Queue state for link joins (strictly 1 join per 10 seconds)
+  // Rate Limiting & Queue state for link joins:
+  // Strictly 1 minute (60,000ms) between joins & maximum 10 joins per 1 hour
   private lastJoinTime: number = 0;
+  private hourlyJoinTimestamps: number[] = [];
   private joinQueue: Array<{
     linkId: string;
     resolve: (success: boolean) => void;
@@ -502,9 +504,9 @@ export class BackgroundSyncService {
           sourceChatId: message.chatId || 'chat_unknown',
           senderName: message.senderName || 'مستخدم',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          status: isPrivate ? 'failed' : (this.isInstantAutoJoinEnabled ? 'pending' : 'pending'),
-          autoJoined: isPrivate ? false : this.isInstantAutoJoinEnabled,
-          failReason: isPrivate ? 'PRIVATE_CHANNEL_NOT_ALLOWED' : undefined,
+          status: isPrivate ? 'skipped_private_channel' : 'pending',
+          autoJoined: false,
+          failReason: isPrivate ? 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)' : undefined,
         };
 
         this.discoveredLinks.unshift(discItem);
@@ -736,24 +738,38 @@ export class BackgroundSyncService {
         continue;
       }
 
-      // Point 1: Rate Limiting - wait 10 seconds since last join execution
+      // Rate Limiting Rule 1: Hourly limit (Strictly max 10 joins per 1 hour)
+      const oneHourAgo = Date.now() - 3600000;
+      this.hourlyJoinTimestamps = this.hourlyJoinTimestamps.filter((t) => t > oneHourAgo);
+
+      if (this.hourlyJoinTimestamps.length >= 10) {
+        const oldestJoin = this.hourlyJoinTimestamps[0];
+        const waitHourlyMs = 3600000 - (Date.now() - oldestJoin) + 1000;
+        if (waitHourlyMs > 0) {
+          console.warn(`[BackgroundSyncService] Hourly limit reached (10 joins/hr). Waiting ${Math.ceil(waitHourlyMs / 1000)}s...`);
+          await new Promise((resolve) => setTimeout(resolve, waitHourlyMs));
+        }
+      }
+
+      // Rate Limiting Rule 2: Minimum 1 minute (60,000ms) interval between joins
       const now = Date.now();
       const timeSinceLastJoin = now - this.lastJoinTime;
-      const cooldownMs = 10000; // 10 seconds
+      const cooldownMs = 60000; // 1 minute interval
 
       if (this.lastJoinTime > 0 && timeSinceLastJoin < cooldownMs) {
         const waitMs = cooldownMs - timeSinceLastJoin;
+        console.log(`[BackgroundSyncService] Waiting 1-minute safety cooldown (${Math.ceil(waitMs / 1000)}s)...`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
 
-      // Point 2: Strictly verify not private before executing
+      // Point 2: Strictly verify not private channel before executing ("وان كان رابط قناه خاصة لاتنضم الية تتركه")
       if (this.isPrivateChannelLink(item.url)) {
         this.joinQueue.shift();
         item.status = 'failed';
-        item.failReason = 'PRIVATE_CHANNEL_NOT_ALLOWED';
+        item.failReason = 'قناة خاصة - تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)';
         item.autoJoined = false;
         await telegramDb.discoveredLinks
-          .update(item.id, { status: 'failed', failReason: 'PRIVATE_CHANNEL_NOT_ALLOWED' })
+          .update(item.id, { status: 'failed', failReason: item.failReason })
           .catch(() => {});
         this.notifyStateChange();
         queueItem.resolve(false);
@@ -778,13 +794,28 @@ export class BackgroundSyncService {
           channel: { _: 'inputChannel', channel_id: username, access_hash: '0' },
         });
 
+        // Record join timestamps for rate limiter (1 min cooldown & 10/hr max)
+        this.lastJoinTime = Date.now();
+        this.hourlyJoinTimestamps.push(Date.now());
+
         // Point 3: Immediate notification to Saved Messages upon successful join
         const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const groupTitle =
           item.sourceChatTitle && item.sourceChatTitle !== 'محادثة تلغرام'
             ? item.sourceChatTitle
             : `@${username}`;
-        const savedMessageText = `✅ تم الانضمام إلى [${groupTitle}] عبر الرابط: [${item.url}] في [${nowTime}].`;
+        const hourlyCount = this.hourlyJoinTimestamps.length;
+        const savedMessageText =
+          `🔔 **رادار المراقبة والانضمام الفوري** ⚡\n\n` +
+          `✅ **تم الانضمام التلقائي بنجاح لمجموعة عامة:**\n` +
+          `👥 **اسم المجموعة:** ${groupTitle}\n` +
+          `🔗 **الرابط:** ${item.url}\n` +
+          `💬 **محادثة المصدر:** ${item.sourceChatTitle || 'محادثة'}\n` +
+          `👤 **المرسل:** ${item.senderName || 'مستخدم'}\n\n` +
+          `🛡️ **ضوابط الأمان والحدود:**\n` +
+          `⏱️ **الفاصل الزمني المطبق:** دقيقة واحدة بين الانضمامات\n` +
+          `📊 **إحصائية الساعة:** ${hourlyCount}/10 انضمامات خلال الساعة الأخيرة\n` +
+          `🕒 **توقيت الانضمام:** ${nowTime}`;
 
         try {
           await connectionsManager.sendRequest({
@@ -795,6 +826,25 @@ export class BackgroundSyncService {
           });
         } catch (savedErr) {
           console.warn('[BackgroundSyncService] Notice: could not deliver notification to Saved Messages:', savedErr);
+        }
+
+        // Trigger synchronization routine immediately so local cache updates
+        if (typeof connectionsManager.syncInitializationRoutine === 'function') {
+          connectionsManager.syncInitializationRoutine().catch(() => {});
+        }
+
+        // Dispatch window event for UI update
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('tg-radar-link-joined', {
+              detail: {
+                url: item.url,
+                groupTitle,
+                joinedAt: nowTime,
+                hourlyCount,
+              },
+            })
+          );
         }
 
         item.status = 'joined';
@@ -813,9 +863,6 @@ export class BackgroundSyncService {
         this.notifyStateChange();
         success = false;
       }
-
-      // Record last join timestamp to enforce 10s cooldown for subsequent joins
-      this.lastJoinTime = Date.now();
 
       // Dequeue and resolve promise
       this.joinQueue.shift();

@@ -1,4 +1,4 @@
-export type ChatType = 'private' | 'group' | 'channel' | 'bot' | 'saved';
+export type ChatType = 'private' | 'group' | 'supergroup' | 'channel' | 'bot' | 'saved';
 
 export interface User {
   id: string;
@@ -421,7 +421,7 @@ export interface CapturedLink {
   joined: boolean;
   joinedAt?: string;
   autoJoined?: boolean;
-  status: 'valid' | 'invalid' | 'joined' | 'already' | 'pending' | 'failed' | 'joining' | 'already_member' | 'expired';
+  status: 'valid' | 'invalid' | 'joined' | 'already' | 'pending' | 'failed' | 'joining' | 'already_member' | 'expired' | 'skipped_private_channel';
   status_text?: string;
   join_status?: string;
   username?: string;
@@ -659,7 +659,7 @@ export interface LiveDiscoveredLink {
   sourceChatId: string;
   senderName: string;
   timestamp: string;
-  status: 'pending' | 'joining' | 'joined' | 'failed' | 'already_member' | 'expired';
+  status: 'pending' | 'joining' | 'joined' | 'failed' | 'already_member' | 'expired' | 'skipped_private_channel';
   failReason?: string;
   autoJoined: boolean;
 }

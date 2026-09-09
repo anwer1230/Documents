@@ -495,6 +495,17 @@ const MainSettingsView: React.FC<{
           </div>
 
           <SettingsListItem
+            icon={<Radio className="w-5 h-5 text-emerald-400 animate-pulse" />}
+            iconBg="bg-emerald-500/20"
+            title={isArabic ? 'رادار المراقبة والانضمام الفوري' : 'Link Monitor & Auto-Join Radar'}
+            subtitle={isArabic ? 'مراقبة الروابط بجميع المحادثات، انضمام فوري للمجموعات العامة، وتخطي القنوات الخاصة' : 'Real-time links monitor, 1-min cooldown, max 10/hr public joins'}
+            onClick={() => {
+              onClose();
+              setActiveModal('link-monitor');
+            }}
+          />
+
+          <SettingsListItem
             icon={<Settings className="w-5 h-5 text-cyan-400" />}
             iconBg="bg-cyan-500/20"
             title={isArabic ? 'إعدادات Telegram Web (المظهر، الأصوات، البيانات، النطق)' : 'Telegram Web Settings Screen'}
