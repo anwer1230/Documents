@@ -1025,6 +1025,16 @@ async function startServer() {
     if (!clean) return '';
     if (clean.startsWith('00')) {
       clean = '+' + clean.slice(2);
+    } else if (clean.startsWith('07') && clean.length === 10) {
+      clean = '+967' + clean.slice(1);
+    } else if (clean.startsWith('7') && clean.length === 9) {
+      clean = '+967' + clean;
+    } else if (clean.startsWith('05') && clean.length === 10) {
+      clean = '+966' + clean.slice(1);
+    } else if (clean.startsWith('5') && clean.length === 9) {
+      clean = '+966' + clean;
+    } else if (clean.startsWith('01') && clean.length === 11) {
+      clean = '+20' + clean.slice(1);
     } else if (!clean.startsWith('+')) {
       clean = '+' + clean;
     }
@@ -3439,6 +3449,13 @@ async function startServer() {
           success: false,
           error: 'PHONE_NUMBER_INVALID',
           message: 'رقم الهاتف غير صالح في نظام تيليجرام. يرجى التأكد من كتابة الرقم مع رمز الدولة بشكل صحيح.',
+        });
+      }
+      if (errMsg.includes('PHONE_NUMBER_BANNED')) {
+        return res.status(400).json({
+          success: false,
+          error: 'PHONE_NUMBER_BANNED',
+          message: 'هذا الرقم محظور من استخدام تيليجرام الرسمي من قِبل سيرفرات تيليجرام.',
         });
       }
       if (errMsg.includes('FLOOD_WAIT') || errMsg.includes('PHONE_NUMBER_FLOOD')) {

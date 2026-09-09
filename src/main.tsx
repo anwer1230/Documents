@@ -32,9 +32,8 @@ if ('serviceWorker' in navigator) {
   const updateSW = registerSW({
     immediate: true,
     onNeedRefresh() {
-      console.log('[PWA] New content available. Automatically reloading to apply updates...');
-      // Safe reload: localStorage and IndexedDB user sessions/chats are fully preserved
-      window.location.reload();
+      console.log('[PWA] New content available. Update ready in background.');
+      // Do NOT forcefully reload the window while the user is typing their login number or interacting
     },
     onOfflineReady() {
       console.log('[PWA] App is ready to work offline.');

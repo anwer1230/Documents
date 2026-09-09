@@ -97,7 +97,7 @@ export class LoginController {
         deliveryType,
         isRealTelegramMTProto: false,
         error: data.error || 'SEND_CODE_FAILED',
-        message: this.translateAuthError(data.error || data.message),
+        message: data.message || this.translateAuthError(data.error),
       };
     } catch (e: any) {
       return {
