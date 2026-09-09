@@ -1,17 +1,34 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import module from 'module';
 import {defineConfig} from 'vite';
-import {VitePWA} from 'vite-plugin-pwa';
 
-export default defineConfig(() => {
-  return {
-    define: {
-      global: 'globalThis',
-    },
-    plugins: [
-      react() as any,
-      tailwindcss() as any,
+// Guard against ERR_INVALID_ARG_VALUE in Node.js v20+ when Vite plugins invoke createRequire with '.' or relative paths
+if (module && typeof module.createRequire === 'function') {
+  const origCreateRequire = module.createRequire;
+  module.createRequire = function (filenameOrURL: any) {
+    if (!filenameOrURL || filenameOrURL === '.' || (typeof filenameOrURL === 'string' && !filenameOrURL.startsWith('file:') && !path.isAbsolute(filenameOrURL))) {
+      const safeTarget = typeof filenameOrURL === 'string' && filenameOrURL && filenameOrURL !== '.'
+        ? path.resolve(process.cwd(), filenameOrURL)
+        : path.resolve(process.cwd(), 'package.json');
+      return origCreateRequire.call(this, safeTarget);
+    }
+    return origCreateRequire.call(this, filenameOrURL);
+  };
+}
+
+export default defineConfig((async ({ command }: any) => {
+  const isBuild = command === 'build';
+
+  const plugins: any[] = [
+    react() as any,
+    tailwindcss() as any,
+  ];
+
+  if (isBuild) {
+    const { VitePWA } = await import('vite-plugin-pwa');
+    plugins.push(
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'telegram-logo.svg', 'sql-wasm.wasm', 'sw-custom.js', 'icons/*.png', 'icons/*.svg'],
@@ -79,8 +96,29 @@ export default defineConfig(() => {
         devOptions: {
           enabled: false,
         },
-      }),
-    ],
+      }) as any
+    );
+  } else {
+    plugins.push({
+      name: 'virtual-pwa-register-dev',
+      resolveId(id: string) {
+        if (id === 'virtual:pwa-register') {
+          return '\0virtual:pwa-register';
+        }
+      },
+      load(id: string) {
+        if (id === '\0virtual:pwa-register') {
+          return 'export function registerSW(options) { return () => {}; }';
+        }
+      },
+    });
+  }
+
+  return {
+    define: {
+      global: 'globalThis',
+    },
+    plugins,
     resolve: {
       alias: {
         '@': path.resolve(process.cwd(), '.'),
@@ -147,4 +185,4 @@ export default defineConfig(() => {
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
-});
+}) as any);

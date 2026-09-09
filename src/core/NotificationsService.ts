@@ -1216,14 +1216,6 @@ export class NotificationsService {
         }
       }
     }
-
-    // 2. Groq Smart AI Engine
-    if (this.isGroqAiEnabled && !message.isOutgoing && text && onAutoReply) {
-      const reply = await this.generateGroqGulfReply(text);
-      setTimeout(() => {
-        onAutoReply(reply);
-      }, 1000);
-    }
   }
 
   // ==========================================

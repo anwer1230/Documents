@@ -7,6 +7,7 @@
  */
 
 import { Chat, Message } from '../types';
+import { getTelegramEpoch } from '../utils/dateUtils';
 import { TLRPC } from './TLRPC';
 import { NotificationCenter } from './NotificationCenter';
 import { MessagesStorage } from './MessagesStorage';
@@ -268,63 +269,8 @@ export class MessagesController {
     }
   }
 
-  private getMessageEpoch(msg: Message | { date?: string | number; timestamp?: string | number; epoch?: number; rawDate?: number }): number {
-    if (!msg) return 0;
-    if (typeof (msg as any).epoch === 'number' && (msg as any).epoch > 0) {
-      const ep = (msg as any).epoch;
-      return ep < 1e11 ? ep * 1000 : ep;
-    }
-    if (typeof (msg as any).rawDate === 'number' && (msg as any).rawDate > 0) {
-      const rd = (msg as any).rawDate;
-      return rd < 1e11 ? rd * 1000 : rd;
-    }
-    if (typeof (msg as any).timestamp === 'number') {
-      const n = (msg as any).timestamp;
-      return n < 1e11 ? n * 1000 : n;
-    }
-    if (msg.date) {
-      if (typeof msg.date === 'number') {
-        const d = msg.date as number;
-        return d < 1e11 ? d * 1000 : d;
-      }
-      if (typeof msg.date === 'string') {
-        const trimmed = msg.date.trim();
-        if (/^\d+$/.test(trimmed)) {
-          const num = Number(trimmed);
-          if (!isNaN(num) && num > 0) {
-            return num < 1e11 ? num * 1000 : num;
-          }
-        }
-        const parsedFull = Date.parse(`${trimmed} ${msg.timestamp || '00:00'}`);
-        if (!isNaN(parsedFull)) return parsedFull;
-        const parsedDateOnly = Date.parse(trimmed);
-        if (!isNaN(parsedDateOnly)) return parsedDateOnly;
-      }
-    }
-    if (msg.timestamp && typeof msg.timestamp === 'string') {
-      const trimmedTs = msg.timestamp.trim();
-      if (/^\d+$/.test(trimmedTs)) {
-        const num = Number(trimmedTs);
-        if (!isNaN(num) && num > 0) {
-          return num < 1e11 ? num * 1000 : num;
-        }
-      }
-      const parsedDirect = Date.parse(trimmedTs);
-      if (!isNaN(parsedDirect)) return parsedDirect;
-      // Handle "10:30 AM" or "22:15" format relative to today
-      const timeMatch = trimmedTs.match(/(\d{1,2}):(\d{2})(?:\s*(AM|PM|ص|م))?/i);
-      if (timeMatch) {
-        let hours = parseInt(timeMatch[1], 10);
-        const minutes = parseInt(timeMatch[2], 10);
-        const modifier = (timeMatch[3] || '').toUpperCase();
-        if ((modifier === 'PM' || modifier === 'م') && hours < 12) hours += 12;
-        if ((modifier === 'AM' || modifier === 'ص') && hours === 12) hours = 0;
-        const d = new Date();
-        d.setHours(hours, minutes, 0, 0);
-        return d.getTime();
-      }
-    }
-    return 0;
+  private getMessageEpoch(msg: any): number {
+    return getTelegramEpoch(msg);
   }
 
   public canSendMessages(
@@ -436,7 +382,34 @@ export class MessagesController {
     activeFolder: string = 'all',
     searchQuery: string = ''
   ): Chat[] {
-    let list = [...chats];
+    if (!chats || chats.length === 0) return [];
+
+    // 1. Deduplicate chats by ID to guarantee unique keys and prevent UI overlapping
+    const uniqueMap = new Map<string, Chat>();
+    for (const chat of chats) {
+      if (!chat || !chat.id) continue;
+      const key = String(chat.id);
+      const existing = uniqueMap.get(key);
+      if (!existing) {
+        uniqueMap.set(key, chat);
+      } else {
+        // Merge with existing, taking the one with the more recent lastMessage or updated state
+        const timeExisting = Math.max(
+          this.getMessageEpoch(existing.lastMessage),
+          this.getMessageEpoch((existing as any).date)
+        );
+        const timeNew = Math.max(
+          this.getMessageEpoch(chat.lastMessage),
+          this.getMessageEpoch((chat as any).date)
+        );
+        if (timeNew >= timeExisting) {
+          uniqueMap.set(key, { ...existing, ...chat });
+        } else {
+          uniqueMap.set(key, { ...chat, ...existing });
+        }
+      }
+    }
+    let list = Array.from(uniqueMap.values());
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -452,7 +425,7 @@ export class MessagesController {
       list = list.filter((c) => {
         switch (activeFolder) {
           case 'unread':
-            return c.unreadCount > 0;
+            return (c.unreadCount || 0) > 0;
           case 'personal':
           case 'direct':
             return c.type === 'private' || c.type === 'saved';
@@ -478,16 +451,31 @@ export class MessagesController {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
       if (a.isPinned && b.isPinned) {
-        return (a.pinnedIndex ?? 0) - (b.pinnedIndex ?? 0);
+        const pinA = a.pinnedIndex ?? 0;
+        const pinB = b.pinnedIndex ?? 0;
+        if (pinA !== pinB) return pinA - pinB;
       }
 
       const draftA = this.draftsMap.get(a.id)?.date || 0;
       const draftB = this.draftsMap.get(b.id)?.date || 0;
 
-      const timeA = Math.max(this.getMessageEpoch(a.lastMessage as any), draftA);
-      const timeB = Math.max(this.getMessageEpoch(b.lastMessage as any), draftB);
+      const timeA = Math.max(
+        this.getMessageEpoch(a.lastMessage),
+        this.getMessageEpoch((a as any).date),
+        draftA
+      );
+      const timeB = Math.max(
+        this.getMessageEpoch(b.lastMessage),
+        this.getMessageEpoch((b as any).date),
+        draftB
+      );
 
-      return timeB - timeA;
+      if (timeA !== timeB) {
+        return timeB - timeA;
+      }
+
+      // Deterministic tie-breaker to prevent unstable sorting/overlapping
+      return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
     });
   }
 
@@ -497,11 +485,28 @@ export class MessagesController {
   ): GroupedMessageItem[] {
     if (!messages || messages.length === 0) return [];
 
-    const sorted = [...messages].sort((a, b) => {
+    // Deduplicate messages by unique ID to prevent overlapping bubble renders
+    const uniqueMap = new Map<string, Message>();
+    for (const msg of messages) {
+      if (!msg || msg.id === undefined || msg.id === null) continue;
+      const key = String(msg.id);
+      const existing = uniqueMap.get(key);
+      if (!existing) {
+        uniqueMap.set(key, msg);
+      } else {
+        uniqueMap.set(key, { ...existing, ...msg });
+      }
+    }
+
+    // Sort strictly ascending by date (oldest first, newest last)
+    const sorted = Array.from(uniqueMap.values()).sort((a, b) => {
       const epochA = this.getMessageEpoch(a);
       const epochB = this.getMessageEpoch(b);
       if (epochA !== epochB) return epochA - epochB;
-      return (a.id || '').localeCompare(b.id || '');
+      const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+      const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
+      return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
     });
 
     const result: GroupedMessageItem[] = [];

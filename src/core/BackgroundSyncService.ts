@@ -11,6 +11,7 @@ import {
   AutoReplyRule,
   LiveDiscoveredLink,
   Message,
+  PrivateAutoReplyRule,
 } from '../types';
 import { telegramDb, initTelegramDexieDb } from './telegramDexieDb';
 import { connectionsManager } from './ConnectionsManager';
@@ -86,20 +87,36 @@ const WORKER_SCRIPT = `
           }
         }
 
-        // 2. Off-thread Auto-Responder Rule Evaluation
+        // 2. Off-thread Auto-Responder Rule Evaluation (Strictly Private Chats Only)
         let matchedRule = null;
         let autoReplyPayload = null;
 
-        if (isAutoResponderActive && !message.isOutgoing && text && autoReplyRules.length > 0) {
-          const cleanText = text.trim().toLowerCase();
-          const isGroupChat = chatType === 'group' || chatType === 'supergroup' || chatType === 'channel';
+        const isPrivateChat = chatType === 'private';
+
+        if (isAutoResponderActive && !message.isOutgoing && text && autoReplyRules.length > 0 && isPrivateChat) {
+          function normalizeAr(str) {
+            if (!str) return '';
+            return str
+              .replace(/[\u064B-\u065F\u0670]/g, '')
+              .replace(/[إأآا]/g, 'ا')
+              .replace(/ة/g, 'ه')
+              .replace(/ى/g, 'ي')
+              .trim()
+              .toLowerCase();
+          }
+
+          const cleanText = text.trim();
+          const normMsg = normalizeAr(cleanText);
+          const lowerMsg = cleanText.toLowerCase();
 
           for (const rule of autoReplyRules) {
-            if (!rule.isEnabled) continue;
+            const isRuleActive = typeof rule.isEnabled === 'boolean'
+              ? rule.isEnabled
+              : (typeof rule.is_active === 'boolean' ? rule.is_active : true);
+            if (!isRuleActive) continue;
 
-            // Scope filter
-            if (rule.scope === 'private' && isGroupChat) continue;
-            if (rule.scope === 'groups' && !isGroupChat) continue;
+            // Scope filter: Strictly private chat
+            if (rule.scope && rule.scope !== 'private' && rule.scope !== 'all') continue;
 
             // Throttle protection (10 seconds per rule per chat)
             const throttleKey = rule.id + ':' + (message.chatId || 'default');
@@ -108,13 +125,14 @@ const WORKER_SCRIPT = `
               continue;
             }
 
-            let isMatch = false;
-            const cleanKeyword = (rule.keyword || '').trim().toLowerCase();
+            const rawKw = (rule.keyword || '').trim();
+            if (!rawKw) continue;
+            const normKw = normalizeAr(rawKw);
+            const lowerKw = rawKw.toLowerCase();
 
+            let isMatch = false;
             if (rule.matchType === 'exact') {
-              isMatch = cleanText === cleanKeyword;
-            } else if (rule.matchType === 'contains') {
-              isMatch = cleanText.includes(cleanKeyword);
+              isMatch = (normMsg === normKw) || (lowerMsg === lowerKw);
             } else if (rule.matchType === 'regex') {
               try {
                 const re = new RegExp(rule.keyword, 'i');
@@ -122,19 +140,22 @@ const WORKER_SCRIPT = `
               } catch (e) {
                 isMatch = false;
               }
+            } else {
+              isMatch = normMsg.includes(normKw) || lowerMsg.includes(lowerKw);
             }
 
             if (isMatch) {
               lastTriggeredMap.set(throttleKey, Date.now());
+              const replyContent = rule.replyText || rule.reply || '';
               matchedRule = {
                 id: rule.id,
-                replyText: rule.replyText,
+                replyText: replyContent,
               };
               autoReplyPayload = {
                 ruleId: rule.id,
-                replyText: rule.replyText,
+                replyText: replyContent,
                 targetChatId: message.chatId,
-                delayMs: 600,
+                delayMs: 800,
               };
               break;
             }
@@ -231,6 +252,7 @@ export class BackgroundSyncService {
 
   // Pending callbacks map for incoming message processing
   private pendingCallbacks = new Map<string, (autoReplyText: string) => void>();
+  private fallbackThrottleMap = new Map<string, number>();
 
   private constructor() {
     this.initWorker();
@@ -294,6 +316,21 @@ export class BackgroundSyncService {
       if (savedLinks && savedLinks.length > 0) {
         this.discoveredLinks = savedLinks;
       }
+
+      // Load active private auto-replies from SQLite on initialization
+      if (typeof window !== 'undefined') {
+        fetch('/api/auto-replies/private/list')
+          .then((res) => res.json())
+          .then((data) => {
+            if (data?.success && Array.isArray(data.rules)) {
+              this.syncFromPrivateAutoReplies(data.rules);
+            }
+          })
+          .catch((err) => {
+            console.warn('[BackgroundSyncService] Note fetching initial rules:', err);
+          });
+      }
+
       this.syncStateToWorker();
       this.notifyStateChange();
     } catch (e) {
@@ -301,7 +338,21 @@ export class BackgroundSyncService {
     }
   }
 
-  private syncStateToWorker() {
+  public syncFromPrivateAutoReplies(rules: PrivateAutoReplyRule[]) {
+    this.autoReplyRules = rules.map((r) => ({
+      id: r.id,
+      keyword: r.keyword,
+      replyText: r.reply,
+      matchType: 'contains' as const,
+      scope: 'private' as const,
+      isEnabled: Boolean(r.is_active),
+      timesTriggered: 0,
+    }));
+    this.syncStateToWorker();
+    this.notifyStateChange();
+  }
+
+  public syncStateToWorker() {
     if (this.worker && this.isWorkerReady) {
       this.worker.postMessage({
         type: 'SYNC_RULES',
@@ -466,23 +517,43 @@ export class BackgroundSyncService {
       }
     }
 
-    // 2. Auto responder fallback
-    if (this.isAutoResponderGlobal && !message.isOutgoing && text && onAutoReply) {
-      const cleanText = text.trim().toLowerCase();
-      const isGroupChat = chatType === 'group' || chatType === 'channel';
+    // 2. Auto responder fallback (Strictly Private Chats Only)
+    const isPrivateChat = chatType === 'private';
+    if (this.isAutoResponderGlobal && !message.isOutgoing && text && onAutoReply && isPrivateChat) {
+      const normalizeAr = (str: string) => {
+        if (!str) return '';
+        return str
+          .replace(/[\u064B-\u065F\u0670]/g, '')
+          .replace(/[إأآا]/g, 'ا')
+          .replace(/ة/g, 'ه')
+          .replace(/ى/g, 'ي')
+          .trim()
+          .toLowerCase();
+      };
+
+      const cleanText = text.trim();
+      const normMsg = normalizeAr(cleanText);
+      const lowerMsg = cleanText.toLowerCase();
 
       for (const rule of this.autoReplyRules) {
         if (!rule.isEnabled) continue;
-        if (rule.scope === 'private' && isGroupChat) continue;
-        if (rule.scope === 'groups' && !isGroupChat) continue;
+        if (rule.scope && rule.scope !== 'private' && rule.scope !== 'all') continue;
+
+        // Throttle 10s per rule per chat
+        const throttleKey = rule.id + ':' + (message.chatId || 'default');
+        const lastTrigger = this.fallbackThrottleMap.get(throttleKey) || 0;
+        if (Date.now() - lastTrigger < 10000) {
+          continue;
+        }
+
+        const rawKw = (rule.keyword || '').trim();
+        if (!rawKw) continue;
+        const normKw = normalizeAr(rawKw);
+        const lowerKw = rawKw.toLowerCase();
 
         let isMatch = false;
-        const cleanKeyword = (rule.keyword || '').trim().toLowerCase();
-
         if (rule.matchType === 'exact') {
-          isMatch = cleanText === cleanKeyword;
-        } else if (rule.matchType === 'contains') {
-          isMatch = cleanText.includes(cleanKeyword);
+          isMatch = normMsg === normKw || lowerMsg === lowerKw;
         } else if (rule.matchType === 'regex') {
           try {
             const re = new RegExp(rule.keyword, 'i');
@@ -490,18 +561,22 @@ export class BackgroundSyncService {
           } catch (e) {
             isMatch = false;
           }
+        } else {
+          isMatch = normMsg.includes(normKw) || lowerMsg.includes(lowerKw);
         }
 
         if (isMatch) {
+          this.fallbackThrottleMap.set(throttleKey, Date.now());
           rule.timesTriggered = (rule.timesTriggered || 0) + 1;
           rule.lastTriggeredAt = new Date().toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
           });
           this.statusMetrics.totalAutoRepliesTriggered++;
+          const replyContent = rule.replyText || (rule as any).reply || '';
           setTimeout(() => {
-            onAutoReply(rule.replyText);
-          }, 600);
+            onAutoReply(replyContent);
+          }, 800);
           break;
         }
       }

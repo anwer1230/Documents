@@ -21,6 +21,7 @@ import {
   type SkeletonVariant,
 } from './MessageSkeleton';
 import { messagesController } from '../../core/MessagesController';
+import { getTelegramEpoch } from '../../utils/dateUtils';
 import {
   List as VariableSizeList,
   List as FixedSizeList,
@@ -285,7 +286,32 @@ export const MessageList: React.FC = () => {
   const lastScrollSaveTimeRef = useRef<number>(0);
 
   const currentMessages = useMemo(() => {
-    return (activeChatId && messages[activeChatId]) || [];
+    const raw = (activeChatId && messages[activeChatId]) || [];
+    if (!raw.length) return [];
+
+    // Deduplicate messages by unique ID
+    const map = new Map<string, any>();
+    for (const m of raw) {
+      if (!m || m.id === undefined || m.id === null) continue;
+      const key = String(m.id);
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, m);
+      } else {
+        map.set(key, { ...existing, ...m });
+      }
+    }
+
+    // Sort strictly ascending by date (oldest first, newest last)
+    return Array.from(map.values()).sort((a, b) => {
+      const epochA = getTelegramEpoch(a);
+      const epochB = getTelegramEpoch(b);
+      if (epochA !== epochB) return epochA - epochB;
+      const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+      const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
+      return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
+    });
   }, [activeChatId, messages]);
 
   const currentMessagesRef = useRef(currentMessages);

@@ -1307,15 +1307,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     const handleDialogsReload = () => {
       // Re-sort chats using Telegram priority algorithm
-      setChats((prev) => {
-        return [...prev].sort((a, b) => {
-          if (a.isPinned && !b.isPinned) return -1;
-          if (!a.isPinned && b.isPinned) return 1;
-          const aTime = String(a.lastMessage?.timestamp || '');
-          const bTime = String(b.lastMessage?.timestamp || '');
-          return bTime.localeCompare(aTime);
-        });
-      });
+      setChats((prev) => messagesController.sortDialogs(prev, 'all'));
     };
 
     CoreNotificationCenter.getInstance(0).addObserver(
@@ -1486,27 +1478,22 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               messageId,
             });
 
-            // Increment unread count for the target chat
+            // Increment unread count for the target chat and bubble to top
             setChats((prev) =>
-              prev.map((c) =>
-                c.id === dialogId
-                  ? {
-                      ...c,
-                      unreadCount: (c.unreadCount || 0) + 1,
-                      lastMessage: {
-                        id: messageId,
-                        chatId: dialogId,
-                        senderId,
-                        senderName,
-                        text: body,
-                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        date: new Date().toISOString().split('T')[0],
-                        status: 'delivered',
-                        isOutgoing: false,
-                      },
-                    }
-                  : c
-              )
+              reorderChatsWithUpdate(prev, dialogId, {
+                unreadCount: (prev.find((c) => c.id === dialogId)?.unreadCount || 0) + 1,
+                lastMessage: {
+                  id: String(messageId),
+                  senderName,
+                  text: body,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  date: new Date().toISOString().split('T')[0],
+                  rawDate: Date.now(),
+                  epoch: Date.now(),
+                  status: 'delivered',
+                  isOutgoing: false,
+                },
+              })
             );
           }
         } else if (data.type === 'NAVIGATE_TO_DIALOG' || data.type === 'NAVIGATE_TO_CHAT') {
@@ -1660,20 +1647,27 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Re-ordering helper for chats to bubble up active chats chronologically
   const reorderChatsWithUpdate = (chatsList: Chat[], targetChatId: string, updatedFields: Partial<Chat>): Chat[] => {
-    const updated = chatsList.map((c) => (c.id === targetChatId ? { ...c, ...updatedFields } : c));
-    const target = updated.find((c) => c.id === targetChatId);
-    if (!target) return updated;
+    let exists = false;
+    const updated = chatsList.map((c) => {
+      if (c.id === targetChatId) {
+        exists = true;
+        return { ...c, ...updatedFields };
+      }
+      return c;
+    });
 
-    const others = updated.filter((c) => c.id !== targetChatId);
-    if (target.isPinned) {
-      const pinned = others.filter((c) => c.isPinned);
-      const unpinned = others.filter((c) => !c.isPinned);
-      return [target, ...pinned, ...unpinned];
-    } else {
-      const pinned = others.filter((c) => c.isPinned);
-      const unpinned = others.filter((c) => !c.isPinned);
-      return [...pinned, target, ...unpinned];
+    if (!exists && targetChatId) {
+      const newChat: Chat = {
+        id: targetChatId,
+        title: updatedFields.title || updatedFields.lastMessage?.senderName || 'Chat',
+        type: updatedFields.type || 'private',
+        unreadCount: updatedFields.unreadCount || 0,
+        ...updatedFields,
+      };
+      updated.push(newChat);
     }
+
+    return messagesController.sortDialogs(updated, 'all');
   };
 
   // Sync current account changes into accounts array & IndexedDB persistence
@@ -2606,13 +2600,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     );
 
-    // NotificationsService Permanent Engine (Keyword Monitor & Groq AI)
+    // NotificationsService Permanent Engine (Keyword Monitor Alerts Only)
     notificationsService.handleIncomingMessage(
       newMessage,
-      activeChat?.title || 'Chat',
-      (autoReplyText) => {
-        sendMessage(autoReplyText);
-      }
+      activeChat?.title || 'Chat'
     );
 
     // Trigger real-time interactive response for bots, contacts, AI, and groups
@@ -2982,12 +2973,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           });
         }
 
-        setChats(finalChats);
-        chatStore.saveChats(finalChats);
+        const sortedFinalChats = messagesController.sortDialogs(finalChats, 'all');
+        setChats(sortedFinalChats);
+        chatStore.saveChats(sortedFinalChats);
 
         // Preserve active chat if user already selected one, otherwise remain on Chat List (null)
         setActiveChatId((prev) => {
-          if (prev && finalChats.some((c) => c.id === prev)) {
+          if (prev && sortedFinalChats.some((c) => c.id === prev)) {
             return prev;
           }
           return null;
@@ -3292,11 +3284,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           senderName: 'System',
           text: `🎉 تم الانضمام بنجاح عبر نظام البحث والانضمام الفوري.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          date: new Date().toISOString().split('T')[0],
+          rawDate: Date.now(),
+          epoch: Date.now(),
           isOutgoing: false,
           status: 'read',
         },
       };
-      return [newJoinedChat, ...prev];
+      return messagesController.sortDialogs([newJoinedChat, ...prev], 'all');
     });
 
     // Send Detailed Notification to Saved Messages (الرسائل المحفوظة)
@@ -3325,6 +3320,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         text: savedMsgText,
         timestamp: nowTimeStr,
         date: nowDateStr,
+        rawDate: Date.now(),
+        epoch: Date.now(),
         isOutgoing: false,
         status: 'read',
       };
@@ -3336,21 +3333,19 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     // Update Saved Messages Chat last message
     setChats((prev) =>
-      prev.map((c) =>
-        c.id === 'chat_saved_messages'
-          ? {
-              ...c,
-              lastMessage: {
-                id: savedMsgId,
-                senderName: 'رادار الروابط ⚡',
-                text: `🔔 انضمام فوري: ${groupTitle}`,
-                timestamp: nowTimeStr,
-                isOutgoing: false,
-                status: 'read',
-              },
-            }
-          : c
-      )
+      reorderChatsWithUpdate(prev, 'chat_saved_messages', {
+        lastMessage: {
+          id: savedMsgId,
+          senderName: 'رادار الروابط ⚡',
+          text: `🔔 انضمام فوري: ${groupTitle}`,
+          timestamp: nowTimeStr,
+          date: nowDateStr,
+          rawDate: Date.now(),
+          epoch: Date.now(),
+          isOutgoing: false,
+          status: 'read',
+        },
+      })
     );
 
     // Update captured link record
@@ -4719,10 +4714,29 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       });
 
-      // 3. If incoming (not sent by us), trigger audio and notifications
+      // 3. If incoming (not sent by us), trigger audio, notifications, and private auto-reply evaluation
       if (!isOut) {
         if (settings.soundEffects) {
           telegramAudio.playMessageChime();
+        }
+
+        // Web Worker background evaluation for private chats (completely isolated from keyword monitor)
+        const isCurrentTargetGroupOrChannel = Boolean(
+          targetChatId.startsWith('chat_-') ||
+          (peerIdStr && peerIdStr.startsWith('-')) ||
+          update.peerId?.channelId ||
+          update.peerId?.chatId
+        );
+
+        if (!isCurrentTargetGroupOrChannel) {
+          backgroundSyncService.processIncomingMessage(
+            msg,
+            msg.senderName || 'Private Chat',
+            'private',
+            (autoReplyText) => {
+              console.log('[WebWorker] Auto-reply evaluated for private chat:', autoReplyText);
+            }
+          );
         }
 
         const isViewingChat = isCurrentChat && !document.hidden;
@@ -4944,6 +4958,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         handleIncomingAlert(alertData);
       });
 
+      socket.on('private_auto_reply_sent', (data: any) => {
+        console.log('[Socket.IO] Private auto-reply sent confirmation:', data);
+      });
+
       socket.on('auto_join_progress', (data: any) => {
         if (data?.task) {
           showToast(`انضمام: ${data.task.title || data.task.url} (${data.current}/${data.total})`, '🔗');
@@ -5077,27 +5095,36 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             };
           });
 
-          const lastMsg = data.messages[data.messages.length - 1];
+          // Sort incoming messages ascending by date before determining latest
+          const sortedIncoming = [...data.messages].sort((a: any, b: any) => {
+            const epochA = getTelegramEpoch(a);
+            const epochB = getTelegramEpoch(b);
+            if (epochA !== epochB) return epochA - epochB;
+            const numA = Number(String(a.id).replace(/\D/g, '')) || 0;
+            const numB = Number(String(b.id).replace(/\D/g, '')) || 0;
+            if (numA !== numB) return numA - numB;
+            return String(a.id || '').localeCompare(String(b.id || ''), undefined, { numeric: true });
+          });
+
+          const lastMsg = sortedIncoming[sortedIncoming.length - 1];
           if (lastMsg) {
             if (lastMsg.id) {
               checkAndUpdateLastReadIfAtBottom(activeChatId, lastMsg.id);
             }
             setChats((prev) =>
-              prev.map((c) =>
-                c.id === activeChatId
-                  ? {
-                      ...c,
-                      lastMessage: {
-                        id: lastMsg.id,
-                        senderName: lastMsg.senderName,
-                        text: lastMsg.text,
-                        timestamp: lastMsg.timestamp,
-                        isOutgoing: lastMsg.isOutgoing,
-                        status: lastMsg.status,
-                      },
-                    }
-                  : c
-              )
+              reorderChatsWithUpdate(prev, activeChatId, {
+                lastMessage: {
+                  id: String(lastMsg.id),
+                  senderName: lastMsg.senderName,
+                  text: lastMsg.text,
+                  timestamp: lastMsg.timestamp,
+                  date: lastMsg.date,
+                  rawDate: lastMsg.rawDate || getTelegramEpoch(lastMsg),
+                  epoch: lastMsg.epoch || getTelegramEpoch(lastMsg),
+                  isOutgoing: lastMsg.isOutgoing,
+                  status: lastMsg.status,
+                },
+              })
             );
           }
         }
@@ -5531,12 +5558,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         senderName: senderName,
         text: 'محادثة خاصة تم فتحها من إشعار المراقبة الحي 🚨',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: new Date().toISOString().split('T')[0],
+        rawDate: Date.now(),
+        epoch: Date.now(),
         isOutgoing: false,
         status: 'read',
       },
     };
 
-    setChats((prev) => [newPrivateChat, ...prev]);
+    setChats((prev) => messagesController.sortDialogs([newPrivateChat, ...prev.filter((c) => c.id !== targetChatId)], 'all'));
     setMessages((prev) => ({
       ...prev,
       [targetChatId]: [
@@ -5550,6 +5580,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           text: '👋 مرحباً! تم فتح المحادثة الخاصة لمتابعة المرسل.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           date: new Date().toISOString().split('T')[0],
+          rawDate: Date.now(),
+          epoch: Date.now(),
           isOutgoing: false,
           status: 'read',
         },
@@ -5580,12 +5612,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         senderName: 'You',
         text: type === 'channel' ? 'Channel created' : 'Group created',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: new Date().toISOString().split('T')[0],
+        rawDate: Date.now(),
+        epoch: Date.now(),
         isOutgoing: true,
         status: 'read',
       },
     };
 
-    setChats((prev) => [newChat, ...prev]);
+    setChats((prev) => messagesController.sortDialogs([newChat, ...prev.filter((c) => c.id !== newChatId)], 'all'));
     setMessages((prev) => ({
       ...prev,
       [newChatId]: [

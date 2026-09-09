@@ -5,6 +5,26 @@ import { Server as SocketIOServer } from 'socket.io';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import module from 'module';
+import { fileURLToPath } from 'url';
+
+// ESM Module Path Resolution
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Guard against ERR_INVALID_ARG_VALUE in Node.js v20+ when createRequire is invoked with relative or empty paths
+if (module && typeof module.createRequire === 'function') {
+  const origCreateRequire = module.createRequire;
+  module.createRequire = function (filenameOrURL: any) {
+    if (!filenameOrURL || (typeof filenameOrURL === 'string' && !filenameOrURL.startsWith('file:') && !path.isAbsolute(filenameOrURL))) {
+      const safeTarget = typeof filenameOrURL === 'string' && filenameOrURL && filenameOrURL !== '.'
+        ? path.resolve(process.cwd(), filenameOrURL)
+        : path.resolve(process.cwd(), 'package.json');
+      return origCreateRequire.call(this, safeTarget);
+    }
+    return origCreateRequire.call(this, filenameOrURL);
+  };
+}
 import { createServer as createViteServer } from 'vite';
 import { TelegramClient, Api, sessions, password as pwdHelper } from 'telegram';
 import { CustomFile } from 'telegram/client/uploads.js';
@@ -1980,6 +2000,8 @@ async function startServer() {
       // FORBIDDEN from handling any messages from groups or channels.
       // Reads keyword and reply permanently from SQLite table `private_auto_replies`.
       // ==============================================================
+      const privateAutoReplyThrottle = new Map<string, number>();
+
       client.addEventHandler(async (event: any) => {
         try {
           const msg = event?.message;
@@ -1987,6 +2009,12 @@ async function startServer() {
 
           // 1. Strictly ignore outgoing messages (sent by the user / account itself)
           if (event.isOutgoing || msg.out) return;
+
+          // 1b. Catch-up threshold: ignore messages prior to account startup
+          const msgDateUnix = typeof event?.message?.date === 'number'
+            ? event.message.date
+            : (typeof msg?.date === 'number' ? msg.date : 0);
+          if (msgDateUnix && msgDateUnix < accountStartupTime) return;
 
           // 2. Strict validation: MUST be a Private Chat ONLY
           // GramJS NewMessage event has event.isPrivate boolean.
@@ -1996,7 +2024,8 @@ async function startServer() {
             msg.isChannel ||
             event.isGroup ||
             event.isChannel ||
-            (msg.peerId && (msg.peerId.channelId || msg.peerId.chatId))
+            (msg.peerId && (msg.peerId.channelId || msg.peerId.chatId)) ||
+            (typeof event.chatId === 'number' && event.chatId < 0)
           );
 
           if (isGroupOrChannel) {
@@ -2022,11 +2051,19 @@ async function startServer() {
           if (!activeRules || activeRules.length === 0) return;
 
           const normalizedMsgText = normalizeArabicText(rawText);
+          const peerIdKey = String(event.chatId || msg.chatId || msg.peerId?.userId || '');
 
           // 4. Match message with keyword and reply
           for (const rule of activeRules) {
             const keyword = (rule.keyword || '').trim();
             if (!keyword) continue;
+
+            // Cooldown throttle: 10 seconds per rule per chat to prevent feedback loops
+            const throttleKey = `${rule.id}:${peerIdKey}`;
+            const lastTime = privateAutoReplyThrottle.get(throttleKey) || 0;
+            if (Date.now() - lastTime < 10000) {
+              continue;
+            }
 
             const normalizedKw = normalizeArabicText(keyword);
             const isMatch =
@@ -2037,7 +2074,8 @@ async function startServer() {
               const replyText = (rule.reply || '').trim();
               if (!replyText) continue;
 
-              console.log(`[PrivateAutoReply] 🤖 Triggered rule "${rule.keyword}" in private chat ${event.chatId || msg.chatId}`);
+              privateAutoReplyThrottle.set(throttleKey, Date.now());
+              console.log(`[PrivateAutoReply] 🤖 Triggered rule "${rule.keyword}" in private chat ${peerIdKey}`);
 
               // Target peer in private chat
               const targetPeer = event.message?.peerId || msg.peerId || event.chatId || msg.chatId;
@@ -2051,7 +2089,7 @@ async function startServer() {
                   ruleId: rule.id,
                   keyword: rule.keyword,
                   reply: replyText,
-                  chatId: String(event.chatId || msg.chatId || ''),
+                  chatId: peerIdKey,
                   messageId: msg.id,
                   timestamp: Date.now(),
                 });
@@ -10413,6 +10451,18 @@ Please provide the concise summary.`;
         });
       }
 
+      // Check for duplicate keyword
+      const existingRules = sqliteDatabase.getPrivateAutoReplies();
+      const isDuplicate = existingRules.some(
+        (r) => r.keyword.trim().toLowerCase() === trimmedKeyword.toLowerCase()
+      );
+      if (isDuplicate) {
+        return res.status(400).json({
+          success: false,
+          message: 'هذه الكلمة المفتاحية موجودة مسبقاً في القواعد',
+        });
+      }
+
       const rule = sqliteDatabase.addPrivateAutoReply({
         keyword: trimmedKeyword,
         reply: trimmedReply,
@@ -10439,9 +10489,33 @@ Please provide the concise summary.`;
         });
       }
 
+      const trimmedKeyword = keyword !== undefined ? String(keyword).trim() : undefined;
+      const trimmedReply = reply !== undefined ? String(reply).trim() : undefined;
+
+      if (trimmedKeyword !== undefined && !trimmedKeyword) {
+        return res.status(400).json({ success: false, message: 'الكلمة المفتاحية لا يمكن أن تكون فارغة' });
+      }
+      if (trimmedReply !== undefined && !trimmedReply) {
+        return res.status(400).json({ success: false, message: 'نص الرد لا يمكن أن يكون فارغاً' });
+      }
+
+      // Check duplicate if keyword is changing
+      if (trimmedKeyword) {
+        const existingRules = sqliteDatabase.getPrivateAutoReplies();
+        const duplicate = existingRules.find(
+          (r) => r.id !== id && r.keyword.trim().toLowerCase() === trimmedKeyword.toLowerCase()
+        );
+        if (duplicate) {
+          return res.status(400).json({
+            success: false,
+            message: 'هذه الكلمة المفتاحية مستخدمة بالفعل في قاعدة أخرى',
+          });
+        }
+      }
+
       const updated = sqliteDatabase.updatePrivateAutoReply(id, {
-        keyword,
-        reply,
+        keyword: trimmedKeyword,
+        reply: trimmedReply,
         is_active,
       });
 
