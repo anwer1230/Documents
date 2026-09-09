@@ -631,18 +631,30 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           }),
         });
         const data = await res.json();
-        if (isMounted && data && data.success && typeof data.onlineCount === 'number') {
-          setOnlineCounts((prev) => ({
-            ...prev,
-            [activeChatId]: data.onlineCount,
-          }));
+        if (isMounted && data && data.success) {
+          if (typeof data.onlineCount === 'number') {
+            setOnlineCounts((prev) => ({
+              ...prev,
+              [activeChatId]: data.onlineCount,
+            }));
+          }
+          if (typeof data.participantsCount === 'number' && data.participantsCount > 0) {
+            setChats((prev) =>
+              prev.map((c) =>
+                c.id === activeChatId ? { ...c, memberCount: data.participantsCount } : c
+              )
+            );
+          }
         }
       } catch (_) {}
     };
 
     fetchChatFullInfo();
+    const interval = setInterval(fetchChatFullInfo, 15000);
+
     return () => {
       isMounted = false;
+      clearInterval(interval);
     };
   }, [activeChatId, currentUser.phone, chats]);
 

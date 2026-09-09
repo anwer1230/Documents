@@ -202,7 +202,7 @@ export const ChatHeader: React.FC = () => {
             {activeChat.isVerified && (
               <BadgeCheck className="w-4 h-4 text-[#2481cc] shrink-0 fill-[#2481cc]/20" />
             )}
-            {activeChat.type === 'group' && chatOnline > 0 && (
+            {(activeChat.type === 'group' || activeChat.type === 'supergroup') && chatOnline > 0 && (
               <span className="text-xs font-normal text-emerald-400/90 ml-1 rtl:mr-1 shrink-0">
                 ({chatOnline} {isArabic ? 'متصل' : 'online'})
               </span>
