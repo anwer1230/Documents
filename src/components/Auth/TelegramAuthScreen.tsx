@@ -431,6 +431,7 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
       username: username.trim() || `user_${numericId.slice(-4)}`,
       avatar: '',
       bio: 'Telegram Client • Native Cloud Session',
+      sessionString: simulatedSessionString,
     });
     showToast(isArabic ? 'تم تفعيل الحساب وتسجيل الدخول بنجاح!' : 'Logged in successfully!', '🎉');
   };
@@ -465,6 +466,7 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
         username: username.trim() || `user_${numericId.slice(-4)}`,
         avatar: '',
         bio: 'Telegram Client • Native Cloud Session',
+        sessionString: simulatedSessionString,
       });
       showToast(isArabic ? 'تم تفعيل الجلسة والاتصال بالسحابة' : 'Session activated', '✅');
     }, 400);
@@ -500,6 +502,7 @@ export const TelegramAuthScreen: React.FC<TelegramAuthScreenProps> = ({
         username: 'anwer_dev',
         avatar: '',
         bio: 'Telegram Desktop / Web Session Authenticated via QR',
+        sessionString: simulatedSessionString,
       });
       showToast(isArabic ? 'تم تسجيل الدخول عبر رمز QR بنجاح' : 'QR Login Successful!', '🎉');
     }, 600);

@@ -139,7 +139,8 @@ export class UserConfig {
           if (cleanMulti.length === 0) {
             const hasPhone = localStorage.getItem('tg_phone') || sessionStorage.getItem('tg_phone');
             const isActive = localStorage.getItem('tg_auth_session_active') === 'true';
-            if (!hasPhone && !isActive) {
+            const hasSession = localStorage.getItem('tg_session_string') || sessionStorage.getItem('tg_session_string');
+            if (!hasPhone && !isActive && !hasSession) {
               SecureSessionStorage.removeItem('tg_multi_accounts_v3');
               SecureSessionStorage.removeItem('tg_accounts');
               SecureSessionStorage.removeItem('tg_auth_session_active');

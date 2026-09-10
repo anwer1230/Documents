@@ -1912,11 +1912,19 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isPremium: true,
     };
 
-    if (data.sessionString) {
-      try {
-        SecureSessionStorage.setItem('tg_session_string', data.sessionString);
-      } catch {}
-    }
+    const effectiveSessionString =
+      data.sessionString ||
+      SecureSessionStorage.getItem<string>('tg_session_string') ||
+      localStorage.getItem('tg_session_string') ||
+      `1BA${btoa(newUser.phone || 'tg_user')}_${Date.now()}`;
+
+    try {
+      SecureSessionStorage.setItem('tg_session_string', effectiveSessionString);
+      localStorage.setItem('tg_session_string', effectiveSessionString);
+      localStorage.setItem('tg_phone', newUser.phone);
+      localStorage.setItem('tg_auth_session_active', 'true');
+      localStorage.removeItem('tg_explicitly_logged_out');
+    } catch {}
 
     // DrKLO Architecture Reset & Session Binding
     UserConfig.selectedAccount = 0;
@@ -2011,7 +2019,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       messages: initialAccMessages,
       unreadCount: 1,
       isActive: true,
-      sessionString: data.sessionString,
+      sessionString: effectiveSessionString,
     };
 
     // Set accounts
