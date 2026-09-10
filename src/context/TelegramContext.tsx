@@ -1,3 +1,9 @@
+import {
+  useLinkJoinQueueStore,
+  normalizeTelegramUrl,
+  isPrivateTelegramLink,
+  JoinAttemptLog,
+} from '../stores/useLinkJoinQueueStore';
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
@@ -149,6 +155,9 @@ interface TelegramContextType {
   radarHourlyCount: number;
   radarLastJoinTime: number;
   radarQueueCount: number;
+  radarRandomJitterMs: number;
+  radarLogs: JoinAttemptLog[];
+  clearRadarLogs: () => void;
   joinCapturedLink: (linkId: string) => Promise<void>;
   joinAllPendingLinks: () => Promise<void>;
   clearCapturedLinks: () => void;
@@ -882,6 +891,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
+  const queueStore = useLinkJoinQueueStore();
+  const [radarRandomJitterMs, setRadarRandomJitterMs] = useState<number>(() => queueStore.currentJitterMs || 8000);
   const [radarQueueCount, setRadarQueueCount] = useState<number>(() => {
     try {
       const raw = localStorage.getItem('tg_radar_join_queue');
@@ -3407,7 +3418,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Helper to persist queue in localStorage
+  // Helper to persist queue in localStorage and sync with Zustand store
   const persistRadarQueue = (queue: CapturedLink[]) => {
     try {
       localStorage.setItem('tg_radar_join_queue', JSON.stringify(queue));
@@ -3415,17 +3426,20 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {}
   };
 
-  // Synchronize dynamic position and countdown status text on capturedLinks
+  // Synchronize dynamic position, random delay jitter, and countdown status text on capturedLinks
   const updateQueuePositions = () => {
     if (radarJoinQueueRef.current.length === 0) return;
     const now = Date.now();
     const elapsed = now - lastRadarJoinTimeRef.current;
-    const cooldownRemaining = Math.max(0, Math.ceil((60000 - elapsed) / 1000));
+    const activeJitter = useLinkJoinQueueStore.getState().currentJitterMs || 8000;
+    const totalRequiredCooldown = 60000 + activeJitter;
+    const cooldownRemaining = Math.max(0, Math.ceil((totalRequiredCooldown - elapsed) / 1000));
 
     setCapturedLinks((prev) =>
       prev.map((l) => {
+        const norm = normalizeTelegramUrl(l.url);
         const queueIndex = radarJoinQueueRef.current.findIndex(
-          (q) => q.url.toLowerCase() === l.url.toLowerCase()
+          (q) => normalizeTelegramUrl(q.url) === norm
         );
         if (queueIndex < 0) return l;
         if (l.joined || l.status === 'already_member') return l;
@@ -3443,11 +3457,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             status: 'pending',
             status_text:
               cooldownRemaining > 0
-                ? `⏳ الرابط التالي: متبقي ${cooldownRemaining} ثانية (فاصل دقيقة)`
+                ? `⏳ الرابط التالي: متبقي ${cooldownRemaining} ثانية (فاصل دقيقة + تأخير عشوائي ${Math.ceil(activeJitter / 1000)}ث لمنع الحظر)`
                 : '⚡ الرابط التالي: جاهز للانضمام الفوري',
           };
         }
-
         return {
           ...l,
           status: 'pending',
@@ -3457,21 +3470,88 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
   };
 
-  // Enqueue an entire batch of links safely into persistent queue
+  // Enqueue an entire batch of links safely into persistent queue & Zustand store
   const enqueueRadarBatch = (batch: CapturedLink[]) => {
     let addedCount = 0;
+    const store = useLinkJoinQueueStore.getState();
+
     for (const link of batch) {
-      const lowerUrl = link.url.toLowerCase();
-      if (!radarJoinQueueRef.current.some((q) => q.url.toLowerCase() === lowerUrl)) {
-        radarJoinQueueRef.current.push(link);
-        addedCount++;
+      if (!link.url) continue;
+      const norm = normalizeTelegramUrl(link.url);
+
+      // 1. Check if private channel
+      if (isPrivateTelegramLink(link.url)) {
+        setCapturedLinks((prev) =>
+          prev.map((l) =>
+            normalizeTelegramUrl(l.url) === norm
+              ? {
+                  ...l,
+                  status: 'skipped_private_channel',
+                  status_text: '🔒 قناة خاصة (تم التخطي تلقائياً)',
+                  join_status: 'تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)',
+                }
+              : l
+          )
+        );
+        store.addLog({
+          url: link.url,
+          normalizedUrl: norm,
+          chatTitle: link.chat_title || link.extractedTitle,
+          sourceChat: link.source_chat || link.sourceChatTitle,
+          status: 'skipped_private',
+          statusLabel: '🔒 قناة خاصة (تم التخطي)',
+          message: 'تم تخطي الرابط تلقائياً طبقاً لضوابط الرادار (الانضمام مقتصر على المجموعات العامة)',
+          hourlyCount: hourlyRadarJoinsRef.current.length,
+          queueRemaining: radarJoinQueueRef.current.length,
+        });
+        continue;
       }
+
+      // 2. Anti-duplicate check: prevent join attempts to same link within cooldown window
+      const dupCheck = store.isRecentDuplicate(link.url);
+      if (dupCheck.isDuplicate) {
+        setCapturedLinks((prev) =>
+          prev.map((l) =>
+            normalizeTelegramUrl(l.url) === norm
+              ? {
+                  ...l,
+                  status: 'skipped_duplicate',
+                  status_text: `🛡️ منع تكرار: ${dupCheck.reason}`,
+                  join_status: dupCheck.reason,
+                }
+              : l
+          )
+        );
+        store.addLog({
+          url: link.url,
+          normalizedUrl: norm,
+          chatTitle: link.chat_title || link.extractedTitle,
+          sourceChat: link.source_chat || link.sourceChatTitle,
+          status: 'skipped_duplicate',
+          statusLabel: '🛡️ منع تكرار المحاولة',
+          message: dupCheck.reason || 'تم تخطي الرابط لمنع التكرار خلال فترة زمنية قصيرة',
+          hourlyCount: hourlyRadarJoinsRef.current.length,
+          queueRemaining: radarJoinQueueRef.current.length,
+        });
+        continue;
+      }
+
+      // 3. In-queue deduplication
+      const alreadyInQueue = radarJoinQueueRef.current.some(
+        (q) => normalizeTelegramUrl(q.url) === norm
+      );
+      if (alreadyInQueue) {
+        continue;
+      }
+
+      radarJoinQueueRef.current.push(link);
+      addedCount++;
     }
 
     if (addedCount > 0) {
       persistRadarQueue(radarJoinQueueRef.current);
       updateQueuePositions();
-      console.log(`[Radar] Enqueued batch of ${addedCount} links. Total in queue: ${radarJoinQueueRef.current.length}`);
+      console.log(`[Radar] Enqueued ${addedCount} links. Total in queue: ${radarJoinQueueRef.current.length}`);
       processRadarJoinQueue();
     }
   };
@@ -3480,8 +3560,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     enqueueRadarBatch([link]);
   };
 
-  const MAX_HOURLY_JOINS = 20; // Maximum 20 joins per rolling hour (1 every minute)
-  const RADAR_COOLDOWN_MS = 60000; // Strictly 1 minute between consecutive joins
+  const MAX_HOURLY_JOINS = 20; // Maximum 20 joins per rolling hour
+  const RADAR_BASE_COOLDOWN_MS = 60000; // Base 1-minute safety cooldown between joins
 
   // Resilient Queue Processor: Never stops until batch is exhausted
   const processRadarJoinQueue = async () => {
@@ -3490,6 +3570,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (radarJoinQueueRef.current.length === 0) return;
 
     isProcessingRadarQueueRef.current = true;
+    const store = useLinkJoinQueueStore.getState();
 
     try {
       while (radarJoinQueueRef.current.length > 0 && autoJoinLinksEnabled) {
@@ -3500,7 +3581,72 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           continue;
         }
 
-        // 1. Hourly Rate Limit Check: max 20 joins per rolling 60 minutes
+        const normTargetUrl = normalizeTelegramUrl(targetLink.url);
+
+        // 1. Anti-Duplicate Check: Prevent repeated attempts to the same link in a short timeframe
+        const dupCheck = store.isRecentDuplicate(targetLink.url);
+        if (dupCheck.isDuplicate) {
+          radarJoinQueueRef.current.shift();
+          persistRadarQueue(radarJoinQueueRef.current);
+          setCapturedLinks((prev) =>
+            prev.map((l) =>
+              normalizeTelegramUrl(l.url) === normTargetUrl
+                ? {
+                    ...l,
+                    status: 'skipped_duplicate',
+                    status_text: `🛡️ منع تكرار: ${dupCheck.reason}`,
+                    join_status: dupCheck.reason,
+                  }
+                : l
+            )
+          );
+          store.addLog({
+            url: targetLink.url,
+            normalizedUrl: normTargetUrl,
+            chatTitle: targetLink.chat_title || targetLink.extractedTitle,
+            sourceChat: targetLink.source_chat || targetLink.sourceChatTitle,
+            status: 'skipped_duplicate',
+            statusLabel: '🛡️ منع تكرار المحاولة',
+            message: dupCheck.reason || 'تم تخطي الرابط لمنع التكرار خلال فترة زمنية قصيرة',
+            hourlyCount: hourlyRadarJoinsRef.current.length,
+            queueRemaining: radarJoinQueueRef.current.length,
+          });
+          updateQueuePositions();
+          continue;
+        }
+
+        // 2. Skip private channel invites if encountered
+        if (isPrivateTelegramLink(targetLink.url)) {
+          radarJoinQueueRef.current.shift();
+          persistRadarQueue(radarJoinQueueRef.current);
+          setCapturedLinks((prev) =>
+            prev.map((l) =>
+              normalizeTelegramUrl(l.url) === normTargetUrl
+                ? {
+                    ...l,
+                    status: 'skipped_private_channel',
+                    status_text: '🔒 قناة خاصة (تم التخطي)',
+                    join_status: 'تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)',
+                  }
+                : l
+            )
+          );
+          store.addLog({
+            url: targetLink.url,
+            normalizedUrl: normTargetUrl,
+            chatTitle: targetLink.chat_title || targetLink.extractedTitle,
+            sourceChat: targetLink.source_chat || targetLink.sourceChatTitle,
+            status: 'skipped_private',
+            statusLabel: '🔒 قناة خاصة (تم التخطي)',
+            message: 'تم تخطي الرابط تلقائياً طبقاً لضوابط الرادار (الانضمام مقتصر على المجموعات العامة)',
+            hourlyCount: hourlyRadarJoinsRef.current.length,
+            queueRemaining: radarJoinQueueRef.current.length,
+          });
+          updateQueuePositions();
+          continue;
+        }
+
+        // 3. Hourly Rate Limit Check: max 20 joins per rolling 60 minutes
         const oneHourAgo = Date.now() - 3600000;
         hourlyRadarJoinsRef.current = hourlyRadarJoinsRef.current.filter((t) => t > oneHourAgo);
         setRadarHourlyCount(hourlyRadarJoinsRef.current.length);
@@ -3511,112 +3657,165 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (hourlyRadarJoinsRef.current.length >= MAX_HOURLY_JOINS) {
           const oldestJoin = hourlyRadarJoinsRef.current[0];
           const waitHourlyMs = Math.max(1000, 3600000 - (Date.now() - oldestJoin) + 1000);
+          const minutesWait = Math.ceil(waitHourlyMs / 60000);
+
           setCapturedLinks((prev) =>
             prev.map((l) =>
-              l.id === targetLink.id || l.url.toLowerCase() === targetLink.url.toLowerCase()
+              normalizeTelegramUrl(l.url) === normTargetUrl
                 ? {
                     ...l,
-                    status_text: `⏳ انتظار استئناف حد الساعة (${Math.ceil(waitHourlyMs / 60000)} دقيقة متبقية - حد 20/ساعة)`,
+                    status_text: `⏳ انتظار استئناف حد الساعة (${minutesWait} دقيقة متبقية - حد 20/ساعة)`,
                   }
                 : l
             )
           );
-          // Wait briefly before re-checking so UI and toggles stay responsive
+
+          store.addLog({
+            url: targetLink.url,
+            normalizedUrl: normTargetUrl,
+            chatTitle: targetLink.chat_title || targetLink.extractedTitle,
+            sourceChat: targetLink.source_chat || targetLink.sourceChatTitle,
+            status: 'rate_limited',
+            statusLabel: '⚠️ بلوغ حد الساعة (20/ساعة)',
+            message: `تم الوصول إلى الحد الأقصى للانضمام بالساعة (20 رابط). سيتم الاستئناف بعد ${minutesWait} دقيقة تلقائياً.`,
+            hourlyCount: hourlyRadarJoinsRef.current.length,
+            queueRemaining: radarJoinQueueRef.current.length,
+          });
+
           await new Promise((r) => setTimeout(r, Math.min(waitHourlyMs, 5000)));
           continue;
         }
 
-        // 2. Cooldown Interval Check: strictly 1 minute (60,000ms) between joins
+        // 4. Cooldown & Randomized Jitter Check:
+        // Strictly 1-minute base interval + dynamic random delay between 5s to 25s to evade Telegram anti-spam bot heuristics
+        const currentJitter = store.calculateNextJitter();
+        setRadarRandomJitterMs(currentJitter);
+        const totalRequiredCooldown = RADAR_BASE_COOLDOWN_MS + currentJitter;
+
         const now = Date.now();
         const timeSinceLast = now - lastRadarJoinTimeRef.current;
-        if (lastRadarJoinTimeRef.current > 0 && timeSinceLast < RADAR_COOLDOWN_MS) {
-          const waitCooldownMs = RADAR_COOLDOWN_MS - timeSinceLast;
+        if (lastRadarJoinTimeRef.current > 0 && timeSinceLast < totalRequiredCooldown) {
+          const waitCooldownMs = totalRequiredCooldown - timeSinceLast;
           const remainingSec = Math.ceil(waitCooldownMs / 1000);
+          const jitterSec = Math.ceil(currentJitter / 1000);
+
           setCapturedLinks((prev) =>
             prev.map((l) =>
-              l.id === targetLink.id || l.url.toLowerCase() === targetLink.url.toLowerCase()
+              normalizeTelegramUrl(l.url) === normTargetUrl
                 ? {
                     ...l,
-                    status_text: `⏳ انتظار فاصل الدقيقة (${remainingSec} ثانية متبقية)`,
+                    status_text: `⏳ انتظار فاصل الأمان (${remainingSec} ثانية متبقية - تأخير عشوائي +${jitterSec}ث لتفادي كشف تيليجرام)`,
                   }
                 : l
             )
           );
+
           await new Promise((r) => setTimeout(r, Math.min(waitCooldownMs, 1000)));
           continue;
         }
 
-        // 3. Skip private channel invites if encountered
-        const isPrivate =
-          targetLink.url.includes('+') ||
-          targetLink.url.includes('joinchat') ||
-          targetLink.url.includes('invite=') ||
-          targetLink.url.includes('tg://join?invite=');
-
-        if (isPrivate) {
-          radarJoinQueueRef.current.shift();
-          persistRadarQueue(radarJoinQueueRef.current);
-          setCapturedLinks((prev) =>
-            prev.map((l) =>
-              l.id === targetLink.id || l.url.toLowerCase() === targetLink.url.toLowerCase()
-                ? {
-                    ...l,
-                    status: 'skipped_private_channel',
-                    status_text: '🔒 قناة خاصة (تم التخطي)',
-                    join_status: 'تم التخطي طبقاً لتعليمات الرادار (لا ينضم للقنوات الخاصة)',
-                  }
-                : l
-            )
-          );
-          updateQueuePositions();
-          continue;
-        }
-
-        // 4. Mark currently joining
+        // 5. Mark currently joining
         setCapturedLinks((prev) =>
           prev.map((l) =>
-            l.id === targetLink.id || l.url.toLowerCase() === targetLink.url.toLowerCase()
+            normalizeTelegramUrl(l.url) === normTargetUrl
               ? {
                   ...l,
                   status: 'joining',
-                  status_text: '🚀 جاري الانضمام الآن...',
+                  status_text: '🚀 جاري الانضمام الآن للمجموعة...',
                 }
               : l
           )
         );
 
-        // 5. Execute Join
+        store.addLog({
+          url: targetLink.url,
+          normalizedUrl: normTargetUrl,
+          chatTitle: targetLink.chat_title || targetLink.extractedTitle,
+          sourceChat: targetLink.source_chat || targetLink.sourceChatTitle,
+          status: 'joining',
+          statusLabel: '🚀 جاري الانضمام',
+          message: `بدء محاولة الانضمام للرابط (مع تطبيق تأخير أمني عشوائي +${Math.ceil(currentJitter / 1000)} ثانية)`,
+          jitterAppliedMs: currentJitter,
+          hourlyCount: hourlyRadarJoinsRef.current.length,
+          queueRemaining: radarJoinQueueRef.current.length,
+        });
+
+        // 6. Execute Join via MTProto & API
+        let joinSuccess = false;
+        let joinError = '';
         try {
           await executeLinkJoin(targetLink, true);
+          joinSuccess = true;
         } catch (joinErr: any) {
+          joinError = joinErr?.message || 'خطأ أثناء محاولة الانضمام';
           console.warn('[Radar] Join execution warning:', joinErr);
         }
 
-        // Record timestamp
+        // Record timestamp & attempt
         const joinTime = Date.now();
         lastRadarJoinTimeRef.current = joinTime;
         setRadarLastJoinTime(joinTime);
         hourlyRadarJoinsRef.current.push(joinTime);
         setRadarHourlyCount(hourlyRadarJoinsRef.current.length);
 
+        store.recordAttempt(
+          targetLink.url,
+          joinSuccess ? 'success' : 'failed',
+          joinError || undefined,
+          targetLink.chat_title || targetLink.extractedTitle
+        );
+        store.recordJoinTimestamp(joinTime);
+
         try {
           localStorage.setItem('tg_radar_last_join_time', String(joinTime));
           localStorage.setItem('tg_radar_hourly_joins', JSON.stringify(hourlyRadarJoinsRef.current));
         } catch {}
 
-        // Remove from queue
+        // Add definitive attempt log entry
+        store.addLog({
+          url: targetLink.url,
+          normalizedUrl: normTargetUrl,
+          chatTitle: targetLink.chat_title || targetLink.extractedTitle,
+          sourceChat: targetLink.source_chat || targetLink.sourceChatTitle,
+          status: joinSuccess ? 'success' : 'failed',
+          statusLabel: joinSuccess ? '✅ تم الانضمام بنجاح' : '❌ فشل الانضمام',
+          message: joinSuccess
+            ? `تم الانضمام بنجاح للمجموعة وتوثيق الرابط وإرسال إشعار للرسائل المحفوظة (تأخير عشوائي +${Math.ceil(currentJitter / 1000)}ث)`
+            : `تعذر الانضمام للمجموعة: ${joinError || 'استجابة غير متوقعة من تيليجرام'}`,
+          jitterAppliedMs: currentJitter,
+          hourlyCount: hourlyRadarJoinsRef.current.length,
+          queueRemaining: radarJoinQueueRef.current.length - 1,
+        });
+
+        // Dequeue processed link from queue
         radarJoinQueueRef.current.shift();
         persistRadarQueue(radarJoinQueueRef.current);
         updateQueuePositions();
 
-        console.log(`[Radar] Processed join for: ${targetLink.url}. Remaining in queue: ${radarJoinQueueRef.current.length}`);
+        console.log(
+          `[Radar] Processed join for: ${targetLink.url}. Remaining in queue: ${radarJoinQueueRef.current.length}. Continuing queue loop...`
+        );
       }
     } finally {
       isProcessingRadarQueueRef.current = false;
     }
   };
 
-  // Heartbeat ensuring the queue processes continuously in background
+  // 1-Minute Interval: Scans the in-memory queue and initiates the next join attempt
+  useEffect(() => {
+    const oneMinuteScanner = setInterval(() => {
+      if (autoJoinLinksEnabled) {
+        console.log('[Radar] 1-Minute Interval: scanning in-memory queue for next pending link...');
+        if (radarJoinQueueRef.current.length > 0 && !isProcessingRadarQueueRef.current) {
+          processRadarJoinQueue();
+        }
+      }
+    }, 60000); // 60,000ms = exactly 1 minute
+
+    return () => clearInterval(oneMinuteScanner);
+  }, [autoJoinLinksEnabled]);
+
+  // Smooth heartbeat for live UI countdowns and responsive queue triggers
   useEffect(() => {
     const heartbeat = setInterval(() => {
       if (
@@ -3627,7 +3826,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         processRadarJoinQueue();
       }
       updateQueuePositions();
-    }, 2000);
+    }, 1500);
     return () => clearInterval(heartbeat);
   }, [autoJoinLinksEnabled]);
 
@@ -3760,8 +3959,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     // Execute real backend API / MTProto join request
     try {
-      const storedSession = localStorage.getItem('tg_session_string') || (auth as any)?.sessionString || '';
-      const storedPhone = localStorage.getItem('tg_phone') || (auth as any)?.phone || '';
+      const storedSession = localStorage.getItem('tg_session_string') || '';
+      const storedPhone = localStorage.getItem('tg_phone') || currentUser?.phone || '';
       await fetch('/api/telegram/links/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6418,6 +6617,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         radarHourlyCount,
         radarLastJoinTime,
         radarQueueCount,
+        radarRandomJitterMs,
+        radarLogs: queueStore.logs,
+        clearRadarLogs: queueStore.clearLogs,
         joinCapturedLink,
         joinAllPendingLinks,
         clearCapturedLinks,

@@ -14,6 +14,7 @@
 import { ConnectionsManager } from '../core/ConnectionsManager';
 import { telegramDb } from '../core/telegramDexieDb';
 import { TLRPC } from '../core/TLRPC';
+import { useLinkJoinQueueStore, normalizeTelegramUrl } from '../stores/useLinkJoinQueueStore';
 
 export interface MonitoredLinkItem {
   id: string;
@@ -22,7 +23,7 @@ export interface MonitoredLinkItem {
   sourceChatId: string;
   senderName: string;
   timestamp: string;
-  status: 'pending' | 'joining' | 'joined' | 'failed' | 'skipped_private_channel' | 'already_member';
+  status: 'pending' | 'joining' | 'joined' | 'failed' | 'skipped_private_channel' | 'skipped_duplicate' | 'already_member';
   failReason?: string;
   autoJoined: boolean;
   username?: string;
@@ -470,6 +471,29 @@ export class LinkMonitorService {
       while (this.joinQueue.length > 0) {
         const queueEntry = this.joinQueue[0];
         const { item, resolve } = queueEntry;
+
+        // 0. Anti-Duplicate Check: Prevent repeated attempts to the same link
+        const dupCheck = useLinkJoinQueueStore.getState().isRecentDuplicate(item.url);
+        if (dupCheck.isDuplicate) {
+          this.joinQueue.shift();
+          item.status = 'skipped_duplicate';
+          item.failReason = dupCheck.reason || 'تم منع التكرار خلال فترة زمنية قصيرة';
+          this.savePersistedState();
+          this.notifyListeners();
+          useLinkJoinQueueStore.getState().addLog({
+            url: item.url,
+            normalizedUrl: normalizeTelegramUrl(item.url),
+            chatTitle: item.extractedTitle,
+            sourceChat: item.sourceChatTitle,
+            status: 'skipped_duplicate',
+            statusLabel: '🛡️ منع تكرار المحاولة',
+            message: dupCheck.reason || 'تم تخطي الرابط لمنع التكرار',
+            hourlyCount: this.hourlyJoinTimestamps.length,
+            queueRemaining: this.joinQueue.length,
+          });
+          resolve(false);
+          continue;
+        }
 
         // Verify if private channel is allowed
         const isPrivate = this.isPrivateChannelLink(item.url);

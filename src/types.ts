@@ -421,9 +421,10 @@ export interface CapturedLink {
   joined: boolean;
   joinedAt?: string;
   autoJoined?: boolean;
-  status: 'valid' | 'invalid' | 'joined' | 'already' | 'pending' | 'failed' | 'joining' | 'already_member' | 'expired' | 'skipped_private_channel';
+  status: 'valid' | 'invalid' | 'joined' | 'already' | 'pending' | 'failed' | 'joining' | 'already_member' | 'expired' | 'skipped_private_channel' | 'skipped_duplicate';
   status_text?: string;
   join_status?: string;
+  failReason?: string;
   username?: string;
   creation_date?: string;
   country?: string;
