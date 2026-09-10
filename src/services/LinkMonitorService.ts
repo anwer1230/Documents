@@ -5,7 +5,7 @@
  * - Scans incoming messages in real-time across all chats.
  * - Detects Telegram group & channel links (both public usernames and private invite links).
  * - Configurable support for private invite links (+, /joinchat/, invite=).
- * - Enforces rate limiting: 1-minute cooldown between joins & maximum 10 joins per hour.
+ * - Enforces rate limiting: 1-minute cooldown between joins & maximum 20 joins per hour.
  * - Sends rich notification updates to the local user's private chat (Saved Messages).
  * - Triggers instant cloud cache synchronization upon successful joins.
  * - Supports instant manual join (joinNow) bypassing queues.
@@ -42,7 +42,7 @@ export class LinkMonitorService {
 
   // Configuration constants
   private readonly COOLDOWN_MS = 60000; // Strictly 1 minute between joins
-  private readonly MAX_HOURLY_JOINS = 10; // Strictly maximum 10 joins per hour
+  private readonly MAX_HOURLY_JOINS = 20; // Maximum 20 joins per hour (1 every minute)
   private readonly HOURLY_WINDOW_MS = 3600000; // 1 hour sliding window
 
   // State
@@ -460,7 +460,7 @@ export class LinkMonitorService {
   /**
    * Sequentially processes the join queue obeying:
    * 1. Strictly 1-minute (60,000 ms) safety cooldown between joins
-   * 2. Strictly max 10 joins per 1 hour sliding window
+   * 2. Max 20 joins per 1 hour sliding window
    */
   private async processQueue(): Promise<void> {
     if (this.isProcessingQueue) return;
@@ -483,7 +483,7 @@ export class LinkMonitorService {
           continue;
         }
 
-        // 1. Check Hourly Rate Limit (Strictly max 10 joins per hour)
+        // 1. Check Hourly Rate Limit (Max 20 joins per hour)
         const oneHourAgo = Date.now() - this.HOURLY_WINDOW_MS;
         this.hourlyJoinTimestamps = this.hourlyJoinTimestamps.filter((t) => t > oneHourAgo);
 

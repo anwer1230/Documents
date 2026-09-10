@@ -5016,22 +5016,15 @@ async function startServer() {
   app.post('/api/telegram/links/join', async (req, res) => {
     const { inviteInfo, link, hash, channelId, accessHash, sessionString, phone, type } = req.body;
 
-    // التحقق من وجود بيانات الاعتماد
-    if (!sessionString || !phone) {
-      return res.status(401).json({
-        success: false,
-        error: 'AUTH_KEY_UNREGISTERED',
-        message: 'يرجى تسجيل الدخول أولاً',
-      });
-    }
-
     // الحصول على عميل MTProto للجلسة المحددة مع دعم العميل الرئيسي كاحتياطي
-    const client = (await getClientForSession(sessionString, phone)) || (mainTelegramClient?.connected ? mainTelegramClient : null);
+    const effectiveSession = sessionString || process.env.TELEGRAM_SESSION_STRING || '';
+    const effectivePhone = phone || process.env.TELEGRAM_PHONE || '';
+    const client = (effectiveSession && effectivePhone ? await getClientForSession(effectiveSession, effectivePhone) : null) || (mainTelegramClient?.connected ? mainTelegramClient : null);
     if (!client || !client.connected) {
       return res.status(401).json({
         success: false,
         error: 'AUTH_KEY_UNREGISTERED',
-        message: 'الجلسة غير متصلة، يرجى تسجيل الدخول مرة أخرى',
+        message: 'الجلسة غير متصلة، يرجى تسجيل الدخول أولاً أو التأكد من تشغيل الحساب',
       });
     }
 

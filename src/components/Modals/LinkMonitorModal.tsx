@@ -38,6 +38,7 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
     joinChatByInviteLink,
     radarHourlyCount,
     radarLastJoinTime,
+    radarQueueCount,
   } = useTelegram();
 
   const [isEnabled, setIsEnabled] = useState<boolean>(autoJoinLinksEnabled);
@@ -208,7 +209,8 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                 <li><strong className="text-white">انضمام فوري للمجموعات العامة:</strong> ينضم تلقائياً ويرسل إشعاراً كاملاً إلى محادثة الرسائل المحفوظة الخاصة بك.</li>
                 <li><strong className="text-white">تخطي القنوات الخاصة:</strong> إذا كان رابط قناة خاصة يُترك ويتخطاه الرادار تلقائياً ولا ينضم إليه.</li>
                 <li><strong className="text-white">فاصل أمني دقيقة واحدة:</strong> لا ينضم لأكثر من مجموعة خلال أقل من 60 ثانية لحماية الحساب.</li>
-                <li><strong className="text-white">حد أقصى 10 انضمامات/ساعة:</strong> يمنع الحظر التلقائي عبر مراقبة حد الـ 10 مجموعات كل ساعة.</li>
+                <li><strong className="text-white">حد أقصى 20 انضمام/ساعة:</strong> يمنع الحظر التلقائي عبر ضبط الحد الأقصى إلى 20 انضماماً كل ساعة.</li>
+                <li><strong className="text-white">معالجة دفعات الروابط:</strong> عند وصول دفعة روابط يتم الاحتفاظ بها في الطابور والتتالي بالانضمام لرابط كل دقيقة دون إهمال أي رابط.</li>
               </ul>
             </div>
 
@@ -254,7 +256,7 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                   </div>
                   <div className="bg-white/[0.04] rounded-xl p-2.5 text-center border border-white/5">
                     <div className="text-[1.3rem] font-bold text-amber-400">
-                      {radarHourlyCount ?? 0} <span className="text-xs text-gray-400 font-normal">/ 10</span>
+                      {radarHourlyCount ?? 0} <span className="text-xs text-gray-400 font-normal">/ 20</span>
                     </div>
                     <div className="text-[0.7rem] text-amber-300">انضمامات الساعة الحالية</div>
                   </div>
@@ -273,8 +275,15 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
                       )}
                     </span>
                   </div>
-                  <div className="text-gray-400 font-mono text-[0.7rem]">
-                    معدل الأمان: أقصى 10 انضمام/ساعة
+                  <div className="flex items-center gap-2">
+                    {radarQueueCount > 0 && (
+                      <span className="bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-md text-[0.7rem] font-bold animate-pulse">
+                        ⚡ طابور الدفعة: {radarQueueCount} رابط بانتظار دوره
+                      </span>
+                    )}
+                    <span className="text-gray-400 font-mono text-[0.7rem]">
+                      معدل الأمان: أقصى 20 انضمام/ساعة (رابط كل دقيقة)
+                    </span>
                   </div>
                 </div>
 

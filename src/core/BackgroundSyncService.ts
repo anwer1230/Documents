@@ -733,15 +733,15 @@ export class BackgroundSyncService {
         continue;
       }
 
-      // Rate Limiting Rule 1: Hourly limit (Strictly max 10 joins per 1 hour)
+      // Rate Limiting Rule 1: Hourly limit (Max 20 joins per 1 hour)
       const oneHourAgo = Date.now() - 3600000;
       this.hourlyJoinTimestamps = this.hourlyJoinTimestamps.filter((t) => t > oneHourAgo);
 
-      if (this.hourlyJoinTimestamps.length >= 10) {
+      if (this.hourlyJoinTimestamps.length >= 20) {
         const oldestJoin = this.hourlyJoinTimestamps[0];
         const waitHourlyMs = 3600000 - (Date.now() - oldestJoin) + 1000;
         if (waitHourlyMs > 0) {
-          console.warn(`[BackgroundSyncService] Hourly limit reached (10 joins/hr). Waiting ${Math.ceil(waitHourlyMs / 1000)}s...`);
+          console.warn(`[BackgroundSyncService] Hourly limit reached (20 joins/hr). Waiting ${Math.ceil(waitHourlyMs / 1000)}s...`);
           await new Promise((resolve) => setTimeout(resolve, waitHourlyMs));
         }
       }
