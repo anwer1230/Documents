@@ -1,118 +1,68 @@
-# 🚀 دليل النشر الشامل والنهائي على منصة ريندر (Render.com)
+# 🚀 دليل النشر الشامل على منصة ريندر (Render.com)
 
-تم تجهيز وضبط جميع ملفات المشروع وإعداداته ليعمل بنجاح 100% على منصة **Render.com** سواء كنظام تشغيل **Node.js Web Service** أو عبر **Render Blueprint (`render.yaml`)** أو عبر **حاوية Docker**.
+تم تحديث وضبط إعدادات المشروع للفرع الرئيسي `main` في المستودع:
+`https://github.com/anwer1230/Documents`
 
 ---
 
-## 📦 1. ملفات النشر الجاهزة في المشروع
+## 📦 1. ملفات الإعداد المهيأة في المشروع
 
-| الملف | الوظيفة والدور |
+| الملف | الوظيفة والدور في منصة Render |
 | :--- | :--- |
 | **`render.yaml`** | ملف Blueprint لأتمتة إنشاء الخدمة على ريندر بنقرة واحدة وضبط المتغيرات ومسار الفحص الصحي |
-| **`package.json`** | يحتوي على أوامر البناء والتشغيل (`build`, `start`) وتحديد بيئة `engines` (Node 20+) |
-| **`.node-version`** | يحدد إصدار Node.js (20.18.0) لبيئة بناء ريندر |
-| **`Procfile`** | ملف إضافي لتحديد أمر تشغيل الخادم (`web: npm start`) |
-| **`Dockerfile`** | ملف بناء الحاوية متعدد المراحل (Multi-stage) فائق الخفة (Alpine) |
-| **`.dockerignore`** | يتجاهل الملفات غير الضرورية أثناء بناء الدوكر لتسريع العملية |
-| **`.gitignore`** | مهيأ لرفع كافة ملفات الكود والمصادر دون رفع ملفات البناء المؤقتة أو الأسرار |
-| **`.env.example`** | يوثق جميع المتغيرات المطلوبة واختياراتها |
+| **`.npmrc`** | يفعّل `legacy-peer-deps=true` تلقائياً لمنع أخطاء ERESOLVE أثناء تثبيت الحزم على ريندر |
+| **`package.json`** | يحتوي على `react-is` وأوامر البناء والتشغيل (`build`, `start`) والاعتماديات الكاملة |
+| **`server.ts`** | تم تعديل منفذ الاستماع ليكون ديناميكياً `process.env.PORT || 3000` ليتوافق تماماً مع ريندر |
+| **`Dockerfile`** | يدعم البناء السريع متعدد المراحل بحاوية Node 20 مع منفذ ريندر التلقائي |
+| **`.node-version`** | يحدد إصدار Node.js (20.x) لبيئة بناء ريندر الرسمية |
 
 ---
 
-## 💻 2. خطوات رفع المشروع بالكامل إلى GitHub / GitLab (الأوامر النهائية)
+## ⚡ 2. طرق النشر على منصة Render
 
-إذا كنت ترغب في رفع كافة ملفات المشروع إلى مستودعك الجديد:
+### الطريقة الأولى: النشر التلقائي عبر Blueprint (موصى بها ⭐)
+1. ادخل إلى حسابك في **[Render Dashboard](https://dashboard.render.com)**.
+2. انقر على **New +** ثم اختر **Blueprint**.
+3. اختر مستودعك: `anwer1230/Documents` (فرع `main`).
+4. سيقرأ ريندر ملف `render.yaml` تلقائياً ويقوم بتهيئة الخدمة والمتغيرات.
+5. انقر **Apply** وسيبدأ البناء والنشر تلقائياً.
 
-```bash
-# 1. التأكد من التهيئة الأولية للجيت
-git init
+### الطريقة الثانية: النشر اليدوي كـ Web Service
+1. في لوحة تحكم Render، اختر **New +** ثم **Web Service**.
+2. اختر مستودع `anwer1230/Documents` والفرع `main`.
+3. اضبط الإعدادات التالية بدقة:
+   - **Name:** `telegram-anwer-web`
+   - **Runtime:** `Node`
+   - **Region:** `Frankfurt (EU)` أو الأقرب إليك
+   - **Build Command:**
+     ```bash
+     npm install --legacy-peer-deps && npm run build
+     ```
+   - **Start Command:**
+     ```bash
+     npm start
+     ```
+   - **Health Check Path:**
+     ```text
+     /api/health
+     ```
 
-# 2. إضافة كافة ملفات المشروع المُجهزة
-git add .
-
-# 3. حفظ التغييرات (Commit)
-git commit -m "feat: complete Telegram_Anwer project setup for Render production deploy"
-
-# 4. تحديد الفرع الرئيسي
-git branch -M main
-
-# 5. ربط المستودع البعيد (استبدل بالرابط الخاص بمستودعك)
-git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
-
-# 6. دفع المشروع كاملاً بشكل نهائي
-git push -u origin main --force
-```
-
----
-
-## ⚡ 3. خيارات النشر على منصة Render
-
-### الخيار (أ): النشر التلقائي بنقرة واحدة عبر Blueprint (موصى به ⭐)
-1. افتح حسابك في **[لوحة تحكم ريندر (Render Dashboard)](https://dashboard.render.com)**.
-2. اضغط على زر **New +** ثم اختر **Blueprint**.
-3. قم بتوصيل مستودع GitHub الخاص بك.
-4. سيتعرف ريندر فوراً على ملف `render.yaml` ويقوم بضبط كل شيء (المتغيرات، مسار الفحص، أمر البناء، وأمر التشغيل) تلقائياً!
-5. اضغط **Apply** وانتظر بضع دقائق حتى يكتمل النشر وتصبح حالتك **Live**.
-
----
-
-### الخيار (ب): النشر اليدوي كـ Web Service (Manual Web Service)
-إذا اخترت إنشاء خدمة يدوية (**New + Web Service**):
-
-* **Name:** `telegram-anwer-web`
-* **Runtime:** `Node`
-* **Region:** `Frankfurt (EU)` أو أي منطقة قريبة
-* **Branch:** `main`
-* **Build Command:**
-  ```bash
-  npm install && npm run build
-  ```
-* **Start Command:**
-  ```bash
-  npm start
-  ```
-* **Health Check Path:**
-  ```text
-  /api/health
-  ```
-* **Plan:** `Free`
-
-#### متغيرات البيئة (Environment Variables) في ريندر:
-أضف المتغيرات التالية في تبويب **Environment**:
-
-| اسم المتغير (Key) | القيمة الافتراضية (Value) |
+#### متغيرات البيئة (Environment Variables):
+| المفتاح (Key) | القيمة (Value) |
 | :--- | :--- |
 | `NODE_ENV` | `production` |
+| `PORT` | `10000` |
+| `NODE_OPTIONS` | `--max-old-space-size=460` |
 | `API_ID` | `22043994` |
 | `API_HASH` | `56f64582b363d367280db96586b97801` |
 | `TDLIB_API_HASH` | `56f64582b363d367280db96586b97801` |
 | `SESSION_SECRET` | `tg_session_anwer_foud_secure_key_2026` |
 | `VAPID_PUBLIC_KEY` | `BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8` |
-| `VAPID_PRIVATE_KEY`| `13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4` |
-| `VAPID_SUBJECT` | `mailto:admin@telegram-anwer.app` |
-| `GEMINI_API_KEY` | *(مفتاح اختياري للذكاء الاصطناعي)* |
-| `GROQ_API_KEY` | *(مفتاح اختياري لـ Groq)* |
-
-*(ملاحظة: متغير `PORT` يتم تعيينه تلقائياً بواسطة ريندر ويستجيب له خادمنا تلقائياً).*
+| `VAPID_PRIVATE_KEY` | `13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4` |
+| `VAPID_SUBJECT` | `mailto:anwrsaifanwr@gmail.com` |
 
 ---
 
-### الخيار (ج): النشر كحاوية Docker
-إذا أردت النشر عبر Docker:
-* اختر بيئة التشغيل **Docker** في ريندر.
-* سيقوم ريندر تلقائياً باستخدام ملف `Dockerfile` متعدد المراحل الجاهز داخل المشروع.
-
----
-
-## 🔍 4. روابط التأكد والفحص بعد انتهاء النشر (Health & Status)
-
-بمجرد أن يصبح الرابط المباشر لتطبيقك نشطاً (`https://your-app.onrender.com`)، يمكنك التأكد من عمل جميع الأنظمة:
-
-* **فحص سلامة الخادم والاستجابة:**
-  `https://your-app.onrender.com/api/health`
-* **فحص حالة محرك تيليجرام و MTProto:**
-  `https://your-app.onrender.com/api/telegram/status`
-* **فحص معلومات البيئة المشفرة:**
-  `https://your-app.onrender.com/api/env/info`
-* **فحص مفاتيح إشعارات Web Push:**
-  `https://your-app.onrender.com/api/web-push/vapid-public-key`
+## 🔍 3. التحقق من سلامة النشر (Health Check)
+بمجرد اكتمال النشر وتحول الحالة إلى **Live**، يمكنك زيارة:
+- `https://your-service.onrender.com/api/health`

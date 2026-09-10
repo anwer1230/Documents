@@ -472,7 +472,7 @@ async function startServer() {
     transports: ['websocket', 'polling'],
   });
   // The PORT value (3000) is hardcoded by the infrastructure and must not read process.env.PORT
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // CORS & Preflight Handling
   app.use((req, res, next) => {
