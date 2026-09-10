@@ -1462,18 +1462,20 @@
                         <span style="color:#a78bfa;font-size:0.92rem;">الأدوات الأكاديمية والتحليلية</span>
                     </div>
                     <div class="section-body">
-                        <div class="dropdown" style="position:relative;z-index:20;">
+                        <div id="academicToolsDropdown" class="dropdown" style="position:relative;z-index:1056;">
                             <button class="btn text-white w-100 py-3 fw-bold d-flex align-items-center justify-content-between rounded-3"
                                     style="background:linear-gradient(135deg,#7c3aed,#5b21b6);border:none;font-size:0.95rem;box-shadow:0 4px 20px rgba(124,58,237,0.4);border-radius:14px!important;"
-                                    type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                    id="academicToolsToggle" type="button" aria-expanded="false"
+                                    aria-controls="academicToolsMenu" onclick="toggleAcademicTools(event)">
                                 <span><i class="fas fa-tools me-2"></i>اختر الأداة الأكاديمية</span>
                                 <i class="fas fa-chevron-down"></i>
                             </button>
-                            <ul class="dropdown-menu w-100 shadow-lg border-0 mt-1" style="border-radius:14px;overflow:hidden;z-index:1055;">
+                            <ul id="academicToolsMenu" class="dropdown-menu w-100 shadow-lg border-0"
+                                style="display:none;position:absolute;top:calc(100% + 8px);right:0;left:0;float:none;border-radius:14px;overflow:hidden;z-index:1060;">
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
-                                       data-bs-toggle="modal" data-bs-target="#academicModal">
+                                       onclick="event.preventDefault(); openAcademicModal('academicModal');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-brain text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1486,8 +1488,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
-                                       data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
-                                       onclick="document.getElementById('formatterFrame').src='/formatter?section=pdf2word'">
+                                       onclick="event.preventDefault(); openAcademicFormatter('/formatter?section=pdf2word');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#dc2626,#991b1b);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-file-pdf text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1500,8 +1501,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
-                                       data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
-                                       onclick="document.getElementById('formatterFrame').src='/formatter?section=html2word'">
+                                       onclick="event.preventDefault(); openAcademicFormatter('/formatter?section=html2word');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#2563eb,#1d4ed8);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-file-word text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1514,8 +1514,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
-                                       data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
-                                       onclick="document.getElementById('formatterFrame').src='/formatter?section=html2excel'">
+                                       onclick="event.preventDefault(); openAcademicFormatter('/formatter?section=html2excel');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#059669,#047857);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-file-excel text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1528,8 +1527,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#" style="border-bottom:1px solid rgba(255,255,255,0.06);"
-                                       data-bs-toggle="modal" data-bs-target="#fileFormatterModal"
-                                       onclick="document.getElementById('formatterFrame').src='/formatter?section=html2ppt'">
+                                       onclick="event.preventDefault(); openAcademicFormatter('/formatter?section=html2ppt');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#d97706,#b45309);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-file-powerpoint text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1542,7 +1540,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#"
-                                       data-bs-toggle="modal" data-bs-target="#presentationModal">
+                                       onclick="event.preventDefault(); openAcademicModal('presentationModal');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-desktop text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -1556,7 +1554,7 @@
                                 <li>
                                     <a class="dropdown-item py-3 d-flex align-items-center gap-3"
                                        href="#"
-                                       data-bs-toggle="modal" data-bs-target="#wordFormatterModal">
+                                       onclick="event.preventDefault(); openAcademicModal('wordFormatterModal');">
                                         <span style="width:36px;height:36px;background:linear-gradient(135deg,#059669,#047857);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                                             <i class="fas fa-file-word text-white" style="font-size:0.85rem;"></i>
                                         </span>
@@ -4895,6 +4893,44 @@
                 });
             } catch(e) {}
         });
+    });
+
+    // قائمة الأدوات الأكاديمية: تحكم مباشر لا يعتمد على Bootstrap Dropdown
+    function closeAcademicTools() {
+        const menu = document.getElementById('academicToolsMenu');
+        const toggle = document.getElementById('academicToolsToggle');
+        if (menu) menu.style.display = 'none';
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function toggleAcademicTools(event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        const menu = document.getElementById('academicToolsMenu');
+        const toggle = document.getElementById('academicToolsToggle');
+        if (!menu) return;
+        const isOpen = menu.style.display === 'block';
+        menu.style.display = isOpen ? 'none' : 'block';
+        if (toggle) toggle.setAttribute('aria-expanded', String(!isOpen));
+    }
+
+    function openAcademicModal(modalId) {
+        closeAcademicTools();
+        const modal = document.getElementById(modalId);
+        if (!modal || !window.bootstrap || !bootstrap.Modal) return;
+        bootstrap.Modal.getOrCreateInstance(modal).show();
+    }
+
+    function openAcademicFormatter(sectionUrl) {
+        const frame = document.getElementById('formatterFrame');
+        if (frame) frame.src = sectionUrl || '/formatter';
+        openAcademicModal('fileFormatterModal');
+    }
+
+    document.addEventListener('click', function(event) {
+        if (!event.target.closest('#academicToolsDropdown')) closeAcademicTools();
     });
     </script>
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
