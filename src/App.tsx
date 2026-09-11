@@ -318,6 +318,17 @@ export default function App() {
               : c
           )
         );
+      } else if (event.type === 'message_read' && event.peerId) {
+        setMessagesMap((prev) => {
+          const chatMsgs = prev[event.peerId!] || [];
+          return {
+            ...prev,
+            [event.peerId!]: chatMsgs.map((m) => ({ ...m, status: 'read' })),
+          };
+        });
+        setChats((prev) =>
+          prev.map((c) => (c.id === event.peerId ? { ...c, unreadCount: 0 } : c))
+        );
       } else if (event.type === 'typing_status' && event.peerId) {
         setTypingMap((prev) => ({
           ...prev,
@@ -525,13 +536,44 @@ export default function App() {
     }
   };
 
-  // Chat selection
+  // Chat selection and real-time read synchronization
+  const handleSelectChat = (chat: TelegramChat) => {
+    setSelectedChatId(chat.id);
+    setChats((prev) =>
+      prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c))
+    );
+    setMessagesMap((prev) => {
+      const msgs = prev[chat.id];
+      if (!msgs) return prev;
+      return {
+        ...prev,
+        [chat.id]: msgs.map((m) => ({ ...m, status: 'read' })),
+      };
+    });
+
+    // Notify over WebSocket and REST
+    wsClient.markRead(chat.id);
+    const activeAcc = accounts.find((a) => a.id === activeAccountId);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (activeAcc?.sessionToken) {
+      headers['x-session-token'] = activeAcc.sessionToken;
+    }
+    fetch('/api/telegram/mark-read', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ peerId: chat.id }),
+    }).catch(() => {});
+  };
+
   const activeChat = chats.find((c) => c.id === selectedChatId) || chats[0] || null;
   const currentMessages = selectedChatId ? messagesMap[selectedChatId] || [] : [];
 
   // Sending a message
   const handleSendMessage = async (text: string, replyTo?: TelegramMessage, media?: any) => {
     if (!selectedChatId) return;
+
+    // Send immediately over WebSocket for instant sub-millisecond dispatch
+    wsClient.sendChatMessage(selectedChatId, text, replyTo);
 
     const newMsgId = 'msg_' + Date.now();
     const newMsg: TelegramMessage = {
@@ -938,7 +980,7 @@ export default function App() {
         <Sidebar
           chats={chats}
           selectedChatId={selectedChatId}
-          onSelectChat={(chat) => setSelectedChatId(chat.id)}
+          onSelectChat={handleSelectChat}
           onOpenMenu={() => setIsSettingsOpen(true)}
           onOpenNewChat={() => setIsNewChatOpen(true)}
           activeFolder={activeFolder}

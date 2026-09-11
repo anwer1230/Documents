@@ -1,9 +1,14 @@
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { LogLevel } from 'telegram/extensions/Logger.js';
+import { NewMessage } from 'telegram/events/index.js';
 import fs from 'fs';
 import path from 'path';
 import { ensureTelegramPatch } from './patchTelegram.js';
+
+// Message callback definition for real-time WebSocket & Push dispatching
+type NewMessageCallback = (sessionToken: string, message: any, peerId: string) => void;
+let onNewMessageCallback: NewMessageCallback | null = null;
 
 // Ensure 256-bit DH key padding patch is present
 ensureTelegramPatch();
@@ -139,6 +144,52 @@ function removePersistedSession(token: string) {
 }
 
 export class TelegramService {
+  public static setOnNewMessageHandler(cb: NewMessageCallback) {
+    onNewMessageCallback = cb;
+  }
+
+  public static attachClientEvents(sessionToken: string, client: TelegramClient) {
+    try {
+      client.addEventHandler(async (event: any) => {
+        try {
+          const msg = event.message;
+          if (!msg || !onNewMessageCallback) return;
+
+          let peerId = '';
+          if (msg.peerId) {
+            peerId =
+              msg.peerId.userId?.toString() ||
+              msg.peerId.chatId?.toString() ||
+              msg.peerId.channelId?.toString() ||
+              '';
+          }
+          if (!peerId && msg.chatId) {
+            peerId = msg.chatId.toString();
+          }
+
+          const formattedMessage = {
+            id: msg.id?.toString() || String(Date.now()),
+            chatId: peerId,
+            senderId: msg.senderId?.toString() || 'unknown',
+            senderName: msg.sender?.firstName || 'User',
+            text: msg.message || '',
+            timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
+            isOut: Boolean(msg.out),
+            status: 'delivered',
+            media: msg.media ? { type: 'photo', url: '' } : undefined,
+          };
+
+          onNewMessageCallback(sessionToken, formattedMessage, peerId);
+        } catch (err) {
+          console.warn('[MTProto Event] Error processing message update:', err);
+        }
+      }, new NewMessage({}));
+      console.log(`[MTProto] NewMessage event handler attached for session ${sessionToken.slice(0, 8)}...`);
+    } catch (err) {
+      console.warn('[MTProto] Could not attach NewMessage event handler:', err);
+    }
+  }
+
   public static async getOrCreateClient(sessionToken: string, sessionString: string = ''): Promise<TelegramClient> {
     const existing = activeSessions.get(sessionToken);
     if (existing && existing.client) {
@@ -208,6 +259,7 @@ export class TelegramService {
         isLoggedIn: false,
         createdAt: Date.now(),
       });
+      TelegramService.attachClientEvents(sessionToken, client);
 
       return client;
     })();

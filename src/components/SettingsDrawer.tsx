@@ -19,8 +19,11 @@ import {
   UserPlus,
   Trash2,
   CheckCircle2,
+  Bell,
+  Send,
 } from 'lucide-react';
 import { TelegramUser, TelegramThemeConfig, TelegramAccount } from '../types';
+import { subscribeToWebPush, sendTestWebPush } from '../utils/push';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -73,6 +76,33 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [lastName, setLastName] = useState(currentUser.lastName || '');
   const [bio, setBio] = useState(currentUser.bio || '');
   const [username, setUsername] = useState(currentUser.username || '');
+
+  // Web Push notification state
+  const [isPushSubscribing, setIsPushSubscribing] = useState(false);
+  const [isSendingTestPush, setIsSendingTestPush] = useState(false);
+  const [pushFeedback, setPushFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleActivatePush = async () => {
+    setIsPushSubscribing(true);
+    setPushFeedback(null);
+    const res = await subscribeToWebPush();
+    setIsPushSubscribing(false);
+    setPushFeedback({
+      type: res.success ? 'success' : 'error',
+      message: res.message,
+    });
+  };
+
+  const handleSendTestPush = async () => {
+    setIsSendingTestPush(true);
+    setPushFeedback(null);
+    const res = await sendTestWebPush();
+    setIsSendingTestPush(false);
+    setPushFeedback({
+      type: res.success ? 'success' : 'error',
+      message: res.message,
+    });
+  };
 
   if (!isOpen) return null;
 
@@ -560,6 +590,53 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   <span className="font-mono text-gray-300 break-all text-[10px]">
                     mailto:anwerfoud80@gmail.com
                   </span>
+                </div>
+
+                {/* Web Push Management Section */}
+                <div className="pt-3 border-t border-gray-700/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-gray-300 flex items-center gap-1.5 text-xs">
+                      <Bell className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{isAr ? 'إشعارات الويب الدفعية (Web Push)' : 'Web Push Notifications'}</span>
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono">
+                      VAPID Active
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleActivatePush}
+                      disabled={isPushSubscribing}
+                      className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-[#3390ec] hover:bg-[#2b7ac9] text-white font-medium text-[11px] transition disabled:opacity-50"
+                    >
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>{isPushSubscribing ? (isAr ? 'جاري التفعيل...' : 'Activating...') : (isAr ? 'تفعيل الإشعارات' : 'Enable Push')}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSendTestPush}
+                      disabled={isSendingTestPush}
+                      className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] transition disabled:opacity-50"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>{isSendingTestPush ? (isAr ? 'جاري الإرسال...' : 'Sending...') : (isAr ? 'إشعار تجريبي' : 'Test Push')}</span>
+                    </button>
+                  </div>
+
+                  {pushFeedback && (
+                    <div
+                      className={`p-2 rounded-lg text-[11px] border ${
+                        pushFeedback.type === 'success'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-red-500/10 border-red-500/30 text-red-400'
+                      }`}
+                    >
+                      {pushFeedback.message}
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2 border-t border-gray-700/20">

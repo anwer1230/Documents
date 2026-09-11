@@ -174,6 +174,36 @@ export const INITIAL_MESSAGES: Record<string, TelegramMessage[]> = {
       status: 'read',
       reactions: [{ emoji: '🔥', count: 2, userReacted: true }],
     },
+    {
+      id: 'msg_a4',
+      chatId: 'chat_ahmed',
+      senderId: 'ahmed_mansour',
+      senderName: 'أحمد المنصور',
+      text: '🎙️ استمع إلى هذه الملاحظة الصوتية السريعة',
+      timestamp: Date.now() - 1000 * 60 * 2,
+      isOut: false,
+      status: 'read',
+      media: {
+        type: 'voice',
+        duration: 14,
+        title: 'رسالة صوتية',
+      },
+    },
+    {
+      id: 'msg_a5',
+      chatId: 'chat_ahmed',
+      senderId: 'user_me',
+      senderName: 'أنا',
+      text: '[ملصق تليجرام 😎]',
+      timestamp: Date.now() - 1000 * 30,
+      isOut: true,
+      status: 'read',
+      media: {
+        type: 'photo',
+        url: 'https://images.unsplash.com/photo-1563889362352-b0492c224f61?w=240&auto=format&fit=crop&q=80',
+        title: 'Duck Shades',
+      },
+    },
   ],
   channel_tech_arabic: [
     {
