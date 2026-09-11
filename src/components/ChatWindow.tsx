@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Search,
-  Phone,
-  Video,
   MoreVertical,
   Pin,
   Bookmark,
@@ -10,7 +8,6 @@ import {
   CheckCheck,
   Reply,
   Trash2,
-  Smile,
   Play,
   Pause,
   Download,
@@ -21,9 +18,25 @@ import {
   Volume2,
   X,
   Sparkles,
+  ChevronDown,
+  Share2,
+  Flag,
+  LogOut,
+  Copy,
+  Forward,
+  CheckSquare,
+  Square,
+  CornerDownRight,
+  ExternalLink,
 } from 'lucide-react';
 import { TelegramChat, TelegramMessage, TelegramUser, TypingStatus } from '../types';
 import { MessageInput } from './MessageInput';
+import { getSenderColor, formatTelegramDate } from '../utils/telegramColors';
+import { ClearHistoryModal } from './modals/ClearHistoryModal';
+import { LeaveGroupModal } from './modals/LeaveGroupModal';
+import { ShareLinkModal } from './modals/ShareLinkModal';
+import { ReportChatModal } from './modals/ReportChatModal';
+import { DeleteMessageModal } from './modals/DeleteMessageModal';
 
 interface ChatWindowProps {
   chat: TelegramChat | null;
@@ -35,11 +48,15 @@ interface ChatWindowProps {
   onReactMessage: (messageId: string, emoji: string) => void;
   onPinMessage: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
+  onDeleteMultipleMessages?: (messageIds: string[]) => void;
   onToggleChatInfo: () => void;
   isChatInfoOpen: boolean;
   onToggleMute: (chatId: string) => void;
-  onClearHistory: (chatId: string) => void;
+  onClearHistory: (chatId: string, alsoForEveryone?: boolean) => void;
+  onLeaveGroup: (chatId: string) => void;
+  onReportChat: (chatId: string, reason: string, details?: string) => void;
   onOpenMediaViewer: (url: string, title?: string) => void;
+  onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
   lang: 'ar' | 'en';
   isDark: boolean;
 }
@@ -54,11 +71,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onReactMessage,
   onPinMessage,
   onDeleteMessage,
+  onDeleteMultipleMessages,
   onToggleChatInfo,
   isChatInfoOpen,
   onToggleMute,
   onClearHistory,
+  onLeaveGroup,
+  onReportChat,
   onOpenMediaViewer,
+  onToast,
   lang,
   isDark,
 }) => {
@@ -69,14 +90,63 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
-  const [quickReactionForMsg, setQuickReactionForMsg] = useState<string | null>(null);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
+
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    message: TelegramMessage | null;
+  }>({ visible: false, x: 0, y: 0, message: null });
+
+  // Selection Mode State
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<string[]>([]);
+
+  // Modals state
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [deleteModalMsgId, setDeleteModalMsgId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto scroll to bottom when messages change
+  // Auto-scroll on new message
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!showScrollBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages.length, chat?.id]);
+
+  // Scroll listener for bottom button
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    setShowScrollBottom(distanceToBottom > 220);
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleOutside = () => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, message: null });
+      }
+      if (showMoreMenu) {
+        setShowMoreMenu(false);
+      }
+    };
+    window.addEventListener('click', handleOutside);
+    return () => window.removeEventListener('click', handleOutside);
+  }, [contextMenu.visible, showMoreMenu]);
 
   if (!chat) {
     return (
@@ -118,11 +188,59 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   };
 
   const toggleVoicePlay = (msgId: string) => {
-    if (playingVoiceId === msgId) {
-      setPlayingVoiceId(null);
-    } else {
-      setPlayingVoiceId(msgId);
+    setPlayingVoiceId(playingVoiceId === msgId ? null : msgId);
+  };
+
+  // Jump to replied message
+  const handleJumpToMessage = (targetMsgId: string) => {
+    const el = document.getElementById(`msg-${targetMsgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMsgId(targetMsgId);
+      setTimeout(() => setHighlightedMsgId(null), 2000);
     }
+  };
+
+  // Right-click context menu
+  const handleContextMenu = (e: React.MouseEvent, msg: TelegramMessage) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const x = Math.min(e.clientX, window.innerWidth - 200);
+    const y = Math.min(e.clientY, window.innerHeight - 250);
+    setContextMenu({ visible: true, x, y, message: msg });
+  };
+
+  // Selection mode toggles
+  const toggleSelectMessage = (msgId: string) => {
+    setSelectedMsgIds((prev) =>
+      prev.includes(msgId) ? prev.filter((id) => id !== msgId) : [...prev, msgId]
+    );
+  };
+
+  const handleCopyMessageText = (text: string) => {
+    navigator.clipboard.writeText(text);
+    onToast(isAr ? 'تم نسخ النص إلى الحافظة' : 'Text copied to clipboard', 'success');
+  };
+
+  const handleCopyMessageLink = (msgId: string) => {
+    const link = `https://t.me/${chat.username || chat.id}/${msgId}`;
+    navigator.clipboard.writeText(link);
+    onToast(isAr ? 'تم نسخ رابط الرسالة' : 'Message link copied', 'success');
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedMsgIds.length === 0) return;
+    if (onDeleteMultipleMessages) {
+      onDeleteMultipleMessages(selectedMsgIds);
+    } else {
+      selectedMsgIds.forEach((id) => onDeleteMessage(id));
+    }
+    onToast(
+      isAr ? `تم حذف ${selectedMsgIds.length} رسالة` : `Deleted ${selectedMsgIds.length} messages`,
+      'success'
+    );
+    setSelectedMsgIds([]);
+    setIsSelectionMode(false);
   };
 
   return (
@@ -137,201 +255,353 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           isDark ? 'bg-[#17212b] border-[#0e1621] text-white' : 'bg-white border-gray-200 text-gray-900'
         }`}
       >
-        {/* Left: Avatar + Title + Status */}
-        <div
-          onClick={onToggleChatInfo}
-          className="flex items-center gap-3 cursor-pointer min-w-0 flex-1 hover:opacity-85 transition"
-        >
-          {chat.avatarUrl ? (
-            <img
-              src={chat.avatarUrl}
-              alt={chat.title}
-              referrerPolicy="no-referrer"
-              className="w-10 h-10 rounded-full object-cover shrink-0"
-            />
-          ) : (
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold shrink-0 text-sm shadow"
-              style={{ backgroundColor: chat.avatarColor || '#3390ec' }}
-            >
-              {chat.type === 'saved' ? <Bookmark className="w-5 h-5 fill-white" /> : chat.title.slice(0, 2)}
-            </div>
-          )}
-
-          <div className="min-w-0 flex-1">
-            <h2 className="font-bold text-sm truncate flex items-center gap-1.5">
-              <span>{chat.title}</span>
-              {chat.isMuted && <VolumeX className="w-3.5 h-3.5 text-gray-400" />}
-            </h2>
-            {typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt ? (
-              <div className="flex items-center gap-1.5 text-xs text-[#3390ec] font-semibold transition-all duration-200">
-                <span className="truncate">
-                  {chat.type === 'supergroup' || chat.type === 'group'
-                    ? isAr
-                      ? `${typingStatus.userName || 'أحد الأعضاء'} يكتب...`
-                      : `${typingStatus.userName || 'Someone'} is typing...`
-                    : isAr
-                    ? 'يكتب الآن...'
-                    : 'typing...'}
-                </span>
-                {/* 3 bouncing dots simulating real-time MTProto typing updates */}
-                <span className="inline-flex items-center gap-0.5 shrink-0" aria-hidden="true">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce [animation-delay:-0.3s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce [animation-delay:-0.15s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce" />
-                </span>
-                <span className="hidden sm:inline-flex text-[10px] font-mono font-normal tracking-wide bg-[#3390ec]/15 text-[#3390ec] px-1.5 py-0.5 rounded-full border border-[#3390ec]/30">
-                  MTProto
-                </span>
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400 truncate">
-                {chat.type === 'saved'
-                  ? isAr
-                    ? 'مساحتك السحابية الخاصة'
-                    : 'Your cloud storage'
-                  : chat.type === 'channel'
-                  ? isAr
-                    ? `${chat.membersCount?.toLocaleString() || '12,400'} مشترك`
-                    : `${chat.membersCount?.toLocaleString() || '12,400'} subscribers`
-                  : chat.type === 'supergroup' || chat.type === 'group'
-                  ? isAr
-                    ? `${chat.membersCount?.toLocaleString() || '150'} عضو`
-                    : `${chat.membersCount?.toLocaleString() || '150'} members`
-                  : chat.isOnline
-                  ? isAr
-                    ? 'متصل الآن'
-                    : 'online'
-                  : isAr
-                  ? 'آخر ظهور مؤخراً'
-                  : 'last seen recently'}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Right Header Actions */}
-        <div className="flex items-center gap-1.5">
-          {/* Quick MTProto Typing Simulator Button */}
-          {onSimulateTyping && chat.type !== 'saved' && (
-            <button
-              onClick={onSimulateTyping}
-              className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition font-medium ${
-                typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt
-                  ? 'bg-[#3390ec] text-white border-[#3390ec] shadow-sm animate-pulse'
-                  : isDark
-                  ? 'bg-[#242f3d]/70 text-[#3390ec] border-[#3390ec]/30 hover:bg-[#3390ec]/20'
-                  : 'bg-blue-50 text-[#3390ec] border-blue-200 hover:bg-blue-100'
-              }`}
-              title={isAr ? 'محاكاة نشاط الطرف الآخر (MTProto Event)' : 'Simulate MTProto typing event'}
-            >
-              <Sparkles className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">
-                {typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt
-                  ? isAr
-                    ? 'الطرف الآخر يكتب...'
-                    : 'Typing...'
-                  : isAr
-                  ? 'محاكاة نشاط MTProto'
-                  : 'Simulate MTProto'}
-              </span>
-            </button>
-          )}
-
-          {inChatSearch ? (
-            <div className="flex items-center gap-1 bg-[#242f3d]/30 px-2 py-1 rounded-lg">
-              <input
-                type="text"
-                value={searchWord}
-                onChange={(e) => setSearchWord(e.target.value)}
-                placeholder={isAr ? 'بحث في الرسائل...' : 'Search in chat...'}
-                className="bg-transparent text-xs text-white focus:outline-none w-32"
-                autoFocus
-              />
+        {isSelectionMode ? (
+          /* Selection Mode Header */
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-3">
               <button
                 onClick={() => {
-                  setInChatSearch(false);
-                  setSearchWord('');
+                  setIsSelectionMode(false);
+                  setSelectedMsgIds([]);
                 }}
-                className="text-gray-400 hover:text-white"
+                className="p-1.5 rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
+              </button>
+              <span className="font-bold text-sm">
+                {selectedMsgIds.length} {isAr ? 'رسائل محددة' : 'selected'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDeleteSelected}
+                disabled={selectedMsgIds.length === 0}
+                className={`p-2 rounded-full transition flex items-center gap-1.5 text-xs font-semibold ${
+                  selectedMsgIds.length > 0
+                    ? 'text-red-500 hover:bg-red-500/10'
+                    : 'text-gray-400 opacity-50 cursor-not-allowed'
+                }`}
+                title={isAr ? 'حذف المحدد' : 'Delete'}
+              >
+                <Trash2 className="w-4 h-4" />
+                <span className="hidden sm:inline">{isAr ? 'حذف' : 'Delete'}</span>
               </button>
             </div>
-          ) : (
-            <button
-              onClick={() => setInChatSearch(true)}
-              className={`p-2 rounded-full transition ${
-                isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
-              }`}
-              title={isAr ? 'بحث في المحادثة' : 'Search'}
-            >
-              <Search className="w-5 h-5" />
-            </button>
-          )}
-
-          <button
-            onClick={() => onToggleMute(chat.id)}
-            className={`p-2 rounded-full transition ${
-              isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
-            }`}
-            title={chat.isMuted ? (isAr ? 'إلغاء الكتم' : 'Unmute') : isAr ? 'كتم الإشعارات' : 'Mute'}
-          >
-            {chat.isMuted ? <VolumeX className="w-5 h-5 text-amber-400" /> : <Volume2 className="w-5 h-5" />}
-          </button>
-
-          <button
-            onClick={onToggleChatInfo}
-            className={`p-2 rounded-full transition ${
-              isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
-            }`}
-            title={isAr ? 'معلومات المحادثة' : 'Chat info'}
-          >
-            {isChatInfoOpen ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
-          </button>
-
-          {/* More Menu Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowMoreMenu(!showMoreMenu)}
-              className={`p-2 rounded-full transition ${
-                isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
-              }`}
-            >
-              <MoreVertical className="w-5 h-5" />
-            </button>
-
-            {showMoreMenu && (
-              <div
-                className={`absolute end-0 top-12 rounded-xl shadow-2xl py-1.5 w-44 z-30 border ${
-                  isDark ? 'bg-[#242f3d] border-[#2f3f50] text-white' : 'bg-white border-gray-200 text-gray-800'
-                }`}
-              >
-                <button
-                  onClick={() => {
-                    onClearHistory(chat.id);
-                    setShowMoreMenu(false);
-                  }}
-                  className={`w-full text-start px-4 py-2 text-xs flex items-center gap-2 ${
-                    isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
-                  }`}
-                >
-                  <Trash2 className="w-4 h-4 text-red-400" />
-                  <span>{isAr ? 'مسح سجل المحادثة' : 'Clear History'}</span>
-                </button>
-              </div>
-            )}
           </div>
-        </div>
+        ) : (
+          /* Normal Header */
+          <>
+            {/* Left: Avatar + Title + Status */}
+            <div
+              onClick={onToggleChatInfo}
+              className="flex items-center gap-3 cursor-pointer min-w-0 flex-1 hover:opacity-90 transition"
+            >
+              {chat.avatarUrl ? (
+                <img
+                  src={chat.avatarUrl}
+                  alt={chat.title}
+                  referrerPolicy="no-referrer"
+                  className="w-10 h-10 rounded-full object-cover shrink-0 shadow"
+                />
+              ) : (
+                <div
+                  className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold shrink-0 text-sm shadow"
+                  style={{ backgroundColor: chat.avatarColor || '#3390ec' }}
+                >
+                  {chat.type === 'saved' ? <Bookmark className="w-5 h-5 fill-white" /> : chat.title.slice(0, 2)}
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <h2 className="font-bold text-sm truncate flex items-center gap-1.5">
+                  <span>{chat.title}</span>
+                  {chat.isMuted && <VolumeX className="w-3.5 h-3.5 text-gray-400" />}
+                </h2>
+                {typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt ? (
+                  <div className="flex items-center gap-1.5 text-xs text-[#3390ec] font-semibold transition-all">
+                    <span className="truncate">
+                      {chat.type === 'supergroup' || chat.type === 'group'
+                        ? isAr
+                          ? `${typingStatus.userName || 'أحد الأعضاء'} يكتب...`
+                          : `${typingStatus.userName || 'Someone'} is typing...`
+                        : isAr
+                        ? 'يكتب الآن...'
+                        : 'typing...'}
+                    </span>
+                    <span className="inline-flex items-center gap-0.5 shrink-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce [animation-delay:-0.3s]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce [animation-delay:-0.15s]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-bounce" />
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 truncate">
+                    {chat.type === 'saved'
+                      ? isAr
+                        ? 'مساحتك السحابية الخاصة'
+                        : 'Your cloud storage'
+                      : chat.type === 'channel'
+                      ? isAr
+                        ? `${chat.membersCount?.toLocaleString() || '48,920'} مشترك`
+                        : `${chat.membersCount?.toLocaleString() || '48,920'} subscribers`
+                      : chat.type === 'supergroup' || chat.type === 'group'
+                      ? isAr
+                        ? `${chat.membersCount?.toLocaleString() || '1,420'} عضو`
+                        : `${chat.membersCount?.toLocaleString() || '1,420'} members`
+                      : chat.isOnline
+                      ? isAr
+                        ? 'متصل الآن'
+                        : 'online'
+                      : isAr
+                      ? 'آخر ظهور مؤخراً'
+                      : 'last seen recently'}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Right Header Actions */}
+            <div className="flex items-center gap-1">
+              {/* Quick MTProto Typing Simulator Button */}
+              {onSimulateTyping && chat.type !== 'saved' && (
+                <button
+                  onClick={onSimulateTyping}
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition font-medium ${
+                    typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt
+                      ? 'bg-[#3390ec] text-white border-[#3390ec] shadow-sm animate-pulse'
+                      : isDark
+                      ? 'bg-[#242f3d]/70 text-[#3390ec] border-[#3390ec]/30 hover:bg-[#3390ec]/20'
+                      : 'bg-blue-50 text-[#3390ec] border-blue-200 hover:bg-blue-100'
+                  }`}
+                  title={isAr ? 'محاكاة نشاط الطرف الآخر (MTProto)' : 'Simulate MTProto activity'}
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">
+                    {isAr ? 'محاكاة نشاط' : 'Simulate'}
+                  </span>
+                </button>
+              )}
+
+              {/* In-chat search */}
+              {inChatSearch ? (
+                <div className="flex items-center gap-1 bg-[#242f3d]/30 px-2 py-1 rounded-lg">
+                  <input
+                    type="text"
+                    value={searchWord}
+                    onChange={(e) => setSearchWord(e.target.value)}
+                    placeholder={isAr ? 'بحث في الرسائل...' : 'Search in chat...'}
+                    className="bg-transparent text-xs text-white focus:outline-none w-32"
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => {
+                      setInChatSearch(false);
+                      setSearchWord('');
+                    }}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setInChatSearch(true)}
+                  className={`p-2 rounded-full transition ${
+                    isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+                  }`}
+                  title={isAr ? 'بحث في المحادثة' : 'Search'}
+                >
+                  <Search className="w-5 h-5" />
+                </button>
+              )}
+
+              {/* Mute Toggle Button */}
+              <button
+                onClick={() => onToggleMute(chat.id)}
+                className={`p-2 rounded-full transition ${
+                  isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+                }`}
+                title={chat.isMuted ? (isAr ? 'إلغاء الكتم' : 'Unmute') : isAr ? 'كتم الإشعارات' : 'Mute'}
+              >
+                {chat.isMuted ? <VolumeX className="w-5 h-5 text-amber-400" /> : <Volume2 className="w-5 h-5" />}
+              </button>
+
+              {/* Chat Info Drawer Toggle */}
+              <button
+                onClick={onToggleChatInfo}
+                className={`p-2 rounded-full transition ${
+                  isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+                }`}
+                title={isAr ? 'معلومات المحادثة' : 'Chat info'}
+              >
+                {isChatInfoOpen ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
+              </button>
+
+              {/* Official Telegram Web K 3-Dots More Menu */}
+              <div className="relative">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMoreMenu(!showMoreMenu);
+                  }}
+                  className={`p-2 rounded-full transition ${
+                    isDark ? 'hover:bg-[#232e3c] text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+                  }`}
+                  title={isAr ? 'خيارات إضافية' : 'More options'}
+                >
+                  <MoreVertical className="w-5 h-5" />
+                </button>
+
+                {showMoreMenu && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className={`absolute end-0 top-12 rounded-2xl shadow-2xl py-2 w-52 z-30 border backdrop-blur-md animate-scale-in ${
+                      isDark ? 'bg-[#242f3d]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
+                    }`}
+                  >
+                    {/* Search */}
+                    <button
+                      onClick={() => {
+                        setInChatSearch(true);
+                        setShowMoreMenu(false);
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      <Search className="w-4 h-4 text-gray-400" />
+                      <span>{isAr ? 'بحث في المحادثة' : 'Search in chat'}</span>
+                    </button>
+
+                    {/* Mute */}
+                    <button
+                      onClick={() => {
+                        onToggleMute(chat.id);
+                        setShowMoreMenu(false);
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      {chat.isMuted ? (
+                        <>
+                          <Volume2 className="w-4 h-4 text-gray-400" />
+                          <span>{isAr ? 'إلغاء كتم الصوت' : 'Unmute'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <VolumeX className="w-4 h-4 text-gray-400" />
+                          <span>{isAr ? 'كتم الإشعارات' : 'Mute notifications'}</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Copy / Share Link for groups and channels */}
+                    {(chat.type === 'group' || chat.type === 'supergroup' || chat.type === 'channel') && (
+                      <button
+                        onClick={() => {
+                          setIsShareModalOpen(true);
+                          setShowMoreMenu(false);
+                        }}
+                        className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                          isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <Share2 className="w-4 h-4 text-[#3390ec]" />
+                        <span>{isAr ? 'مشاركة رابط المجموعة' : 'Share group link'}</span>
+                      </button>
+                    )}
+
+                    {/* Select Messages Mode */}
+                    <button
+                      onClick={() => {
+                        setIsSelectionMode(true);
+                        setShowMoreMenu(false);
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      <CheckSquare className="w-4 h-4 text-gray-400" />
+                      <span>{isAr ? 'تحديد الرسائل' : 'Select messages'}</span>
+                    </button>
+
+                    <div className="my-1 border-t border-gray-700/20" />
+
+                    {/* Clear History */}
+                    <button
+                      onClick={() => {
+                        setIsClearModalOpen(true);
+                        setShowMoreMenu(false);
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                      }`}
+                    >
+                      <Trash2 className="w-4 h-4 text-gray-400" />
+                      <span>{isAr ? 'مسح سجل المحادثة' : 'Clear history'}</span>
+                    </button>
+
+                    {/* Report Chat */}
+                    {chat.type !== 'saved' && (
+                      <button
+                        onClick={() => {
+                          setIsReportModalOpen(true);
+                          setShowMoreMenu(false);
+                        }}
+                        className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                          isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <Flag className="w-4 h-4 text-amber-400" />
+                        <span>{isAr ? 'الإبلاغ' : 'Report'}</span>
+                      </button>
+                    )}
+
+                    {/* Leave Group / Delete and Exit */}
+                    {chat.type !== 'saved' && (
+                      <button
+                        onClick={() => {
+                          setIsLeaveModalOpen(true);
+                          setShowMoreMenu(false);
+                        }}
+                        className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 text-red-500 ${
+                          isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <LogOut className="w-4 h-4 text-red-500" />
+                        <span>
+                          {chat.type === 'channel'
+                            ? isAr
+                              ? 'مغادرة القناة'
+                              : 'Leave channel'
+                            : chat.type === 'group' || chat.type === 'supergroup'
+                            ? isAr
+                              ? 'مغادرة المجموعة'
+                              : 'Leave group'
+                            : isAr
+                            ? 'حذف المحادثة'
+                            : 'Delete chat'}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </header>
 
       {/* Pinned Message Banner */}
       {pinnedMessage && (
         <div
-          className={`px-4 py-2 flex items-center justify-between text-xs border-b select-none shadow-sm z-10 ${
+          onClick={() => handleJumpToMessage(pinnedMessage.id)}
+          className={`px-4 py-2 flex items-center justify-between text-xs border-b select-none shadow-xs z-10 cursor-pointer transition ${
             isDark
-              ? 'bg-[#1e2a38] border-[#0e1621] text-gray-200'
-              : 'bg-[#f4f7f9] border-gray-200 text-gray-800'
+              ? 'bg-[#1e2a38] hover:bg-[#233142] border-[#0e1621] text-gray-200'
+              : 'bg-[#f4f7f9] hover:bg-[#ebf0f4] border-gray-200 text-gray-800'
           }`}
         >
           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -340,251 +610,562 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               <span className="font-bold text-[#3390ec] block text-[11px]">
                 {isAr ? 'رسالة مثبتة' : 'Pinned Message'}
               </span>
-              <p className="truncate text-gray-400">{pinnedMessage.text}</p>
+              <p className="truncate text-gray-400 text-xs">{pinnedMessage.text}</p>
             </div>
           </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPinMessage(pinnedMessage.id);
+            }}
+            className="text-gray-400 hover:text-white p-1 rounded-full"
+            title={isAr ? 'إلغاء التثبيت' : 'Unpin'}
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      {/* Messages Thread Container */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {/* Telegram Wallpaper Pattern Overlay */}
-        <div className="text-center my-2">
-          <span
-            className={`inline-block px-3 py-1 rounded-full text-[11px] font-semibold select-none shadow-sm ${
-              isDark ? 'bg-[#182533]/80 text-gray-300' : 'bg-gray-300/80 text-gray-700'
-            }`}
-          >
-            {isAr ? 'اليوم' : 'Today'}
-          </span>
-        </div>
-
-        {displayedMessages.map((msg) => {
+      {/* Messages Scroll Area with Telegram Web K Layout Geometry */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 relative space-y-1"
+      >
+        {displayedMessages.map((msg, index) => {
           const isOut = msg.isOut;
+          const prevMsg = displayedMessages[index - 1];
+          const nextMsg = displayedMessages[index + 1];
+
+          // Consecutive grouping logic (Web K algorithm)
+          const isSameSenderPrev =
+            prevMsg &&
+            prevMsg.senderId === msg.senderId &&
+            Math.abs(msg.timestamp - prevMsg.timestamp) < 5 * 60 * 1000;
+
+          const isSameSenderNext =
+            nextMsg &&
+            nextMsg.senderId === msg.senderId &&
+            Math.abs(nextMsg.timestamp - msg.timestamp) < 5 * 60 * 1000;
+
+          const isFirstInGroup = !isSameSenderPrev;
+          const isLastInGroup = !isSameSenderNext;
+
+          // Date Separator calculation
+          const showDateSeparator =
+            !prevMsg ||
+            new Date(prevMsg.timestamp).toDateString() !== new Date(msg.timestamp).toDateString();
+
           const isHovered = hoveredMessageId === msg.id;
+          const isSelected = selectedMsgIds.includes(msg.id);
+          const isHighlighted = highlightedMsgId === msg.id;
+
+          const senderColor = getSenderColor(msg.senderId);
 
           return (
-            <div
-              key={msg.id}
-              id={`msg-${msg.id}`}
-              onMouseEnter={() => setHoveredMessageId(msg.id)}
-              onMouseLeave={() => {
-                setHoveredMessageId(null);
-                setQuickReactionForMsg(null);
-              }}
-              className={`flex flex-col group relative ${isOut ? 'items-end' : 'items-start'}`}
-            >
-              {/* Message Bubble */}
+            <React.Fragment key={msg.id}>
+              {/* Centered Date Separator Pill */}
+              {showDateSeparator && (
+                <div className="flex justify-center my-3 sticky top-2 z-10 select-none">
+                  <span
+                    className={`inline-block px-3 py-0.5 rounded-full text-[11px] font-semibold shadow-xs backdrop-blur-md ${
+                      isDark ? 'bg-[#182533]/85 text-gray-300' : 'bg-gray-300/80 text-gray-700'
+                    }`}
+                  >
+                    {formatTelegramDate(msg.timestamp, lang)}
+                  </span>
+                </div>
+              )}
+
+              {/* Message Row */}
               <div
-                className={`max-w-[85%] md:max-w-[70%] rounded-2xl p-3 shadow-md relative transition-all ${
-                  isOut
-                    ? isDark
-                      ? 'bg-[#2b5278] text-white rounded-br-xs'
-                      : 'bg-[#eeffde] text-gray-900 rounded-br-xs'
-                    : isDark
-                    ? 'bg-[#182533] text-gray-100 rounded-bl-xs'
-                    : 'bg-white text-gray-900 rounded-bl-xs'
+                id={`msg-${msg.id}`}
+                onMouseEnter={() => setHoveredMessageId(msg.id)}
+                onMouseLeave={() => setHoveredMessageId(null)}
+                onContextMenu={(e) => handleContextMenu(e, msg)}
+                onClick={() => {
+                  if (isSelectionMode) {
+                    toggleSelectMessage(msg.id);
+                  }
+                }}
+                className={`flex items-end gap-2 group relative transition-colors ${
+                  isLastInGroup ? 'mb-2.5' : 'mb-0.5'
+                } ${isOut ? 'justify-end' : 'justify-start'} ${
+                  isSelectionMode ? 'cursor-pointer hover:bg-[#3390ec]/5 p-1 rounded-xl' : ''
+                } ${isSelected ? 'bg-[#3390ec]/15 rounded-xl' : ''} ${
+                  isHighlighted ? 'ring-2 ring-[#3390ec] rounded-2xl animate-pulse' : ''
                 }`}
               >
-                {/* Sender name for groups/channels */}
-                {!isOut && msg.senderName && chat.type !== 'private' && (
-                  <span className="text-xs font-bold text-[#3390ec] block mb-1">
-                    {msg.senderName}
-                  </span>
-                )}
-
-                {/* Reply quote block */}
-                {msg.replyTo && (
-                  <div
-                    className={`mb-2 p-2 rounded-lg text-xs border-s-3 border-[#3390ec] select-none ${
-                      isDark ? 'bg-black/20' : 'bg-black/5'
-                    }`}
-                  >
-                    <span className="font-bold text-[#3390ec] block">
-                      {msg.replyTo.senderName}
-                    </span>
-                    <p className="truncate opacity-80">{msg.replyTo.text}</p>
-                  </div>
-                )}
-
-                {/* Photo Media */}
-                {msg.media?.type === 'photo' && msg.media.url && (
-                  <div className="mb-2 rounded-xl overflow-hidden cursor-pointer">
-                    <img
-                      src={msg.media.url}
-                      alt="Telegram media"
-                      referrerPolicy="no-referrer"
-                      onClick={() => onOpenMediaViewer(msg.media!.url!, msg.media?.title)}
-                      className="w-full max-h-72 object-cover rounded-xl hover:opacity-95 transition"
-                    />
-                  </div>
-                )}
-
-                {/* Voice Note Audio */}
-                {msg.media?.type === 'voice' && (
-                  <div className="flex items-center gap-3 py-1 px-2 select-none min-w-[200px]">
-                    <button
-                      onClick={() => toggleVoicePlay(msg.id)}
-                      className="w-9 h-9 rounded-full bg-[#3390ec] hover:bg-[#2b7ec9] text-white flex items-center justify-center shadow"
+                {/* Selection Checkbox (Web K style) */}
+                {isSelectionMode && (
+                  <div className="shrink-0 self-center">
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                        isSelected
+                          ? 'bg-[#3390ec] border-[#3390ec] text-white'
+                          : isDark
+                          ? 'border-gray-500 bg-transparent'
+                          : 'border-gray-400 bg-transparent'
+                      }`}
                     >
-                      {playingVoiceId === msg.id ? (
-                        <Pause className="w-4 h-4 fill-white" />
-                      ) : (
-                        <Play className="w-4 h-4 fill-white translate-x-0.5" />
-                      )}
-                    </button>
-
-                    <div className="flex-1">
-                      {/* Audio wave lines */}
-                      <div className="flex items-center gap-1 h-5">
-                        {[40, 75, 55, 90, 30, 80, 60, 100, 45, 70, 35, 85].map((h, i) => (
-                          <span
-                            key={i}
-                            className={`w-1 rounded-full transition-all ${
-                              playingVoiceId === msg.id ? 'bg-[#3390ec] animate-pulse' : 'bg-gray-400/50'
-                            }`}
-                            style={{ height: `${h}%` }}
-                          />
-                        ))}
-                      </div>
-                      <span className="text-[10px] text-gray-400 font-mono">
-                        0:{msg.media.duration?.toString().padStart(2, '0') || '04'}
-                      </span>
+                      {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                     </div>
                   </div>
                 )}
 
-                {/* Document File */}
-                {msg.media?.type === 'document' && (
-                  <div
-                    className={`flex items-center gap-3 p-2 rounded-xl mb-1 ${
-                      isDark ? 'bg-black/20' : 'bg-black/5'
-                    }`}
-                  >
-                    <div className="w-9 h-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                      <FileText className="w-5 h-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold truncate">{msg.media.fileName}</p>
-                      <span className="text-[10px] text-gray-400">{msg.media.fileSize}</span>
-                    </div>
-                    {msg.media.url && (
-                      <a
-                        href={msg.media.url}
-                        download={msg.media.fileName}
-                        className="p-2 text-gray-400 hover:text-white"
-                      >
-                        <Download className="w-4 h-4" />
-                      </a>
+                {/* Left Avatar for Incoming Group/Supergroup/Channel Messages */}
+                {!isOut && chat.type !== 'private' && (
+                  <div className="w-8 shrink-0 select-none">
+                    {isLastInGroup ? (
+                      msg.senderAvatar ? (
+                        <img
+                          src={msg.senderAvatar}
+                          alt={msg.senderName}
+                          referrerPolicy="no-referrer"
+                          className="w-8 h-8 rounded-full object-cover shadow-sm"
+                        />
+                      ) : (
+                        <div
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold shadow-sm"
+                          style={{ backgroundColor: senderColor }}
+                        >
+                          {msg.senderName.slice(0, 1)}
+                        </div>
+                      )
+                    ) : (
+                      <div className="w-8" />
                     )}
                   </div>
                 )}
 
-                {/* Message Text */}
-                <p className="text-sm whitespace-pre-wrap break-words leading-relaxed select-text">
-                  {msg.text}
-                </p>
-
-                {/* Message Footer: Time + Status */}
-                <div className="flex items-center justify-end gap-1 mt-1 text-[10px] text-gray-400 select-none">
-                  <span>{formatMessageTime(msg.timestamp)}</span>
-                  {isOut && (
-                    <span className="inline-flex">
-                      {msg.status === 'read' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                      ) : (
-                        <Check className="w-3.5 h-3.5 text-gray-400" />
-                      )}
+                {/* Bubble Container */}
+                <div
+                  className={`max-w-[85%] md:max-w-[68%] relative shadow-xs transition-all text-sm ${
+                    /* Outgoing bubble colors and borders */
+                    isOut
+                      ? isDark
+                        ? 'bg-[#2b5278] text-white'
+                        : 'bg-[#eeffde] text-gray-900 border border-[#d2ecbb]/50'
+                      : isDark
+                      ? 'bg-[#182533] text-gray-100'
+                      : 'bg-white text-gray-900 border border-gray-200/60'
+                  } ${
+                    /* Telegram Web K rounded geometry & tails */
+                    isOut
+                      ? `rounded-2xl ${isLastInGroup ? 'rounded-br-xs' : 'rounded-br-lg'} ${
+                          !isFirstInGroup ? 'rounded-tr-lg' : ''
+                        }`
+                      : `rounded-2xl ${isLastInGroup ? 'rounded-bl-xs' : 'rounded-bl-lg'} ${
+                          !isFirstInGroup ? 'rounded-tl-lg' : ''
+                        }`
+                  } px-3 pt-2 pb-1.5`}
+                >
+                  {/* Sender Name in Groups (with official Telegram Color) */}
+                  {!isOut && isFirstInGroup && chat.type !== 'private' && (
+                    <span
+                      className="text-xs font-bold block mb-1 hover:underline cursor-pointer select-none"
+                      style={{ color: senderColor }}
+                    >
+                      {msg.senderName}
                     </span>
+                  )}
+
+                  {/* Forwarded Header */}
+                  {msg.isForwarded && (
+                    <div className="text-[11px] text-[#3390ec] font-semibold flex items-center gap-1 mb-1 select-none">
+                      <Forward className="w-3.5 h-3.5" />
+                      <span>
+                        {isAr ? 'محولة من' : 'Forwarded from'} {msg.forwardedFrom || 'تيليجرام'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Reply Quote Block (Clickable to jump) */}
+                  {msg.replyTo && (
+                    <div
+                      onClick={() => handleJumpToMessage(msg.replyTo!.id)}
+                      className={`mb-2 p-2 rounded-lg text-xs border-s-3 border-[#3390ec] cursor-pointer hover:opacity-90 select-none transition ${
+                        isDark ? 'bg-black/25' : 'bg-black/5'
+                      }`}
+                    >
+                      <span className="font-bold text-[#3390ec] block">
+                        {msg.replyTo.senderName}
+                      </span>
+                      <p className="truncate opacity-80">{msg.replyTo.text}</p>
+                    </div>
+                  )}
+
+                  {/* Photo / Video Media */}
+                  {msg.media?.type === 'photo' && msg.media.url && (
+                    <div className="mb-1.5 rounded-xl overflow-hidden cursor-pointer">
+                      <img
+                        src={msg.media.url}
+                        alt="Telegram media"
+                        referrerPolicy="no-referrer"
+                        onClick={() => onOpenMediaViewer(msg.media!.url!, msg.media?.title)}
+                        className="w-full max-h-72 object-cover rounded-xl hover:opacity-95 transition"
+                      />
+                    </div>
+                  )}
+
+                  {/* Voice Note Audio */}
+                  {msg.media?.type === 'voice' && (
+                    <div className="flex items-center gap-3 py-1 px-1 select-none min-w-[210px]">
+                      <button
+                        onClick={() => toggleVoicePlay(msg.id)}
+                        className="w-9 h-9 rounded-full bg-[#3390ec] hover:bg-[#2b7ec9] text-white flex items-center justify-center shadow-xs shrink-0"
+                      >
+                        {playingVoiceId === msg.id ? (
+                          <Pause className="w-4 h-4 fill-white" />
+                        ) : (
+                          <Play className="w-4 h-4 fill-white translate-x-0.5" />
+                        )}
+                      </button>
+
+                      <div className="flex-1">
+                        <div className="flex items-center gap-0.5 h-5">
+                          {[30, 70, 45, 90, 35, 80, 50, 100, 40, 75, 30, 85, 60, 40].map((h, i) => (
+                            <span
+                              key={i}
+                              className={`w-1 rounded-full transition-all ${
+                                playingVoiceId === msg.id ? 'bg-[#3390ec] animate-pulse' : 'bg-gray-400/50'
+                              }`}
+                              style={{ height: `${h}%` }}
+                            />
+                          ))}
+                        </div>
+                        <span className="text-[10px] text-gray-400 font-mono">
+                          0:{msg.media.duration?.toString().padStart(2, '0') || '04'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Document File */}
+                  {msg.media?.type === 'document' && (
+                    <div
+                      className={`flex items-center gap-3 p-2 rounded-xl mb-1.5 ${
+                        isDark ? 'bg-black/20' : 'bg-black/5'
+                      }`}
+                    >
+                      <div className="w-9 h-9 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                        <FileText className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold truncate">{msg.media.fileName}</p>
+                        <span className="text-[10px] text-gray-400">{msg.media.fileSize}</span>
+                      </div>
+                      {msg.media.url && (
+                        <a
+                          href={msg.media.url}
+                          download={msg.media.fileName}
+                          className="p-1.5 text-gray-400 hover:text-white"
+                        >
+                          <Download className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Message Text with responsive wrapping */}
+                  <p className="text-[14px] sm:text-[15px] whitespace-pre-wrap break-words leading-relaxed select-text">
+                    {msg.text}
+                  </p>
+
+                  {/* Inline Footer Time + Status checkmarks */}
+                  <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-gray-400 select-none float-end ms-2">
+                    <span>{formatMessageTime(msg.timestamp)}</span>
+                    {isOut && (
+                      <span className="inline-flex">
+                        {msg.status === 'read' ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-gray-400" />
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  <div className="clear-both" />
+
+                  {/* Emoji Reactions Pills under message */}
+                  {msg.reactions && msg.reactions.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5 pt-1 select-none">
+                      {msg.reactions.map((r, rIdx) => (
+                        <button
+                          key={rIdx}
+                          onClick={() => onReactMessage(msg.id, r.emoji)}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs transition border ${
+                            r.userReacted
+                              ? 'bg-[#3390ec]/20 border-[#3390ec] text-[#3390ec] font-bold'
+                              : isDark
+                              ? 'bg-[#17212b] border-[#2f3f50] text-gray-300 hover:bg-[#232e3c]'
+                              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <span>{r.emoji}</span>
+                          <span className="text-[11px] font-semibold">{r.count}</span>
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
 
-                {/* Message Reactions Row */}
-                {msg.reactions && msg.reactions.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1.5 pt-1">
-                    {msg.reactions.map((r, rIdx) => (
+                {/* Floating Quick Action Bar on Hover (Reply, Reactions, More) */}
+                {isHovered && !isSelectionMode && (
+                  <div
+                    className={`absolute -top-3.5 z-20 flex items-center gap-0.5 p-1 rounded-full shadow-lg border backdrop-blur-md animate-fade-in ${
+                      isOut ? 'end-4' : 'start-4'
+                    } ${
+                      isDark
+                        ? 'bg-[#17212b]/95 border-[#2f3f50] text-gray-300'
+                        : 'bg-white/95 border-gray-200 text-gray-700'
+                    }`}
+                  >
+                    {/* Emoji reactions bar */}
+                    <div className="flex items-center gap-0.5 px-1 border-e border-gray-600/30">
+                      {['❤️', '👍', '🔥', '😂', '🎉', '👏'].map((em) => (
+                        <button
+                          key={em}
+                          onClick={() => onReactMessage(msg.id, em)}
+                          className="hover:scale-130 transition-transform p-0.5 text-sm"
+                        >
+                          {em}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Reply */}
+                    <button
+                      onClick={() => setReplyingMessage(msg)}
+                      className="p-1 rounded-full hover:bg-gray-500/20"
+                      title={isAr ? 'رد' : 'Reply'}
+                    >
+                      <Reply className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Copy Text */}
+                    <button
+                      onClick={() => handleCopyMessageText(msg.text)}
+                      className="p-1 rounded-full hover:bg-gray-500/20"
+                      title={isAr ? 'نسخ' : 'Copy'}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Pin */}
+                    <button
+                      onClick={() => onPinMessage(msg.id)}
+                      className="p-1 rounded-full hover:bg-gray-500/20"
+                      title={isAr ? 'تثبيت' : 'Pin'}
+                    >
+                      <Pin className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Delete */}
+                    {isOut && (
                       <button
-                        key={rIdx}
-                        onClick={() => onReactMessage(msg.id, r.emoji)}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs transition border select-none ${
-                          r.userReacted
-                            ? 'bg-[#3390ec]/20 border-[#3390ec] text-[#3390ec] font-bold'
-                            : isDark
-                            ? 'bg-[#17212b] border-[#2f3f50] text-gray-300 hover:bg-[#232e3c]'
-                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100'
-                        }`}
+                        onClick={() => setDeleteModalMsgId(msg.id)}
+                        className="p-1 rounded-full hover:bg-red-500/20 text-red-400"
+                        title={isAr ? 'حذف' : 'Delete'}
                       >
-                        <span>{r.emoji}</span>
-                        <span className="text-[11px] font-semibold">{r.count}</span>
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
-
-              {/* Hover Floating Actions Menu (Reply, React, Pin, Delete) */}
-              {isHovered && (
-                <div
-                  className={`absolute -top-3 z-20 flex items-center gap-0.5 p-1 rounded-full shadow-lg border backdrop-blur-sm ${
-                    isOut ? 'end-2' : 'start-2'
-                  } ${
-                    isDark
-                      ? 'bg-[#17212b]/95 border-[#2f3f50] text-gray-300'
-                      : 'bg-white/95 border-gray-200 text-gray-700'
-                  }`}
-                >
-                  {/* Emoji reactions bar */}
-                  <div className="flex items-center gap-0.5 px-1 border-e border-gray-600/30">
-                    {['❤️', '👍', '🔥', '😂', '🎉'].map((em) => (
-                      <button
-                        key={em}
-                        onClick={() => onReactMessage(msg.id, em)}
-                        className="hover:scale-130 transition-transform p-0.5 text-sm"
-                      >
-                        {em}
-                      </button>
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={() => setReplyingMessage(msg)}
-                    className="p-1 rounded-full hover:bg-gray-500/20"
-                    title={isAr ? 'رد' : 'Reply'}
-                  >
-                    <Reply className="w-3.5 h-3.5" />
-                  </button>
-
-                  <button
-                    onClick={() => onPinMessage(msg.id)}
-                    className="p-1 rounded-full hover:bg-gray-500/20"
-                    title={isAr ? 'تثبيت' : 'Pin'}
-                  >
-                    <Pin className="w-3.5 h-3.5" />
-                  </button>
-
-                  {isOut && (
-                    <button
-                      onClick={() => onDeleteMessage(msg.id)}
-                      className="p-1 rounded-full hover:bg-red-500/20 text-red-400"
-                      title={isAr ? 'حذف' : 'Delete'}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+            </React.Fragment>
           );
         })}
 
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Floating Scroll to Bottom Button with Unread Badge */}
+      {showScrollBottom && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-20 end-5 z-20 w-10 h-10 rounded-full bg-[#17212b]/90 text-[#3390ec] shadow-xl border border-gray-700/40 flex items-center justify-center hover:scale-110 active:scale-95 transition-all backdrop-blur-md"
+          title={isAr ? 'الانتقال لأسفل المحادثة' : 'Scroll to bottom'}
+        >
+          <ChevronDown className="w-5 h-5" />
+        </button>
+      )}
+
+      {/* Context Menu Dropdown (Right-click on message) */}
+      {contextMenu.visible && contextMenu.message && (
+        <div
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+          className={`fixed z-50 rounded-2xl shadow-2xl py-1.5 w-48 border backdrop-blur-md animate-scale-in select-none ${
+            isDark ? 'bg-[#242f3d]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
+          }`}
+        >
+          <button
+            onClick={() => {
+              setReplyingMessage(contextMenu.message);
+              setContextMenu({ visible: false, x: 0, y: 0, message: null });
+            }}
+            className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 ${
+              isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+            }`}
+          >
+            <Reply className="w-4 h-4 text-[#3390ec]" />
+            <span>{isAr ? 'رد' : 'Reply'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              handleCopyMessageText(contextMenu.message!.text);
+              setContextMenu({ visible: false, x: 0, y: 0, message: null });
+            }}
+            className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 ${
+              isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+            }`}
+          >
+            <Copy className="w-4 h-4 text-gray-400" />
+            <span>{isAr ? 'نسخ النص' : 'Copy text'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              handleCopyMessageLink(contextMenu.message!.id);
+              setContextMenu({ visible: false, x: 0, y: 0, message: null });
+            }}
+            className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 ${
+              isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+            }`}
+          >
+            <ExternalLink className="w-4 h-4 text-gray-400" />
+            <span>{isAr ? 'نسخ رابط الرسالة' : 'Copy link'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              onPinMessage(contextMenu.message!.id);
+              setContextMenu({ visible: false, x: 0, y: 0, message: null });
+            }}
+            className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 ${
+              isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+            }`}
+          >
+            <Pin className="w-4 h-4 text-gray-400" />
+            <span>
+              {contextMenu.message.isPinned
+                ? isAr
+                  ? 'إلغاء التثبيت'
+                  : 'Unpin'
+                : isAr
+                ? 'تثبيت الرسالة'
+                : 'Pin'}
+            </span>
+          </button>
+
+          <button
+            onClick={() => {
+              setIsSelectionMode(true);
+              setSelectedMsgIds([contextMenu.message!.id]);
+              setContextMenu({ visible: false, x: 0, y: 0, message: null });
+            }}
+            className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 ${
+              isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+            }`}
+          >
+            <CheckSquare className="w-4 h-4 text-gray-400" />
+            <span>{isAr ? 'تحديد' : 'Select'}</span>
+          </button>
+
+          <div className="my-1 border-t border-gray-700/20" />
+
+          {contextMenu.message.isOut && (
+            <button
+              onClick={() => {
+                setDeleteModalMsgId(contextMenu.message!.id);
+                setContextMenu({ visible: false, x: 0, y: 0, message: null });
+              }}
+              className={`w-full text-start px-3.5 py-2 text-xs flex items-center gap-2.5 text-red-400 ${
+                isDark ? 'hover:bg-[#2b394a]' : 'hover:bg-gray-100'
+              }`}
+            >
+              <Trash2 className="w-4 h-4 text-red-400" />
+              <span>{isAr ? 'حذف' : 'Delete'}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Bottom Message Input Bar */}
       <MessageInput
         onSendMessage={onSendMessage}
         replyToMessage={replyingMessage}
         onCancelReply={() => setReplyingMessage(null)}
+        lang={lang}
+        isDark={isDark}
+      />
+
+      {/* Modals */}
+      {/* 1. Clear History Modal */}
+      <ClearHistoryModal
+        isOpen={isClearModalOpen}
+        onClose={() => setIsClearModalOpen(false)}
+        onConfirm={(alsoForEveryone) => {
+          onClearHistory(chat.id, alsoForEveryone);
+          onToast(isAr ? 'تم مسح سجل المحادثة' : 'Chat history cleared', 'info');
+        }}
+        chat={chat}
+        lang={lang}
+        isDark={isDark}
+      />
+
+      {/* 2. Leave Group Modal */}
+      <LeaveGroupModal
+        isOpen={isLeaveModalOpen}
+        onClose={() => setIsLeaveModalOpen(false)}
+        onConfirm={() => {
+          onLeaveGroup(chat.id);
+          onToast(isAr ? 'تمت مغادرة المجموعة' : 'Left the group', 'info');
+        }}
+        chat={chat}
+        lang={lang}
+        isDark={isDark}
+      />
+
+      {/* 3. Share Link Modal */}
+      <ShareLinkModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        chat={chat}
+        onToast={onToast}
+        lang={lang}
+        isDark={isDark}
+      />
+
+      {/* 4. Report Chat Modal */}
+      <ReportChatModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        chat={chat}
+        onReportSubmitted={(reason, details) => {
+          onReportChat(chat.id, reason, details);
+          onToast(
+            isAr ? 'تم إرسال بلاغك بنجاح للتحقق' : 'Report submitted successfully',
+            'success'
+          );
+        }}
+        lang={lang}
+        isDark={isDark}
+      />
+
+      {/* 5. Delete Message Modal */}
+      <DeleteMessageModal
+        isOpen={!!deleteModalMsgId}
+        onClose={() => setDeleteModalMsgId(null)}
+        onConfirm={(alsoForEveryone) => {
+          if (deleteModalMsgId) {
+            onDeleteMessage(deleteModalMsgId);
+            onToast(isAr ? 'تم حذف الرسالة' : 'Message deleted', 'info');
+          }
+        }}
         lang={lang}
         isDark={isDark}
       />

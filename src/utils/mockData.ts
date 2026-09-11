@@ -69,6 +69,15 @@ export const INITIAL_CHATS: TelegramChat[] = [
     unreadCount: 12,
     membersCount: 1420,
     description: 'مجموعة نقاشات برمجية وتقنية وتبادل خبرات التطوير.',
+    inviteLink: 'https://t.me/+join_devs_community_official',
+    members: [
+      { id: 'm_owner', name: 'خالد عبدالله (المنشئ)', role: 'owner', isOnline: true, avatarColor: '#e17076' },
+      { id: 'm_admin1', name: 'سارة خالد', role: 'admin', isOnline: true, avatarColor: '#65aadd' },
+      { id: 'm_admin2', name: 'فهد المهندس', role: 'admin', isOnline: false, avatarColor: '#7bc862' },
+      { id: 'm_user1', name: 'عمر القحطاني', role: 'member', isOnline: true, avatarColor: '#faa774' },
+      { id: 'm_user2', name: 'نورة السالم', role: 'member', isOnline: false, avatarColor: '#ee7aae' },
+      { id: 'm_user3', name: 'طارق زياد', role: 'member', isOnline: true, avatarColor: '#a695e7' },
+    ],
     lastMessage: {
       text: 'سارة: تم إطلاق التحديث مع دعم كامل لبروتوكول MTProto!',
       timestamp: Date.now() - 1000 * 60 * 80,

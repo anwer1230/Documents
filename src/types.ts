@@ -82,6 +82,15 @@ export interface TelegramChat {
   isOnline?: boolean;
   membersCount?: number;
   description?: string;
+  inviteLink?: string;
+  members?: Array<{
+    id: string;
+    name: string;
+    role?: 'owner' | 'admin' | 'member';
+    isOnline?: boolean;
+    avatarUrl?: string;
+    avatarColor?: string;
+  }>;
 }
 
 export type ChatFolder = 'all' | 'personal' | 'channels' | 'groups' | 'bots' | 'unread';

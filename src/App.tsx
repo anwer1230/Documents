@@ -10,6 +10,11 @@ import { NewChatModal } from './components/NewChatModal';
 import { ContactsModal } from './components/ContactsModal';
 import { MediaViewerModal } from './components/MediaViewerModal';
 import { AddAccountModal } from './components/AddAccountModal';
+import { Toast, ToastData } from './components/Toast';
+import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
+import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
+import { ShareLinkModal } from './components/modals/ShareLinkModal';
+import { ReportChatModal } from './components/modals/ReportChatModal';
 import { ShieldCheck, Loader2, Users, UserPlus, Sparkles } from 'lucide-react';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
@@ -79,6 +84,15 @@ export default function App() {
   
   // Media Lightbox
   const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
+
+  // Toast notification state
+  const [toast, setToast] = useState<ToastData | null>(null);
+  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
+    setToast({ id: String(Date.now()), message, type });
+  };
+
+  // Drawer modal state
+  const [drawerModal, setDrawerModal] = useState<'clear' | 'leave' | 'share' | 'report' | null>(null);
 
   // Real-time MTProto Typing Status per chat
   const [typingMap, setTypingMap] = useState<Record<string, TypingStatus>>({});
@@ -698,6 +712,33 @@ export default function App() {
     );
   };
 
+  // Leave Group / Channel
+  const handleLeaveGroup = (chatId: string) => {
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    setMessagesMap((prev) => {
+      const copy = { ...prev };
+      delete copy[chatId];
+      return copy;
+    });
+    if (selectedChatId === chatId) {
+      setSelectedChatId('saved_messages');
+    }
+  };
+
+  // Report Chat
+  const handleReportChat = (chatId: string, reason: string, details?: string) => {
+    console.log('Report received for chat:', chatId, { reason, details });
+  };
+
+  // Delete Multiple Messages (Selection Mode)
+  const handleDeleteMultipleMessages = (messageIds: string[]) => {
+    if (!selectedChatId) return;
+    setMessagesMap((prev) => ({
+      ...prev,
+      [selectedChatId]: (prev[selectedChatId] || []).filter((m) => !messageIds.includes(m.id)),
+    }));
+  };
+
   // Create new channel / group
   const handleCreateChat = (newChatData: Partial<TelegramChat>) => {
     const id = 'custom_' + Date.now();
@@ -857,11 +898,15 @@ export default function App() {
           onReactMessage={handleReactMessage}
           onPinMessage={handlePinMessage}
           onDeleteMessage={handleDeleteMessage}
+          onDeleteMultipleMessages={handleDeleteMultipleMessages}
           onToggleChatInfo={() => setIsChatInfoOpen(!isChatInfoOpen)}
           isChatInfoOpen={isChatInfoOpen}
           onToggleMute={handleToggleMute}
           onClearHistory={handleClearHistory}
+          onLeaveGroup={handleLeaveGroup}
+          onReportChat={handleReportChat}
           onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+          onToast={showToast}
           lang={themeConfig.language}
           isDark={themeConfig.isDark}
         />
@@ -874,13 +919,73 @@ export default function App() {
             isOpen={isChatInfoOpen}
             onClose={() => setIsChatInfoOpen(false)}
             onToggleMute={handleToggleMute}
-            onClearHistory={handleClearHistory}
+            onOpenClearHistory={() => setDrawerModal('clear')}
+            onOpenLeaveGroup={() => setDrawerModal('leave')}
+            onOpenShareLink={() => setDrawerModal('share')}
+            onOpenReportChat={() => setDrawerModal('report')}
             onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+            onToast={showToast}
             lang={themeConfig.language}
             isDark={themeConfig.isDark}
           />
         )}
       </div>
+
+      {/* Drawer Action Modals */}
+      {activeChat && (
+        <>
+          <ClearHistoryModal
+            isOpen={drawerModal === 'clear'}
+            onClose={() => setDrawerModal(null)}
+            onConfirm={(alsoForEveryone) => {
+              handleClearHistory(activeChat.id);
+              showToast(themeConfig.language === 'ar' ? 'تم مسح سجل المحادثة' : 'Chat history cleared', 'info');
+            }}
+            chat={activeChat}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+
+          <LeaveGroupModal
+            isOpen={drawerModal === 'leave'}
+            onClose={() => setDrawerModal(null)}
+            onConfirm={() => {
+              handleLeaveGroup(activeChat.id);
+              setIsChatInfoOpen(false);
+            }}
+            chat={activeChat}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+
+          <ShareLinkModal
+            isOpen={drawerModal === 'share'}
+            onClose={() => setDrawerModal(null)}
+            chat={activeChat}
+            onToast={showToast}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+
+          <ReportChatModal
+            isOpen={drawerModal === 'report'}
+            onClose={() => setDrawerModal(null)}
+            chat={activeChat}
+            onReportSubmitted={(reason, details) => {
+              handleReportChat(activeChat.id, reason, details);
+              showToast(
+                themeConfig.language === 'ar' ? 'تم إرسال بلاغك بنجاح' : 'Report submitted successfully',
+                'success'
+              );
+            }}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+        </>
+      )}
+
+      {/* Toast Notification */}
+      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {/* Settings & Main Menu Drawer */}
       <SettingsDrawer
