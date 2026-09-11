@@ -9,6 +9,8 @@ import { SettingsDrawer } from './components/SettingsDrawer';
 import { NewChatModal } from './components/NewChatModal';
 import { ContactsModal } from './components/ContactsModal';
 import { MediaViewerModal } from './components/MediaViewerModal';
+import { StoryViewerModal } from './components/StoryViewerModal';
+import { TelegramPeerStories } from './types';
 import { AddAccountModal } from './components/AddAccountModal';
 import { MiniAppModal } from './components/MiniAppModal';
 import { Toast, ToastData } from './components/Toast';
@@ -89,6 +91,103 @@ export default function App() {
   
   // Media Lightbox
   const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
+  const [peerStoriesList, setPeerStoriesList] = useState<TelegramPeerStories[]>([]);
+  const [activeStoryPeerId, setActiveStoryPeerId] = useState<string | null>(null);
+
+  // Fetch Stories
+  useEffect(() => {
+    const fetchStories = async () => {
+      try {
+        const res = await fetch('/api/telegram/stories');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.peerStories && data.peerStories.length > 0) {
+            setPeerStoriesList(data.peerStories);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch stories from MTProto:', err);
+      }
+      setPeerStoriesList([
+        {
+          peerId: 'me',
+          stories: [
+            {
+              id: 'st_1',
+              peerId: 'me',
+              date: Date.now() - 3600000,
+              caption: 'مرحباً بكم في تيليجرام! استمتع بجميع الميزات الحقيقية.',
+              mediaType: 'photo',
+              reactionsCount: 12,
+            },
+          ],
+        },
+        {
+          peerId: 'telegram',
+          stories: [
+            {
+              id: 'st_2',
+              peerId: 'telegram',
+              date: Date.now() - 7200000,
+              caption: 'تحديث جديد: دعم القصص والتفاعلات والتعرف على النصوص (OCR)!',
+              mediaType: 'photo',
+              reactionsCount: 45,
+            },
+          ],
+        },
+      ]);
+    };
+    fetchStories();
+  }, [currentUser]);
+
+  const handleOpenStory = (peerId: string) => {
+    setActiveStoryPeerId(peerId);
+  };
+
+  const handleReactToStory = async (peerId: string, storyId: string, emoji: string) => {
+    setPeerStoriesList((prev) =>
+      prev.map((p) =>
+        p.peerId === peerId
+          ? {
+              ...p,
+              stories: p.stories.map((s) =>
+                s.id === storyId ? { ...s, reactionsCount: (s.reactionsCount || 0) + 1 } : s
+              ),
+            }
+          : p
+      )
+    );
+    try {
+      await fetch('/api/telegram/stories/react', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peerId, storyId, emoji }),
+      });
+    } catch (err) {
+      console.warn('Error reacting to story:', err);
+    }
+  };
+
+  const handleReadStory = async (peerId: string, storyId: string) => {
+    setPeerStoriesList((prev) =>
+      prev.map((p) =>
+        p.peerId === peerId
+          ? {
+              ...p,
+              stories: p.stories.map((s) => (s.id === storyId ? { ...s, isViewed: true } : s)),
+            }
+          : p
+      )
+    );
+    try {
+      await fetch('/api/telegram/stories/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peerId, maxId: storyId }),
+      });
+    } catch {}
+  };
 
   // Toast notification state
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -1089,6 +1188,22 @@ export default function App() {
   const handleReactMessage = (messageId: string, emoji: string) => {
     if (!selectedChatId) return;
 
+    // Send to real MTProto backend
+    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+      const numId = Number(messageId.replace(/\D/g, ''));
+      if (numId) {
+        fetch('/api/telegram/send-reaction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peerId: selectedChatId,
+            messageId: numId,
+            emoji,
+          }),
+        }).catch((err) => console.warn('Failed to send reaction to MTProto:', err));
+      }
+    }
+
     setMessagesMap((prev) => {
       const list = prev[selectedChatId] || [];
       const updated = list.map((m) => {
@@ -1345,6 +1460,8 @@ export default function App() {
           onOpenAddAccount={() => setIsAddAccountOpen(true)}
           onSwitchAccount={handleSwitchAccount}
           typingMap={typingMap}
+          peerStoriesList={peerStoriesList}
+          onOpenStory={handleOpenStory}
         />
 
         {/* Center Chat Window */}
@@ -1500,6 +1617,17 @@ export default function App() {
         onClose={() => setIsContactsOpen(false)}
         onSelectContact={handleSelectContact}
         lang={themeConfig.language}
+        isDark={themeConfig.isDark}
+      />
+
+      {/* Story Viewer Modal */}
+      <StoryViewerModal
+        isOpen={!!activeStoryPeerId}
+        onClose={() => setActiveStoryPeerId(null)}
+        peerStoriesList={peerStoriesList}
+        initialPeerId={activeStoryPeerId || undefined}
+        onReact={handleReactToStory}
+        onRead={handleReadStory}
         isDark={themeConfig.isDark}
       />
 

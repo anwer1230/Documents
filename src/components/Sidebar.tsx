@@ -19,7 +19,8 @@ import {
   UserPlus,
   Edit2,
 } from 'lucide-react';
-import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount, TypingStatus } from '../types';
+import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount, TypingStatus, TelegramPeerStories } from '../types';
+import { StoriesListBar } from './StoriesListBar';
 
 interface SidebarProps {
   chats: TelegramChat[];
@@ -38,6 +39,8 @@ interface SidebarProps {
   onOpenAddAccount?: () => void;
   onSwitchAccount?: (accountId: string) => void;
   typingMap?: Record<string, TypingStatus>;
+  peerStoriesList?: TelegramPeerStories[];
+  onOpenStory?: (peerId: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -57,6 +60,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAddAccount,
   onSwitchAccount,
   typingMap = {},
+  peerStoriesList = [],
+  onOpenStory,
 }) => {
   const isAr = lang === 'ar';
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -450,6 +455,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
       </div>
+
+      {/* Stories bar */}
+      {peerStoriesList && peerStoriesList.length > 0 && (
+        <StoriesListBar
+          peerStoriesList={peerStoriesList}
+          onOpenStory={onOpenStory || (() => {})}
+          isDark={isDark}
+          lang={lang}
+        />
+      )}
 
       {/* Chat List Scroll Area */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1 divide-y divide-transparent">

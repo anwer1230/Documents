@@ -496,23 +496,24 @@ async function startServer() {
     }
   });
 
-  // Send Message
+  // Send Message (supports text and media files)
   app.post('/api/telegram/send-message', async (req, res) => {
     const token = (req as any).sessionToken;
     const { peerId, text, replyTo, media } = req.body;
+
     if (!peerId || (!text && !media)) {
-      return res.status(400).json({ error: 'peerId والنص مطلوبان' });
+      return res.status(400).json({ error: 'peerId والنص أو الوسائط مطلوبان' });
     }
 
     try {
-      const result = await TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo);
-
+      const result = await TelegramService.sendMessage(token, peerId, text || '', replyTo, media);
+      
       // Broadcast new message via WebSocket to all connected clients
       broadcastToSession(token, {
         type: 'new_message',
         peerId,
         message: {
-          id: 'msg_' + Date.now(),
+          id: result?.id?.toString() || 'msg_' + Date.now(),
           chatId: peerId,
           senderId: 'me',
           senderName: 'أنا',
@@ -528,24 +529,74 @@ async function startServer() {
       res.json({ success: true, result });
     } catch (err: any) {
       console.error('Error sending message:', err);
-      // Still broadcast optimistic message
+      res.status(500).json({ error: err.message || 'فشل إرسال الرسالة عبر تيليجرام' });
+    }
+  });
+
+  // Send / Toggle Reaction via MTProto
+  app.post('/api/telegram/send-reaction', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, messageId, emoji } = req.body;
+    if (!peerId || !messageId) {
+      return res.status(400).json({ error: 'peerId and messageId are required' });
+    }
+    try {
+      const result = await TelegramService.sendReaction(token, peerId, messageId, emoji);
       broadcastToSession(token, {
-        type: 'new_message',
+        type: 'message_reaction',
         peerId,
-        message: {
-          id: 'msg_' + Date.now(),
-          chatId: peerId,
-          senderId: 'me',
-          senderName: 'أنا',
-          text: text || '',
-          timestamp: Date.now(),
-          isOut: true,
-          status: 'sent',
-          replyTo,
-          media,
-        },
+        messageId: String(messageId),
+        emoji,
+        userReacted: !!emoji,
       });
-      res.json({ success: true, simulated: true });
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error('Error sending reaction:', err);
+      res.status(500).json({ error: err.message || 'فشل إرسال التفاعل' });
+    }
+  });
+
+  // Get Peer Stories
+  app.get('/api/telegram/stories', async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const peerStories = await TelegramService.getAllStories(token);
+      res.json({ success: true, peerStories });
+    } catch (err: any) {
+      console.error('Error fetching stories:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب القصص' });
+    }
+  });
+
+  // Read Stories
+  app.post('/api/telegram/stories/read', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, maxId } = req.body;
+    if (!peerId) {
+      return res.status(400).json({ error: 'peerId is required' });
+    }
+    try {
+      const result = await TelegramService.readStories(token, peerId, maxId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error reading stories:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Send Story Reaction
+  app.post('/api/telegram/stories/react', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, storyId, emoji } = req.body;
+    if (!peerId || !storyId || !emoji) {
+      return res.status(400).json({ error: 'peerId, storyId, and emoji are required' });
+    }
+    try {
+      const result = await TelegramService.sendStoryReaction(token, peerId, storyId, emoji);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error reacting to story:', err);
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -556,7 +607,6 @@ async function startServer() {
     if (!peerId) {
       return res.status(400).json({ error: 'peerId مطلوب' });
     }
-
     try {
       await TelegramService.markAsRead(token, peerId);
     } catch {}
@@ -592,7 +642,7 @@ async function startServer() {
       res.json({ success: true, result });
     } catch (err: any) {
       console.error('Error setting typing:', err);
-      res.json({ success: true, simulated: true });
+      res.status(500).json({ error: err.message });
     }
   });
 

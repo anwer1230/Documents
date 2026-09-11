@@ -183,3 +183,42 @@ export interface TypingStatus {
   startedAt: number;
   expiresAt: number;
 }
+
+export interface TelegramStoryItem {
+  id: string;
+  peerId: string;
+  date: number;
+  caption?: string;
+  mediaUrl?: string;
+  mediaType?: 'photo' | 'video';
+  isViewed?: boolean;
+  reactionsCount?: number;
+  userReaction?: string;
+}
+
+export interface TelegramPeerStories {
+  peerId: string;
+  peerTitle: string;
+  peerAvatar?: string;
+  hasUnread: boolean;
+  maxReadId?: string;
+  stories: TelegramStoryItem[];
+}
+
+export interface OcrWordBox {
+  text: string;
+  bbox: {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  };
+  confidence: number;
+}
+
+export interface OcrResult {
+  fullText: string;
+  words: OcrWordBox[];
+  imageWidth: number;
+  imageHeight: number;
+}

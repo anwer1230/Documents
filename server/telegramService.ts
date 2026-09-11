@@ -8,12 +8,13 @@ import { ensureTelegramPatch } from './patchTelegram.js';
 // Ensure 256-bit DH key padding patch is present
 ensureTelegramPatch();
 
-// Constants permanently embedded as requested by the user
+// System configuration constants
 export const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 22043994);
 export const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
 export const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8';
 export const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4';
 export const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:anwrfwad178@gmail.com';
+
 export const MAX_TELEGRAM_ACCOUNTS = 6;
 
 export interface SavedAccount {
@@ -81,6 +82,57 @@ export function sanitizeData(data: any): any {
   return data;
 }
 
+// Peer resolving helper for GramJS (handles usernames, string numeric IDs, channel IDs)
+export async function resolvePeer(client: TelegramClient, peerId: string | number): Promise<any> {
+  if (peerId === 'me' || peerId === 'self') {
+    return 'me';
+  }
+  if (typeof peerId === 'object' && peerId !== null) {
+    return peerId;
+  }
+  const str = String(peerId).trim();
+  if (!str) return 'me';
+
+  // Handle usernames starting with @
+  if (str.startsWith('@')) {
+    const username = str.slice(1);
+    try {
+      return await client.getInputEntity(username);
+    } catch {
+      try {
+        return await client.getEntity(username);
+      } catch {
+        return username;
+      }
+    }
+  }
+
+  // Handle channel IDs with -100 prefix
+  if (str.startsWith('-100')) {
+    const numPart = str.slice(4);
+    try {
+      return await client.getInputEntity(Number(numPart));
+    } catch {
+      try {
+        return await client.getEntity(Number(numPart));
+      } catch {
+        // fallback
+      }
+    }
+  }
+
+  // Regular input entity lookup
+  try {
+    return await client.getInputEntity(str);
+  } catch {
+    try {
+      return await client.getEntity(str);
+    } catch {
+      return str;
+    }
+  }
+}
+
 // Load saved multi-account storage
 function loadStorage(): MultiAccountStorage {
   try {
@@ -88,7 +140,6 @@ function loadStorage(): MultiAccountStorage {
       const raw = fs.readFileSync(SESSIONS_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (data && typeof data === 'object') {
-        // Migration from legacy flat format { [token]: stringSession }
         if (!data.sessions && !data.accounts) {
           const sessions: Record<string, string> = {};
           const accounts: SavedAccount[] = [];
@@ -166,7 +217,7 @@ export class TelegramService {
 
   /**
    * Continuous UpdatesHandler matching Telegram Web K specification
-   * Unpacks recursive Updates containers, new messages, reads, edits, deletes, and typing indicators
+   * Unpacks recursive Updates containers, new messages, reads, edits, deletes, typing indicators, and reactions
    */
   public static handleMtprotoUpdate(sessionToken: string, update: any, client: TelegramClient) {
     if (!TelegramService.onUpdateCallback || !update) return;
@@ -235,7 +286,7 @@ export class TelegramService {
         return;
       }
 
-      // 4. Edited Messages (UpdateEditMessage / UpdateEditChannelMessage)
+      // 4. Edited Messages
       if (className === 'UpdateEditMessage' || className === 'UpdateEditChannelMessage') {
         const msg = update.message;
         if (msg) {
@@ -258,7 +309,7 @@ export class TelegramService {
         return;
       }
 
-      // 5. Deleted Messages (UpdateDeleteMessages / UpdateDeleteChannelMessages)
+      // 5. Deleted Messages
       if (className === 'UpdateDeleteMessages') {
         const messageIds = (update.messages || []).map((id: any) => id.toString());
         TelegramService.onUpdateCallback(sessionToken, {
@@ -267,6 +318,7 @@ export class TelegramService {
         });
         return;
       }
+
       if (className === 'UpdateDeleteChannelMessages') {
         const channelId = update.channelId?.toString();
         const messageIds = (update.messages || []).map((id: any) => id.toString());
@@ -278,11 +330,8 @@ export class TelegramService {
         return;
       }
 
-      // 6. Read History Updates (Outbox = sent messages read; Inbox = incoming messages read)
-      if (
-        className === 'UpdateReadHistoryOutbox' ||
-        className === 'UpdateReadChannelOutbox'
-      ) {
+      // 6. Read History Updates
+      if (className === 'UpdateReadHistoryOutbox' || className === 'UpdateReadChannelOutbox') {
         const peerId =
           update.peer?.userId?.toString() ||
           update.peer?.channelId?.toString() ||
@@ -297,10 +346,8 @@ export class TelegramService {
         });
         return;
       }
-      if (
-        className === 'UpdateReadHistoryInbox' ||
-        className === 'UpdateReadChannelInbox'
-      ) {
+
+      if (className === 'UpdateReadHistoryInbox' || className === 'UpdateReadChannelInbox') {
         const peerId =
           update.peer?.userId?.toString() ||
           update.peer?.channelId?.toString() ||
@@ -316,7 +363,7 @@ export class TelegramService {
         return;
       }
 
-      // 7. Typing Updates (UpdateUserTyping / UpdateChatUserTyping / UpdateChannelUserTyping)
+      // 7. Typing Updates
       if (
         className === 'UpdateUserTyping' ||
         className === 'UpdateChatUserTyping' ||
@@ -328,22 +375,41 @@ export class TelegramService {
           update.userId?.toString() ||
           update.peer?.userId?.toString();
 
+        let actionType: 'typing' | 'recording' | 'uploading' = 'typing';
+        const actionName = update.action?.className || '';
+        if (actionName.includes('RecordAudio') || actionName.includes('Voice')) {
+          actionType = 'recording';
+        } else if (actionName.includes('Upload') || actionName.includes('Document')) {
+          actionType = 'uploading';
+        }
+
         TelegramService.onUpdateCallback(sessionToken, {
           type: 'typing_status',
           peerId,
-          action: 'typing',
+          action: actionType,
         });
         return;
       }
 
-      // 8. User Status Updates (Online / Offline)
-      if (className === 'UpdateUserStatus') {
-        const userId = update.userId?.toString();
-        const isOnline = update.status?.className === 'UserStatusOnline';
+      // 8. Reactions Updates (UpdateMessageReactions, UpdateBotMessageReaction)
+      if (className === 'UpdateMessageReactions' || className === 'UpdateBotMessageReaction') {
+        const peerId =
+          update.peer?.channelId?.toString() ||
+          update.peer?.chatId?.toString() ||
+          update.peer?.userId?.toString() ||
+          update.channelId?.toString();
+
+        const reactions = update.reactions?.results?.map((r: any) => ({
+          emoji: r.reaction?.emoticon || '❤️',
+          count: r.count,
+          userReacted: !!r.chosenOrder,
+        })) || [];
+
         TelegramService.onUpdateCallback(sessionToken, {
-          type: 'user_status',
-          userId,
-          isOnline,
+          type: 'message_reaction',
+          peerId,
+          messageId: update.msgId?.toString() || update.messageId?.toString(),
+          reactions,
         });
         return;
       }
@@ -353,19 +419,16 @@ export class TelegramService {
   }
 
   public static async markAsRead(sessionToken: string, peerId: string) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      await client.invoke(
-        new Api.messages.ReadHistory({
-          peer: peerId,
-          maxId: 0,
-        })
-      );
-      return { success: true };
-    } catch (err: any) {
-      return { success: true, simulated: true };
-    }
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const peer = await resolvePeer(client, peerId);
+    await client.invoke(
+      new Api.messages.ReadHistory({
+        peer,
+        maxId: 0,
+      })
+    );
+    return { success: true };
   }
 
   public static async getOrCreateClient(sessionToken: string, sessionString: string = ''): Promise<TelegramClient> {
@@ -377,13 +440,11 @@ export class TelegramService {
       return existing.client;
     }
 
-    // If an existing connection attempt is in-flight for this sessionToken, await it
     if (connectionLocks.has(sessionToken)) {
       return connectionLocks.get(sessionToken)!;
     }
 
     const connectPromise = (async () => {
-      // Check if saved on disk
       if (!sessionString) {
         const storage = loadStorage();
         if (storage.sessions[sessionToken]) {
@@ -403,16 +464,13 @@ export class TelegramService {
         useWSS: false,
       });
 
-      // Avoid noisy debug logs in console
       client.setLogLevel(LogLevel.WARN);
 
       try {
         await client.connect();
       } catch (connErr: any) {
-        // If saved session was corrupt or invalidated, purge it
         if (sessionString) {
           removePersistedSession(sessionToken);
-          // Try a clean unauthenticated session
           const freshSession = new StringSession('');
           const fallbackClient = new TelegramClient(freshSession, TELEGRAM_API_ID, TELEGRAM_API_HASH, {
             connectionRetries: 3,
@@ -432,7 +490,6 @@ export class TelegramService {
         throw connErr;
       }
 
-      // Attach continuous MTProto updates handler matching Telegram Web K
       try {
         client.addEventHandler(async (update: any) => {
           TelegramService.handleMtprotoUpdate(sessionToken, update, client);
@@ -446,7 +503,6 @@ export class TelegramService {
         isLoggedIn: false,
         createdAt: Date.now(),
       });
-
       return client;
     })();
 
@@ -461,7 +517,6 @@ export class TelegramService {
   public static async sendCode(sessionToken: string, phoneNumber: string) {
     const client = await this.getOrCreateClient(sessionToken);
     const cleanedPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');
-
     const res = await client.sendCode(
       {
         apiId: TELEGRAM_API_ID,
@@ -491,7 +546,6 @@ export class TelegramService {
     let session = activeSessions.get(sessionToken);
     let matchedToken = sessionToken;
 
-    // 1. Resolve session via pendingAuthByHash
     if (!session && phoneCodeHash && pendingAuthByHash.has(phoneCodeHash)) {
       const pending = pendingAuthByHash.get(phoneCodeHash)!;
       const s = activeSessions.get(pending.sessionToken);
@@ -501,7 +555,6 @@ export class TelegramService {
       }
     }
 
-    // 2. Resolve session via pendingAuthByPhone
     if (!session && phoneNumber) {
       const clean = phoneNumber.replace(/[\s\-\(\)]/g, '');
       if (pendingAuthByPhone.has(clean)) {
@@ -514,7 +567,6 @@ export class TelegramService {
       }
     }
 
-    // 3. Resolve session via iterate over activeSessions matching phoneCodeHash
     if (!session && phoneCodeHash) {
       for (const [tok, s] of activeSessions.entries()) {
         if (s.phoneCodeHash === phoneCodeHash) {
@@ -525,7 +577,6 @@ export class TelegramService {
       }
     }
 
-    // 4. Resolve session if there is any pending unauthenticated session
     if (!session) {
       for (const [tok, s] of activeSessions.entries()) {
         if (s.phoneCodeHash && !s.isLoggedIn) {
@@ -539,7 +590,6 @@ export class TelegramService {
     const hash = phoneCodeHash || session?.phoneCodeHash;
     const phone = phoneNumber ? phoneNumber.replace(/[\s\-\(\)]/g, '') : session?.phoneNumber;
 
-    // 5. If still no in-memory session but we have hash and phone, dynamically re-create client
     if (!session && hash && phone) {
       const client = await this.getOrCreateClient(sessionToken);
       session = {
@@ -554,22 +604,20 @@ export class TelegramService {
     }
 
     if (!session) {
-      throw new Error('No active authentication session found. Please request a code first.');
+      throw new Error('لم يتم العثور على جلسة مصادقة نشطة. يرجى طلب الرمز أولاً.');
     }
 
-    // Alias this session to current sessionToken so future calls always match
     if (sessionToken && !activeSessions.has(sessionToken)) {
       activeSessions.set(sessionToken, session);
     }
 
     if (!hash || !phone) {
-      throw new Error('Phone number or phone code hash is missing. Please restart login.');
+      throw new Error('رقم الهاتف أو رمز التحقق غير مكتمل. يرجى إعادة المحاولة.');
     }
 
     const client = session.client;
-
     try {
-      const result = await client.invoke(
+      await client.invoke(
         new Api.auth.SignIn({
           phoneNumber: phone,
           phoneCodeHash: hash,
@@ -581,7 +629,6 @@ export class TelegramService {
       session.isLoggedIn = true;
       session.user = me;
 
-      // Save StringSession
       const sessionString = client.session.save() as unknown as string;
       persistSession(sessionToken, sessionString);
       if (matchedToken !== sessionToken) {
@@ -589,7 +636,6 @@ export class TelegramService {
       }
       this.saveAccount(sessionToken, me);
 
-      // Clean up consumed pending auth maps
       if (hash) pendingAuthByHash.delete(hash);
       if (phone) pendingAuthByPhone.delete(phone);
 
@@ -604,7 +650,7 @@ export class TelegramService {
         return {
           success: false,
           needs2FA: true,
-          message: 'Two-Step Verification (2FA) password is required.',
+          message: 'يتطلب التحقق بخطوتين (2FA) كلمة المرور الخاصة بك.',
           sessionToken,
         };
       }
@@ -617,7 +663,6 @@ export class TelegramService {
     let matchedToken = sessionToken;
 
     if (!session) {
-      // Find any session waiting for 2FA password
       for (const [tok, s] of activeSessions.entries()) {
         if (s.phoneCodeHash || s.phoneNumber) {
           session = s;
@@ -628,7 +673,6 @@ export class TelegramService {
     }
 
     if (!session) {
-      // Fallback: try active client
       for (const [tok, s] of activeSessions.entries()) {
         if (s.client && !s.isLoggedIn) {
           session = s;
@@ -639,10 +683,9 @@ export class TelegramService {
     }
 
     if (!session) {
-      throw new Error('No active session. Please restart login.');
+      throw new Error('لا توجد جلسة نشطة. يرجى إعادة تسجيل الدخول.');
     }
 
-    // Alias session
     if (sessionToken && !activeSessions.has(sessionToken)) {
       activeSessions.set(sessionToken, session);
     }
@@ -720,7 +763,6 @@ export class TelegramService {
       }
     }
 
-    // Try loading saved session
     const storage = loadStorage();
     if (storage.sessions[sessionToken]) {
       try {
@@ -812,7 +854,6 @@ export class TelegramService {
     const storage = loadStorage();
     const account = storage.accounts.find(a => a.id === tokenOrId || a.sessionToken === tokenOrId);
     const token = account ? account.sessionToken : tokenOrId;
-
     const session = activeSessions.get(token);
     if (session && session.client) {
       try {
@@ -821,7 +862,6 @@ export class TelegramService {
     }
     activeSessions.delete(token);
     removePersistedSession(token);
-
     if (storage.activeAccountId === account?.id) {
       const remaining = storage.accounts.filter(a => a.sessionToken !== token);
       storage.activeAccountId = remaining[0]?.id;
@@ -841,10 +881,9 @@ export class TelegramService {
     return null;
   }
 
-  public static async getDialogs(sessionToken: string, limit: number = 40) {
+  public static async getDialogs(sessionToken: string, limit: number = 50) {
     const client = await this.getOrCreateClient(sessionToken);
     const dialogs = await client.getDialogs({ limit });
-
     return dialogs.map((d: any) => {
       let type = 'private';
       if (d.isChannel) type = 'channel';
@@ -878,19 +917,25 @@ export class TelegramService {
 
   public static async getMessages(sessionToken: string, peerId: string, limit: number = 50) {
     const client = await this.getOrCreateClient(sessionToken);
-    const messages = await client.getMessages(peerId, { limit });
+    const peer = await resolvePeer(client, peerId);
+    const messages = await client.getMessages(peer, { limit });
 
     return messages.map((m: any) => {
       let mediaType: string | undefined;
       let mediaTitle: string | undefined;
+      let mediaUrl: string | undefined;
 
       if (m.media) {
         const className = m.media.className || '';
-        if (className.includes('Photo')) mediaType = 'photo';
-        else if (className.includes('Document')) {
+        if (className.includes('Photo')) {
+          mediaType = 'photo';
+        } else if (className.includes('Document')) {
           const mime = m.media.document?.mimeType || '';
-          if (mime.startsWith('audio/') || mime.includes('ogg')) mediaType = 'voice';
-          else mediaType = 'document';
+          if (mime.startsWith('audio/') || mime.includes('ogg')) {
+            mediaType = 'voice';
+          } else {
+            mediaType = 'document';
+          }
           mediaTitle = m.media.document?.attributes?.find((a: any) => a.fileName)?.fileName || 'مستند';
         }
       }
@@ -952,76 +997,157 @@ export class TelegramService {
           ? {
               type: mediaType,
               title: mediaTitle,
+              url: mediaUrl,
             }
           : undefined,
         reactions: m.reactions?.results?.map((r: any) => ({
           emoji: r.reaction?.emoticon || '❤️',
           count: r.count,
+          userReacted: !!r.chosenOrder,
         })),
         replyMarkup,
       };
     });
   }
 
-  public static async sendMessage(sessionToken: string, peerId: string, text: string, replyTo?: number) {
+  public static async sendMessage(
+    sessionToken: string,
+    peerId: string,
+    text: string,
+    replyTo?: number,
+    media?: any
+  ) {
     const client = await this.getOrCreateClient(sessionToken);
-    const res = await client.sendMessage(peerId, {
+    const peer = await resolvePeer(client, peerId);
+
+    // If media payload with url is provided, send via sendFile
+    if (media && media.url) {
+      return await this.sendFile(sessionToken, peerId, media.url, {
+        caption: text,
+        replyTo,
+        fileName: media.fileName || media.title,
+        voiceNote: media.type === 'voice',
+        forceDocument: media.type === 'document',
+      });
+    }
+
+    const res = await client.sendMessage(peer, {
       message: text,
       replyTo: replyTo ? Number(replyTo) : undefined,
     });
     return sanitizeData(res);
   }
 
-  public static async deleteMessages(sessionToken: string, peerId: string, messageIds: number[], revoke: boolean = true) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      await client.invoke(
-        new Api.messages.DeleteMessages({
-          id: messageIds,
-          revoke,
-        })
-      );
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err.message };
+  public static async sendFile(
+    sessionToken: string,
+    peerId: string,
+    file: Buffer | string,
+    options: {
+      caption?: string;
+      replyTo?: number;
+      fileName?: string;
+      voiceNote?: boolean;
+      forceDocument?: boolean;
+    } = {}
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+
+    let fileObj: any = file;
+    if (typeof file === 'string' && file.startsWith('data:')) {
+      const commaIdx = file.indexOf(',');
+      const base64Data = file.slice(commaIdx + 1);
+      fileObj = Buffer.from(base64Data, 'base64');
+      if (options.fileName) {
+        (fileObj as any).name = options.fileName;
+      }
     }
+
+    const res = await client.sendFile(peer, {
+      file: fileObj,
+      caption: options.caption,
+      replyTo: options.replyTo ? Number(options.replyTo) : undefined,
+      voiceNote: options.voiceNote,
+      forceDocument: options.forceDocument,
+    });
+    return sanitizeData(res);
   }
 
-  public static async editMessage(sessionToken: string, peerId: string, messageId: number, text: string) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const res = await client.editMessage(peerId, {
-        message: messageId,
-        text,
-      });
-      return sanitizeData(res);
-    } catch (err: any) {
-      return { success: false, error: err.message };
-    }
+  public static async sendReaction(
+    sessionToken: string,
+    peerId: string,
+    messageId: number | string,
+    emoji?: string
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const { Api } = await import('telegram');
+
+    const reactions = emoji
+      ? [new Api.ReactionEmoji({ emoticon: emoji })]
+      : [];
+
+    const res = await client.invoke(
+      new Api.messages.SendReaction({
+        peer,
+        msgId: Number(messageId),
+        reaction: reactions,
+      })
+    );
+    return sanitizeData(res);
+  }
+
+  public static async deleteMessages(
+    sessionToken: string,
+    peerId: string,
+    messageIds: number[],
+    revoke: boolean = true
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const res = await client.invoke(
+      new Api.messages.DeleteMessages({
+        id: messageIds,
+        revoke,
+      })
+    );
+    return { success: true, result: sanitizeData(res) };
+  }
+
+  public static async editMessage(
+    sessionToken: string,
+    peerId: string,
+    messageId: number,
+    text: string
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const res = await client.editMessage(peer, {
+      message: messageId,
+      text,
+    });
+    return sanitizeData(res);
   }
 
   public static async setTyping(sessionToken: string, peerId: string, action: string = 'typing') {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      let act: any = new Api.SendMessageTypingAction();
-      if (action === 'recording') {
-        act = new Api.SendMessageRecordAudioAction();
-      } else if (action === 'uploading') {
-        act = new Api.SendMessageUploadDocumentAction({ progress: 50 });
-      }
-      await client.invoke(
-        new Api.messages.SetTyping({
-          peer: peerId,
-          action: act,
-        })
-      );
-      return { success: true };
-    } catch (err: any) {
-      // In case peer is simulated or client not yet ready
-      return { success: true, simulated: true };
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const peer = await resolvePeer(client, peerId);
+
+    let act: any = new Api.SendMessageTypingAction();
+    if (action === 'recording') {
+      act = new Api.SendMessageRecordAudioAction();
+    } else if (action === 'uploading') {
+      act = new Api.SendMessageUploadDocumentAction({ progress: 50 });
     }
+
+    const res = await client.invoke(
+      new Api.messages.SetTyping({
+        peer,
+        action: act,
+      })
+    );
+    return sanitizeData(res);
   }
 
   public static async searchGlobal(sessionToken: string, query: string) {
@@ -1029,254 +1155,195 @@ export class TelegramService {
       return [];
     }
     const cleanQuery = query.trim().replace(/^@/, '');
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const foundPeers: any[] = [];
 
-    // Curated high-profile channels for realistic preview and fallback
-    const defaultPublicChannels = [
-      {
-        id: 'channel_telegram_official',
-        title: 'Telegram News',
-        username: 'telegram',
-        type: 'channel' as const,
-        participantsCount: 6850000,
-        description: 'Official Telegram news and updates on major features.',
-        isVerified: true,
-        isJoined: false,
-      },
-      {
-        id: 'channel_durov',
-        title: "Durov's Channel",
-        username: 'durov',
-        type: 'channel' as const,
-        participantsCount: 3200000,
-        description: 'Thoughts and updates from Pavel Durov, founder of Telegram.',
-        isVerified: true,
-        isJoined: false,
-      },
-      {
-        id: 'channel_arabic_tech',
-        title: 'عالم التقنية والتطبيقات',
-        username: 'arabtech',
-        type: 'channel' as const,
-        participantsCount: 420000,
-        description: 'قناة تقنية عربية لمتابعة آخر أخبار الهواتف والذكاء الاصطناعي والتحديثات.',
-        isVerified: false,
-        isJoined: false,
-      },
-      {
-        id: 'channel_tg_tips',
-        title: 'Telegram Tips',
-        username: 'TelegramTips',
-        type: 'channel' as const,
-        participantsCount: 2150000,
-        description: 'Useful tips and tricks for mastering Telegram on all platforms.',
-        isVerified: true,
-        isJoined: false,
-      },
-      {
-        id: 'channel_design_k',
-        title: 'UI & Web Design',
-        username: 'webdesign_k',
-        type: 'channel' as const,
-        participantsCount: 185000,
-        description: 'Inspiring UI/UX design trends and modern web aesthetics.',
-        isVerified: false,
-        isJoined: false,
-      },
-      {
-        id: 'channel_aljazeera',
-        title: 'قناة الجزيرة الإخبارية',
-        username: 'AJArabic',
-        type: 'channel' as const,
-        participantsCount: 1950000,
-        description: 'تغطية إخبارية حية وشاملة على مدار الساعة لأهم الأحداث العالمية.',
-        isVerified: true,
-        isJoined: false,
-      },
-      {
-        id: 'channel_ai_hub',
-        title: 'Artificial Intelligence Hub',
-        username: 'ai_updates',
-        type: 'channel' as const,
-        participantsCount: 540000,
-        description: 'Daily news on Large Language Models, Open Source AI and robotics.',
-        isVerified: false,
-        isJoined: false,
-      },
-    ];
-
+    // 1. Invoke MTProto contacts.search
     try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-
-      const foundPeers: any[] = [];
-
-      // 1. Invoke MTProto contacts.search
-      try {
-        const searchResult: any = await client.invoke(
-          new Api.contacts.Search({
-            q: cleanQuery,
-            limit: 20,
-          })
-        );
-
-        if (searchResult) {
-          if (Array.isArray(searchResult.chats)) {
-            for (const c of searchResult.chats) {
-              const isChannel = c.broadcast || c.className === 'Channel';
-              const isSupergroup = c.megagroup;
-              const type = isChannel ? 'channel' : isSupergroup ? 'supergroup' : 'group';
-              foundPeers.push({
-                id: c.id?.toString(),
-                title: c.title || 'قناة تليجرام',
-                username: c.username || undefined,
-                type,
-                participantsCount: c.participantsCount,
-                description: c.about || undefined,
-                isVerified: !!c.verified,
-                isJoined: !c.left,
-              });
-            }
-          }
-
-          if (Array.isArray(searchResult.users)) {
-            for (const u of searchResult.users) {
-              const type = u.bot ? 'bot' : 'private';
-              const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || 'مستخدم';
-              foundPeers.push({
-                id: u.id?.toString(),
-                title: name,
-                username: u.username || undefined,
-                type,
-                isVerified: !!u.verified,
-                isJoined: false,
-              });
-            }
-          }
-        }
-      } catch (searchErr) {
-        console.warn('contacts.Search error:', searchErr);
-      }
-
-      // 2. Direct entity lookup if username looks specific
-      if (cleanQuery.length >= 3 && !foundPeers.some(p => p.username?.toLowerCase() === cleanQuery.toLowerCase())) {
-        try {
-          const entity: any = await client.getEntity(cleanQuery);
-          if (entity) {
-            const isChannel = entity.broadcast || entity.className === 'Channel';
-            const isSupergroup = entity.megagroup;
-            const isBot = !!entity.bot;
-            const type = isChannel ? 'channel' : isSupergroup ? 'supergroup' : isBot ? 'bot' : 'private';
-            const title = entity.title || [entity.firstName, entity.lastName].filter(Boolean).join(' ') || entity.username;
-            foundPeers.unshift({
-              id: entity.id?.toString(),
-              title: title || cleanQuery,
-              username: entity.username || cleanQuery,
+      const searchResult: any = await client.invoke(
+        new Api.contacts.Search({
+          q: cleanQuery,
+          limit: 25,
+        })
+      );
+      if (searchResult) {
+        if (Array.isArray(searchResult.chats)) {
+          for (const c of searchResult.chats) {
+            const isChannel = c.broadcast || c.className === 'Channel';
+            const isSupergroup = c.megagroup;
+            const type = isChannel ? 'channel' : isSupergroup ? 'supergroup' : 'group';
+            foundPeers.push({
+              id: c.id?.toString(),
+              title: c.title || 'قناة تليجرام',
+              username: c.username || undefined,
               type,
-              participantsCount: entity.participantsCount,
-              description: entity.about,
-              isVerified: !!entity.verified,
-              isJoined: !entity.left,
+              participantsCount: c.participantsCount,
+              description: c.about || undefined,
+              isVerified: !!c.verified,
+              isJoined: !c.left,
             });
           }
-        } catch (entityErr) {
-          // Username not found or private
+        }
+        if (Array.isArray(searchResult.users)) {
+          for (const u of searchResult.users) {
+            const type = u.bot ? 'bot' : 'private';
+            const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username || 'مستخدم';
+            foundPeers.push({
+              id: u.id?.toString(),
+              title: name,
+              username: u.username || undefined,
+              type,
+              isVerified: !!u.verified,
+              isJoined: false,
+            });
+          }
         }
       }
-
-      // Also match curated channels if query matches
-      const lowerQ = cleanQuery.toLowerCase();
-      const localMatches = defaultPublicChannels.filter(
-        c => c.title.toLowerCase().includes(lowerQ) || (c.username && c.username.toLowerCase().includes(lowerQ))
-      );
-
-      const merged = [...foundPeers];
-      for (const m of localMatches) {
-        if (!merged.some(p => (p.username && p.username.toLowerCase() === m.username.toLowerCase()) || p.id === m.id)) {
-          merged.push(m);
-        }
-      }
-
-      return merged;
-    } catch (err) {
-      console.warn('searchGlobal fallback to curated catalog:', err);
-      const lowerQ = cleanQuery.toLowerCase();
-      return defaultPublicChannels.filter(
-        c => c.title.toLowerCase().includes(lowerQ) || (c.username && c.username.toLowerCase().includes(lowerQ))
-      );
+    } catch (searchErr: any) {
+      console.warn('Api.contacts.Search:', searchErr.message);
     }
+
+    // 2. Direct username lookup
+    if (cleanQuery.length >= 3 && !foundPeers.some(p => p.username?.toLowerCase() === cleanQuery.toLowerCase())) {
+      try {
+        const entity: any = await client.getEntity(cleanQuery);
+        if (entity) {
+          const isChannel = entity.broadcast || entity.className === 'Channel';
+          const isSupergroup = entity.megagroup;
+          const isBot = !!entity.bot;
+          const type = isChannel ? 'channel' : isSupergroup ? 'supergroup' : isBot ? 'bot' : 'private';
+          const title = entity.title || [entity.firstName, entity.lastName].filter(Boolean).join(' ') || entity.username;
+          foundPeers.unshift({
+            id: entity.id?.toString(),
+            title: title || cleanQuery,
+            username: entity.username || cleanQuery,
+            type,
+            participantsCount: entity.participantsCount,
+            description: entity.about,
+            isVerified: !!entity.verified,
+            isJoined: !entity.left,
+          });
+        }
+      } catch {
+        // Not found
+      }
+    }
+
+    return foundPeers;
   }
 
   public static async joinChannel(sessionToken: string, channelPeerOrUsername: string) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const entity = await resolvePeer(client, channelPeerOrUsername);
 
-      let entity: any;
-      try {
-        entity = await client.getEntity(channelPeerOrUsername);
-      } catch (e) {
-        entity = channelPeerOrUsername;
-      }
+    const result: any = await client.invoke(
+      new Api.channels.JoinChannel({
+        channel: entity,
+      })
+    );
 
-      try {
-        const result: any = await client.invoke(
-          new Api.channels.JoinChannel({
-            channel: entity,
-          })
-        );
-        return {
-          success: true,
-          channel: {
-            id: entity?.id?.toString() || channelPeerOrUsername,
-            title: entity?.title || 'قناة تم الانضمام إليها',
-            username: entity?.username,
-            type: 'channel',
-            isJoined: true,
-          },
-          result: sanitizeData(result),
-        };
-      } catch (joinErr: any) {
-        console.warn('Api.channels.JoinChannel error:', joinErr);
-        return {
-          success: true,
-          channel: {
-            id: channelPeerOrUsername,
-            title: 'قناة',
-            type: 'channel',
-            isJoined: true,
-          },
-          simulated: true,
-          message: joinErr.message,
-        };
-      }
-    } catch (err: any) {
-      return {
-        success: true,
-        channel: {
-          id: channelPeerOrUsername,
-          title: 'قناة',
-          type: 'channel',
-          isJoined: true,
-        },
-        simulated: true,
-      };
-    }
+    return {
+      success: true,
+      channel: {
+        id: entity?.id?.toString() || channelPeerOrUsername,
+        title: entity?.title || 'قناة تليجرام',
+        username: entity?.username,
+        type: 'channel',
+        isJoined: true,
+      },
+      result: sanitizeData(result),
+    };
   }
 
   public static async leaveChannel(sessionToken: string, channelPeerOrUsername: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const entity = await resolvePeer(client, channelPeerOrUsername);
+
+    const result: any = await client.invoke(
+      new Api.channels.LeaveChannel({
+        channel: entity,
+      })
+    );
+    return { success: true, result: sanitizeData(result) };
+  }
+
+  public static async getAllStories(sessionToken: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+
     try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      const entity = await client.getEntity(channelPeerOrUsername);
-      await client.invoke(
-        new Api.channels.LeaveChannel({
-          channel: entity,
-        })
-      );
-      return { success: true };
+      const res: any = await client.invoke(new Api.stories.GetAllStories({}));
+      if (res && res.peerStories) {
+        return res.peerStories.map((ps: any) => {
+          const peerId = ps.peer?.userId?.toString() || ps.peer?.channelId?.toString() || 'user';
+          const storiesList = (ps.stories || []).map((st: any) => {
+            let mediaType: 'photo' | 'video' = 'photo';
+            if (st.media) {
+              const className = st.media.className || '';
+              if (className.includes('Video') || className.includes('Document')) {
+                mediaType = 'video';
+              }
+            }
+            return {
+              id: st.id?.toString() || String(st.id),
+              peerId,
+              date: (st.date || Math.floor(Date.now() / 1000)) * 1000,
+              caption: st.caption || '',
+              mediaType,
+              isViewed: !st.unread,
+              reactionsCount: st.views?.reactionsCount || 0,
+            };
+          });
+
+          return {
+            peerId,
+            maxReadId: ps.maxReadId?.toString(),
+            stories: storiesList,
+          };
+        });
+      }
+      return [];
     } catch (err: any) {
-      return { success: true, simulated: true };
+      console.warn('Api.stories.GetAllStories error:', err.message);
+      return [];
     }
+  }
+
+  public static async readStories(sessionToken: string, peerId: string, maxId: number | string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const peer = await resolvePeer(client, peerId);
+
+    const res = await client.invoke(
+      new Api.stories.ReadStories({
+        peer,
+        maxId: Number(maxId),
+      })
+    );
+    return { success: true, result: sanitizeData(res) };
+  }
+
+  public static async sendStoryReaction(
+    sessionToken: string,
+    peerId: string,
+    storyId: number | string,
+    emoji: string
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const peer = await resolvePeer(client, peerId);
+
+    const res = await client.invoke(
+      new Api.stories.SendReaction({
+        peer,
+        storyId: Number(storyId),
+        reaction: new Api.ReactionEmoji({ emoticon: emoji }),
+      })
+    );
+    return { success: true, result: sanitizeData(res) };
   }
 
   public static async getBotCallbackAnswer(
@@ -1286,134 +1353,78 @@ export class TelegramService {
     data?: string,
     game?: boolean
   ) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      const res: any = await client.invoke(
-        new Api.messages.GetBotCallbackAnswer({
-          peer: peerId,
-          msgId: Number(msgId),
-          data: data ? Buffer.from(data) : undefined,
-          game: !!game,
-        })
-      );
-      return {
-        success: true,
-        message: res.message || '',
-        alert: !!res.alert,
-        url: res.url || undefined,
-        hasUrl: !!res.hasUrl,
-      };
-    } catch (err: any) {
-      // Graceful fallback for demo or simulated bot responses
-      let alertMsg = 'تم تنفيذ الأمر بنجاح ✨';
-      if (data) {
-        if (data.includes('settings')) alertMsg = '⚙️ تم فتح إعدادات البوت';
-        else if (data.includes('help')) alertMsg = 'ℹ️ تفضل بمراجعة قائمة الأوامر المتاحة';
-        else if (data.includes('stats')) alertMsg = '📊 الإحصائيات: 1,420 مستخدم متصل';
-        else if (data.includes('confirm')) alertMsg = '✅ تم التأكيد بنجاح';
-        else if (data.includes('cancel')) alertMsg = '❌ تم الإلغاء';
-        else alertMsg = `تم استلام الإجراء: ${data}`;
-      }
-      return {
-        success: true,
-        simulated: true,
-        message: alertMsg,
-        alert: true,
-      };
-    }
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const peer = await resolvePeer(client, peerId);
+
+    const res: any = await client.invoke(
+      new Api.messages.GetBotCallbackAnswer({
+        peer,
+        msgId: Number(msgId),
+        data: data ? Buffer.from(data, 'utf-8') : undefined,
+        game: !!game,
+      })
+    );
+
+    return {
+      success: true,
+      message: res.message || '',
+      alert: !!res.alert,
+      url: res.url || undefined,
+      hasUrl: !!res.hasUrl,
+    };
   }
 
   public static async getBotInfo(sessionToken: string, botPeerId: string) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      const BotInfoClass = (Api as any).bots?.GetBotInfo || (Api as any).messages?.GetBotInfo;
-      const res: any = await client.invoke(
-        new BotInfoClass({
-          bot: botPeerId,
-          langCode: 'ar',
-        })
-      );
-      return {
-        description: res.description || '',
-        about: res.about || '',
-        commands: res.commands?.map((c: any) => ({
-          command: c.command,
-          description: c.description,
-        })) || [],
-      };
-    } catch (err: any) {
-      // Default fallback info
-      return {
-        description: 'مساعد ذكي آلي متكامل يوفر تفاعلات فورية وتطبيقات ويب مصغرة ولوحات أزرار متقدمة.',
-        about: 'Telegram Bot Platform',
-        commands: [
-          { command: 'start', description: 'تشغيل البوت وبدء المحادثة' },
-          { command: 'help', description: 'المساعدة ودليل استخدام البوت' },
-          { command: 'settings', description: 'تخصيص الإعدادات والتفضيلات' },
-          { command: 'app', description: 'فتح تطبيق الويب المصغر (Mini App)' },
-          { command: 'keyboard', description: 'إظهار لوحة الأزرار التفاعلية' },
-          { command: 'inline', description: 'دليل الاستعلام الفوري عبر @' },
-        ],
-      };
-    }
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const bot = await resolvePeer(client, botPeerId);
+
+    const BotInfoClass = (Api as any).bots?.GetBotInfo || (Api as any).messages?.GetBotInfo;
+    const res: any = await client.invoke(
+      new BotInfoClass({
+        bot,
+        langCode: 'ar',
+      })
+    );
+
+    return {
+      description: res.description || '',
+      about: res.about || '',
+      commands: res.commands?.map((c: any) => ({
+        command: c.command,
+        description: c.description,
+      })) || [],
+    };
   }
 
   public static async getInlineBotResults(sessionToken: string, botUsername: string, query: string) {
-    try {
-      const client = await this.getOrCreateClient(sessionToken);
-      const { Api } = await import('telegram');
-      const res: any = await client.invoke(
-        new Api.messages.GetInlineBotResults({
-          bot: botUsername,
-          peer: 'me',
-          query: query || '',
-          offset: '',
-        })
-      );
-      if (res && res.results) {
-        return res.results.map((r: any) => ({
-          id: r.id?.toString() || Math.random().toString(36).slice(2),
-          type: r.type || 'article',
-          title: r.title || r.id,
-          description: r.description || '',
-          thumbUrl: r.thumb?.url || r.photo?.url,
-          url: r.url,
-          contentText: r.sendMessage?.message || r.title || '',
-        }));
-      }
-    } catch (err) {
-      // Curated inline catalog for popular bots
+    const client = await this.getOrCreateClient(sessionToken);
+    const { Api } = await import('telegram');
+    const cleanBot = botUsername.trim().replace(/^@/, '');
+    const botEntity = await resolvePeer(client, cleanBot);
+
+    const res: any = await client.invoke(
+      new Api.messages.GetInlineBotResults({
+        bot: botEntity,
+        peer: await resolvePeer(client, 'me'),
+        query: query || '',
+        offset: '',
+      })
+    );
+
+    if (res && Array.isArray(res.results)) {
+      return res.results.map((r: any) => ({
+        id: r.id?.toString() || Math.random().toString(36).slice(2),
+        type: r.type || 'article',
+        title: r.title || r.id,
+        description: r.description || '',
+        thumbUrl: r.thumb?.url || r.photo?.url,
+        url: r.url,
+        contentText: r.sendMessage?.message || r.title || '',
+      }));
     }
-
-    const cleanBot = botUsername.toLowerCase().replace(/^@/, '');
-    const cleanQ = (query || '').toLowerCase().trim();
-
-    if (cleanBot === 'gif') {
-      const gifs = [
-        { id: 'gif_1', type: 'gif' as const, title: 'Happy Celebration 🎉', thumbUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&auto=format&fit=crop&q=80', contentText: '🎉 احتفال مميز!' },
-        { id: 'gif_2', type: 'gif' as const, title: 'Thumbs Up 👍', thumbUrl: 'https://images.unsplash.com/photo-1584447141267-3c72b223cb60?w=300&auto=format&fit=crop&q=80', contentText: '👍 ممتاز جداً!' },
-        { id: 'gif_3', type: 'gif' as const, title: 'Thinking Cat 🐱', thumbUrl: 'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=300&auto=format&fit=crop&q=80', contentText: '🤔 جاري التفكير...' },
-        { id: 'gif_4', type: 'gif' as const, title: 'Rocket Launch 🚀', thumbUrl: 'https://images.unsplash.com/photo-1517976487541-112df8b1a8d0?w=300&auto=format&fit=crop&q=80', contentText: '🚀 انطلاق إلى الفضاء!' },
-      ];
-      return cleanQ ? gifs.filter(g => g.title.toLowerCase().includes(cleanQ) || g.contentText.toLowerCase().includes(cleanQ)) : gifs;
-    }
-
-    if (cleanBot === 'pic' || cleanBot === 'bing') {
-      const pics = [
-        { id: 'pic_1', type: 'photo' as const, title: 'Nature Mountain 🏔️', thumbUrl: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=300&auto=format&fit=crop&q=80', contentText: '🏔️ صورة جبال خلابة من الطبيعة' },
-        { id: 'pic_2', type: 'photo' as const, title: 'Sunset Ocean 🌅', thumbUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=300&auto=format&fit=crop&q=80', contentText: '🌅 غروب الشمس الرائع على الشاطئ' },
-        { id: 'pic_3', type: 'photo' as const, title: 'Cyber City 🌃', thumbUrl: 'https://images.unsplash.com/photo-1508057198894-247b23fe5ade?w=300&auto=format&fit=crop&q=80', contentText: '🌃 أضواء المدينة المستقبلية' },
-      ];
-      return cleanQ ? pics.filter(p => p.title.toLowerCase().includes(cleanQ)) : pics;
-    }
-
-    // Default inline results for other bots
-    return [
-      { id: 'res_1', type: 'article' as const, title: `نتيجة: ${query || 'استعلام عام'}`, description: `استعلام فوري من @${cleanBot}`, contentText: `[استعلام فوري @${cleanBot}]: ${query || 'الاستعلام الفوري جاهز'}` },
-      { id: 'res_2', type: 'article' as const, title: 'رابط مباشر للتوثيق', description: 'https://core.telegram.org/bots/inline', contentText: 'وثائق تيليجرام للبوتات الفورية: https://core.telegram.org/bots/inline' },
-    ];
+    return [];
   }
 
   public static async logout(sessionToken: string) {
@@ -1421,9 +1432,7 @@ export class TelegramService {
     if (session && session.client) {
       try {
         await session.client.disconnect();
-      } catch {
-        // Ignore
-      }
+      } catch {}
     }
     activeSessions.delete(sessionToken);
     removePersistedSession(sessionToken);
