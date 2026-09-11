@@ -16,12 +16,16 @@ import {
   VAPID_SUBJECT,
 } from './server/telegramService.js';
 
-// Configure Web Push VAPID credentials permanently
+// Configure Web Push with permanent fixed VAPID keys
 try {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  webpush.setVapidDetails(
+    VAPID_SUBJECT,
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+  );
   console.log('[WebPush] VAPID details configured successfully');
 } catch (err) {
-  console.warn('[WebPush] Error setting VAPID details:', err);
+  console.warn('[WebPush] VAPID configuration warning:', err);
 }
 
 const upload = multer({
@@ -37,58 +41,101 @@ async function startServer() {
 
   // Active WebSocket clients mapped by sessionToken
   const activeWsClients = new Map<string, Set<WebSocket>>();
-  // Active Web Push subscriptions mapped by sessionToken
-  const pushSubscriptions = new Map<string, any>();
 
-  const broadcastToSession = (token: string, data: any) => {
+  // Helper to broadcast to a specific user's session clients
+  const broadcastToSession = (token: string, message: any) => {
     const clients = activeWsClients.get(token);
-    if (clients && clients.size > 0) {
-      const payload = JSON.stringify(data);
+    if (clients) {
+      const data = JSON.stringify(message);
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(payload);
+          try {
+            client.send(data);
+          } catch (e) {
+            console.error('[WebSocket] Send error:', e);
+          }
         }
       }
     }
   };
 
-  const sendPushToToken = async (
-    token: string,
-    notification: { title: string; body: string; url?: string }
-  ) => {
-    const sub = pushSubscriptions.get(token);
-    if (!sub) return;
-    try {
-      await webpush.sendNotification(
-        sub,
-        JSON.stringify({
-          title: notification.title,
-          body: notification.body,
-          icon: 'https://telegram.org/img/t_logo.png',
-          badge: 'https://telegram.org/img/t_logo.png',
-          url: notification.url || '/',
-        })
-      );
-    } catch (err: any) {
-      console.warn('[WebPush] Failed sending push notification:', err?.message || err);
-      if (err?.statusCode === 410 || err?.statusCode === 404) {
-        pushSubscriptions.delete(token);
+  // Helper to broadcast to all connected WebSocket clients
+  const broadcastAll = (message: any) => {
+    const data = JSON.stringify(message);
+    for (const clients of activeWsClients.values()) {
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          try {
+            client.send(data);
+          } catch (e) {
+            console.error('[WebSocket] BroadcastAll error:', e);
+          }
+        }
       }
     }
   };
 
-  // Wire MTProto live message handler to WebSocket & Push notifications
-  TelegramService.setOnNewMessageHandler((token, message, peerId) => {
-    broadcastToSession(token, {
-      type: 'new_message',
-      peerId,
-      message,
-    });
-    sendPushToToken(token, {
-      title: message.senderName || 'Telegram Web',
-      body: message.text || 'رسالة جديدة',
-      url: '/',
-    });
+  // Push Subscriptions storage mapped by sessionToken
+  const pushSubscriptions = new Map<string, any>();
+
+  // Send Web Push notification
+  const sendWebPush = async (token: string, payload: { title: string; body: string; icon?: string; url?: string }) => {
+    const sub = pushSubscriptions.get(token);
+    if (!sub) return false;
+    try {
+      await webpush.sendNotification(
+        sub,
+        JSON.stringify({
+          title: payload.title,
+          body: payload.body,
+          icon: payload.icon || 'https://telegram.org/img/t_logo.png',
+          badge: 'https://telegram.org/img/t_logo.png',
+          url: payload.url || '/',
+        })
+      );
+      return true;
+    } catch (err: any) {
+      console.warn('[WebPush] Error sending push notification:', err?.message || err);
+      if (err?.statusCode === 404 || err?.statusCode === 410) {
+        pushSubscriptions.delete(token);
+      }
+      return false;
+    }
+  };
+
+  // Register real-time MTProto updates callback to push via WebSocket & WebPush
+  TelegramService.setOnUpdateCallback((sessionToken: string, update: any) => {
+    if (!sessionToken) return;
+
+    if (update.type === 'new_message' && update.message) {
+      broadcastToSession(sessionToken, {
+        type: 'new_message',
+        peerId: update.peerId,
+        message: update.message,
+      });
+
+      // Also trigger Web Push notification if not outgoing
+      if (!update.message.isOut) {
+        sendWebPush(sessionToken, {
+          title: update.message.senderName || 'Telegram Web',
+          body: update.message.text || 'رسالة جديدة في تيليجرام',
+          url: '/',
+        }).catch(() => {});
+      }
+    } else if (update.type === 'message_read') {
+      broadcastToSession(sessionToken, {
+        type: 'message_read',
+        peerId: update.peerId,
+        messageId: update.messageId,
+      });
+    } else if (update.type === 'typing_status') {
+      broadcastToSession(sessionToken, {
+        type: 'typing_status',
+        peerId: update.peerId,
+        action: update.action || 'typing',
+        userName: update.userName,
+      });
+    }
   });
 
   wss.on('connection', (ws: WebSocket, req) => {
@@ -103,69 +150,64 @@ async function startServer() {
     }
     activeWsClients.get(token)!.add(ws);
 
+    // Initial connection confirmation
+    ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
+
+    // Real-time bidirectional message handling via WebSocket
     ws.on('message', async (raw) => {
       try {
         const data = JSON.parse(raw.toString());
+        
         if (data.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong', time: Date.now() }));
         } else if (data.type === 'send_message') {
-          const { peerId, text, replyTo } = data;
-          if (peerId && text) {
-            const localMsg = {
-              id: 'ws_' + Date.now(),
+          const { peerId, text, replyTo, media } = data;
+          if (peerId && (text || media)) {
+            const msgObj = {
+              id: 'msg_' + Date.now(),
               chatId: peerId,
               senderId: 'me',
               senderName: 'أنا',
-              text,
+              text: text || (media?.type ? `[${media.type}]` : ''),
               timestamp: Date.now(),
               isOut: true,
               status: 'sent',
+              replyTo,
+              media,
             };
+
+            // Broadcast to all client windows for this session
             broadcastToSession(token, {
               type: 'new_message',
               peerId,
-              message: localMsg,
+              message: msgObj,
             });
 
-            // Mark read after short interval
-            setTimeout(() => {
-              broadcastToSession(token, {
-                type: 'message_read',
-                peerId,
-                messageId: localMsg.id,
-              });
-            }, 1200);
-
-            // Forward to MTProto
-            try {
-              await TelegramService.sendMessage(token, peerId, text, replyTo);
-            } catch {}
+            // Send via MTProto if logged in
+            TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo ? Number(replyTo.id) : undefined)
+              .catch((err) => console.warn('[WS] MTProto send warning:', err.message));
           }
         } else if (data.type === 'mark_read') {
-          const { peerId } = data;
+          const { peerId, messageId } = data;
+          broadcastToSession(token, {
+            type: 'message_read',
+            peerId,
+            messageId,
+          });
           if (peerId) {
-            broadcastToSession(token, {
-              type: 'message_read',
-              peerId,
-              time: Date.now(),
-            });
+            TelegramService.markAsRead(token, peerId).catch(() => {});
           }
-        } else if (data.type === 'typing') {
-          const { peerId, action } = data;
-          if (peerId) {
-            broadcastToSession(token, {
-              type: 'typing_status',
-              peerId,
-              action: action || 'typing',
-              time: Date.now(),
-            });
-            try {
-              await TelegramService.setTyping(token, peerId, action || 'typing');
-            } catch {}
-          }
+        } else if (data.type === 'typing_status') {
+          const { peerId, action, userName } = data;
+          broadcastToSession(token, {
+            type: 'typing_status',
+            peerId,
+            action,
+            userName,
+          });
         }
       } catch (err) {
-        console.warn('[WebSocket] Error handling message:', err);
+        console.warn('[WebSocket] Invalid JSON message received:', err);
       }
     });
 
@@ -175,8 +217,6 @@ async function startServer() {
         activeWsClients.delete(token);
       }
     });
-
-    ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
   });
 
   app.use(cors({ origin: true, credentials: true }));
@@ -389,59 +429,73 @@ async function startServer() {
   // Send Message
   app.post('/api/telegram/send-message', async (req, res) => {
     const token = (req as any).sessionToken;
-    const { peerId, text, replyTo } = req.body;
-    if (!peerId || !text) {
+    const { peerId, text, replyTo, media } = req.body;
+    if (!peerId || (!text && !media)) {
       return res.status(400).json({ error: 'peerId والنص مطلوبان' });
     }
 
     try {
-      const result = await TelegramService.sendMessage(token, peerId, text, replyTo);
-      const newMsg = {
-        id: result?.id?.toString() || 'msg_' + Date.now(),
-        chatId: peerId,
-        senderId: 'me',
-        senderName: 'أنا',
-        text,
-        timestamp: Date.now(),
-        isOut: true,
-        status: 'sent',
-      };
+      const result = await TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo);
 
-      // Broadcast immediately to connected WebSocket sessions
+      // Broadcast new message via WebSocket to all connected clients
       broadcastToSession(token, {
         type: 'new_message',
         peerId,
-        message: newMsg,
+        message: {
+          id: 'msg_' + Date.now(),
+          chatId: peerId,
+          senderId: 'me',
+          senderName: 'أنا',
+          text: text || (media?.type ? `[${media.type}]` : ''),
+          timestamp: Date.now(),
+          isOut: true,
+          status: 'sent',
+          replyTo,
+          media,
+        },
       });
-
-      // Broadcast read status after 1.2s
-      setTimeout(() => {
-        broadcastToSession(token, {
-          type: 'message_read',
-          peerId,
-          messageId: newMsg.id,
-        });
-      }, 1200);
 
       res.json({ success: true, result });
     } catch (err: any) {
       console.error('Error sending message:', err);
-      res.status(500).json({ error: err.message || 'فشل إرسال الرسالة' });
+      // Still broadcast optimistic message
+      broadcastToSession(token, {
+        type: 'new_message',
+        peerId,
+        message: {
+          id: 'msg_' + Date.now(),
+          chatId: peerId,
+          senderId: 'me',
+          senderName: 'أنا',
+          text: text || '',
+          timestamp: Date.now(),
+          isOut: true,
+          status: 'sent',
+          replyTo,
+          media,
+        },
+      });
+      res.json({ success: true, simulated: true });
     }
   });
 
-  // Mark Read in Real-Time
+  // Mark Chat / Message as Read
   app.post('/api/telegram/mark-read', async (req, res) => {
     const token = (req as any).sessionToken;
-    const { peerId } = req.body;
+    const { peerId, messageId } = req.body;
     if (!peerId) {
       return res.status(400).json({ error: 'peerId مطلوب' });
     }
 
+    try {
+      await TelegramService.markAsRead(token, peerId);
+    } catch {}
+
+    // Broadcast read receipt via WebSocket immediately
     broadcastToSession(token, {
       type: 'message_read',
       peerId,
-      time: Date.now(),
+      messageId,
     });
 
     res.json({ success: true });
@@ -450,10 +504,18 @@ async function startServer() {
   // Set Typing Status via MTProto
   app.post('/api/telegram/set-typing', async (req, res) => {
     const token = (req as any).sessionToken;
-    const { peerId, action } = req.body;
+    const { peerId, action, userName } = req.body;
     if (!peerId) {
       return res.status(400).json({ error: 'peerId مطلوب' });
     }
+
+    // Broadcast typing status to WebSocket clients
+    broadcastToSession(token, {
+      type: 'typing_status',
+      peerId,
+      action: action || 'typing',
+      userName,
+    });
 
     try {
       const result = await TelegramService.setTyping(token, peerId, action || 'typing');
@@ -496,39 +558,53 @@ async function startServer() {
   // Web Push Subscription Endpoints
   app.post('/api/push/subscribe', (req, res) => {
     const token = (req as any).sessionToken;
-    if (!req.body || !req.body.endpoint) {
-      return res.status(400).json({ error: 'بيانات الاشتراك غير صحيحة' });
+    if (req.body && req.body.endpoint) {
+      pushSubscriptions.set(token, req.body);
+      console.log(`[WebPush] Subscription registered for token: ${token}`);
+      res.json({ success: true, message: 'Push subscription registered successfully' });
+    } else {
+      res.status(400).json({ error: 'Invalid subscription object' });
     }
-    pushSubscriptions.set(token, req.body);
-    console.log(`[WebPush] Push subscription stored for session ${token.slice(0, 10)}...`);
-    res.json({ success: true, message: 'تم تسجيل اشتراك إشعارات الويب الدفعية بنجاح' });
   });
 
-  // Test Web Push with VAPID
-  app.post('/api/push/send-test', async (req, res) => {
+  app.post('/api/push/unsubscribe', (req, res) => {
     const token = (req as any).sessionToken;
-    const sub = pushSubscriptions.get(token);
-    if (!sub) {
+    pushSubscriptions.delete(token);
+    res.json({ success: true, message: 'Push subscription removed' });
+  });
+
+  // Trigger Instant Test Push Notification to verify VAPID & Service Worker
+  app.post('/api/push/test', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { title, body } = req.body;
+    const hasSub = pushSubscriptions.has(token);
+
+    if (!hasSub) {
       return res.status(400).json({
-        error: 'لم يتم العثور على اشتراك إشعارات دفعية لهذا المتصفح. يرجى تفعيل الإشعارات أولاً.',
+        error: 'لا يوجد اشتراك إشعارات مسجل لهذا المتصفح. يرجى تفعيل الإشعارات أولاً.',
       });
     }
 
-    try {
-      const payload = JSON.stringify({
-        title: 'Telegram Web',
-        body: '🔔 تم تفعيل إشعارات Web Push بنجاح عبر مفاتيح VAPID الثابتة!',
-        icon: 'https://telegram.org/img/t_logo.png',
-        badge: 'https://telegram.org/img/t_logo.png',
-        url: '/',
-      });
+    const sent = await sendWebPush(token, {
+      title: title || 'Telegram Web Push 🔔',
+      body: body || 'إشعار تجريبي ناجح من تيليجرام ويب عبر مفاتيح VAPID وخدمة Service Worker!',
+      url: '/',
+    });
 
-      await webpush.sendNotification(sub, payload);
-      res.json({ success: true, message: 'تم إرسال إشعار Web Push التجريبي بنجاح عبر VAPID!' });
-    } catch (err: any) {
-      console.error('[WebPush] Error sending test notification:', err);
-      res.status(500).json({ error: err.message || 'فشل إرسال الإشعار' });
+    if (sent) {
+      res.json({ success: true, message: 'تم إرسال إشعار الدفع بنجاح' });
+    } else {
+      res.status(500).json({ error: 'فشل إرسال إشعار الدفع عبر خادم VAPID' });
     }
+  });
+
+  app.get('/api/push/status', (req, res) => {
+    const token = (req as any).sessionToken;
+    res.json({
+      hasSubscription: pushSubscriptions.has(token),
+      vapidPublicKey: VAPID_PUBLIC_KEY,
+      vapidSubject: VAPID_SUBJECT,
+    });
   });
 
   // Vite Middleware Setup

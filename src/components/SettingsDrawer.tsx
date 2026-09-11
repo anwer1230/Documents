@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   User,
@@ -21,9 +21,16 @@ import {
   CheckCircle2,
   Bell,
   Send,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { TelegramUser, TelegramThemeConfig, TelegramAccount } from '../types';
-import { subscribeToWebPush, sendTestWebPush } from '../utils/push';
+import {
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+  sendTestWebPush,
+  getPushSubscription,
+} from '../utils/pushNotifications';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -77,31 +84,49 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [bio, setBio] = useState(currentUser.bio || '');
   const [username, setUsername] = useState(currentUser.username || '');
 
-  // Web Push notification state
-  const [isPushSubscribing, setIsPushSubscribing] = useState(false);
-  const [isSendingTestPush, setIsSendingTestPush] = useState(false);
-  const [pushFeedback, setPushFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // Web Push Notifications state
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushStatusText, setPushStatusText] = useState('');
 
-  const handleActivatePush = async () => {
-    setIsPushSubscribing(true);
-    setPushFeedback(null);
-    const res = await subscribeToWebPush();
-    setIsPushSubscribing(false);
-    setPushFeedback({
-      type: res.success ? 'success' : 'error',
-      message: res.message,
+  useEffect(() => {
+    // Check current push subscription status
+    getPushSubscription().then((sub) => {
+      if (sub && Notification.permission === 'granted') {
+        setPushEnabled(true);
+      }
     });
+  }, []);
+
+  const handleTogglePush = async () => {
+    setPushLoading(true);
+    setPushStatusText('');
+    if (pushEnabled) {
+      await unsubscribeFromWebPush();
+      setPushEnabled(false);
+      setPushStatusText(isAr ? 'تم تعطيل إشعارات الويب' : 'Web Push disabled');
+    } else {
+      const res = await subscribeToWebPush();
+      if (res.success) {
+        setPushEnabled(true);
+        setPushStatusText(isAr ? 'تم تفعيل إشعارات VAPID بنجاح! 🎉' : 'Web Push enabled! 🎉');
+      } else {
+        setPushStatusText(res.error || (isAr ? 'فشل تفعيل الإشعارات' : 'Failed to enable push'));
+      }
+    }
+    setPushLoading(false);
   };
 
-  const handleSendTestPush = async () => {
-    setIsSendingTestPush(true);
-    setPushFeedback(null);
+  const handleTestPush = async () => {
+    setPushLoading(true);
+    setPushStatusText(isAr ? 'جارٍ إرسال إشعار تجريبي...' : 'Sending test push...');
     const res = await sendTestWebPush();
-    setIsSendingTestPush(false);
-    setPushFeedback({
-      type: res.success ? 'success' : 'error',
-      message: res.message,
-    });
+    if (res.success) {
+      setPushStatusText(isAr ? 'تم إرسال الإشعار بنجاح! تحقق من جهازك' : 'Test push sent successfully!');
+    } else {
+      setPushStatusText(res.error || (isAr ? 'فشل إرسال الإشعار التجريبي' : 'Failed to send test push'));
+    }
+    setPushLoading(false);
   };
 
   if (!isOpen) return null;
@@ -537,6 +562,66 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   ))}
                 </div>
               </div>
+
+              {/* Web Push Notifications (VAPID) */}
+              <div className={`p-3 rounded-xl border space-y-2 mt-4 ${
+                themeConfig.isDark ? 'bg-[#242f3d]/70 border-[#2f3f50]' : 'bg-gray-50 border-gray-200'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-[#3390ec]" />
+                    <span className="text-xs font-semibold">
+                      {isAr ? 'إشعارات الويب (Web Push)' : 'Web Push Notifications'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleTogglePush}
+                    disabled={pushLoading}
+                    className={`w-10 h-6 rounded-full transition-colors relative ${
+                      pushEnabled ? 'bg-[#3390ec]' : 'bg-gray-400'
+                    }`}
+                  >
+                    <span
+                      className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${
+                        pushEnabled ? 'start-5' : 'start-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-gray-400 leading-normal">
+                  {isAr
+                    ? 'تفعيل إشعارات الدفع عبر مفاتيح VAPID المثبتة وخدمة Service Worker لتلقي الرسائل فور ورودها.'
+                    : 'Receive real-time push alerts via fixed VAPID keys and Service Worker.'}
+                </p>
+
+                {pushStatusText && (
+                  <div className={`text-[11px] p-2 rounded-lg ${
+                    pushStatusText.includes('فشل') || pushStatusText.includes('Failed')
+                      ? 'bg-red-500/10 text-red-400'
+                      : 'bg-emerald-500/10 text-emerald-400'
+                  }`}>
+                    {pushStatusText}
+                  </div>
+                )}
+
+                {pushEnabled && (
+                  <button
+                    type="button"
+                    onClick={handleTestPush}
+                    disabled={pushLoading}
+                    className="w-full mt-2 py-1.5 px-3 rounded-lg bg-[#3390ec]/20 hover:bg-[#3390ec]/30 text-[#3390ec] text-xs font-medium flex items-center justify-center gap-1.5 transition"
+                  >
+                    {pushLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isAr ? 'إرسال إشعار تجريبي (Test Push)' : 'Send Test Notification'}</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -590,53 +675,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   <span className="font-mono text-gray-300 break-all text-[10px]">
                     mailto:anwerfoud80@gmail.com
                   </span>
-                </div>
-
-                {/* Web Push Management Section */}
-                <div className="pt-3 border-t border-gray-700/20 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-gray-300 flex items-center gap-1.5 text-xs">
-                      <Bell className="w-3.5 h-3.5 text-amber-400" />
-                      <span>{isAr ? 'إشعارات الويب الدفعية (Web Push)' : 'Web Push Notifications'}</span>
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono">
-                      VAPID Active
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleActivatePush}
-                      disabled={isPushSubscribing}
-                      className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-[#3390ec] hover:bg-[#2b7ac9] text-white font-medium text-[11px] transition disabled:opacity-50"
-                    >
-                      <Bell className="w-3.5 h-3.5" />
-                      <span>{isPushSubscribing ? (isAr ? 'جاري التفعيل...' : 'Activating...') : (isAr ? 'تفعيل الإشعارات' : 'Enable Push')}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleSendTestPush}
-                      disabled={isSendingTestPush}
-                      className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-[11px] transition disabled:opacity-50"
-                    >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>{isSendingTestPush ? (isAr ? 'جاري الإرسال...' : 'Sending...') : (isAr ? 'إشعار تجريبي' : 'Test Push')}</span>
-                    </button>
-                  </div>
-
-                  {pushFeedback && (
-                    <div
-                      className={`p-2 rounded-lg text-[11px] border ${
-                        pushFeedback.type === 'success'
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : 'bg-red-500/10 border-red-500/30 text-red-400'
-                      }`}
-                    >
-                      {pushFeedback.message}
-                    </div>
-                  )}
                 </div>
 
                 <div className="pt-2 border-t border-gray-700/20">

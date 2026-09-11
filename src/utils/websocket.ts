@@ -106,30 +106,6 @@ class TelegramWebSocketClient {
     }
   }
 
-  public sendChatMessage(peerId: string, text: string, replyTo?: any) {
-    this.send({
-      type: 'send_message',
-      peerId,
-      text,
-      replyTo,
-    });
-  }
-
-  public markRead(peerId: string) {
-    this.send({
-      type: 'mark_read',
-      peerId,
-    });
-  }
-
-  public sendTyping(peerId: string, action: string = 'typing') {
-    this.send({
-      type: 'typing',
-      peerId,
-      action,
-    });
-  }
-
   public disconnect() {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);

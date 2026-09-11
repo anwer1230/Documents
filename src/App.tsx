@@ -319,15 +319,21 @@ export default function App() {
           )
         );
       } else if (event.type === 'message_read' && event.peerId) {
+        const targetChatId = event.peerId;
         setMessagesMap((prev) => {
-          const chatMsgs = prev[event.peerId!] || [];
+          const list = prev[targetChatId];
+          if (!list) return prev;
           return {
             ...prev,
-            [event.peerId!]: chatMsgs.map((m) => ({ ...m, status: 'read' })),
+            [targetChatId]: list.map((m) =>
+              m.isOut ? { ...m, status: 'read' as const } : m
+            ),
           };
         });
         setChats((prev) =>
-          prev.map((c) => (c.id === event.peerId ? { ...c, unreadCount: 0 } : c))
+          prev.map((c) =>
+            c.id === targetChatId ? { ...c, unreadCount: 0 } : c
+          )
         );
       } else if (event.type === 'typing_status' && event.peerId) {
         setTypingMap((prev) => ({
@@ -536,31 +542,33 @@ export default function App() {
     }
   };
 
-  // Chat selection and real-time read synchronization
+  // Chat selection with real-time mark as read
   const handleSelectChat = (chat: TelegramChat) => {
     setSelectedChatId(chat.id);
+
+    // Clear unread count locally
     setChats((prev) =>
       prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c))
     );
+
+    // Mark messages in chat as read
     setMessagesMap((prev) => {
-      const msgs = prev[chat.id];
-      if (!msgs) return prev;
+      const list = prev[chat.id];
+      if (!list) return prev;
       return {
         ...prev,
-        [chat.id]: msgs.map((m) => ({ ...m, status: 'read' })),
+        [chat.id]: list.map((m) => (!m.isOut ? { ...m, status: 'read' as const } : m)),
       };
     });
 
-    // Notify over WebSocket and REST
-    wsClient.markRead(chat.id);
-    const activeAcc = accounts.find((a) => a.id === activeAccountId);
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (activeAcc?.sessionToken) {
-      headers['x-session-token'] = activeAcc.sessionToken;
-    }
+    // Notify backend and peers via WebSocket and HTTP
+    wsClient.send({
+      type: 'mark_read',
+      peerId: chat.id,
+    });
     fetch('/api/telegram/mark-read', {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ peerId: chat.id }),
     }).catch(() => {});
   };
@@ -571,9 +579,6 @@ export default function App() {
   // Sending a message
   const handleSendMessage = async (text: string, replyTo?: TelegramMessage, media?: any) => {
     if (!selectedChatId) return;
-
-    // Send immediately over WebSocket for instant sub-millisecond dispatch
-    wsClient.sendChatMessage(selectedChatId, text, replyTo);
 
     const newMsgId = 'msg_' + Date.now();
     const newMsg: TelegramMessage = {
@@ -600,6 +605,15 @@ export default function App() {
       ...prev,
       [selectedChatId]: [...(prev[selectedChatId] || []), newMsg],
     }));
+
+    // Send via real-time WebSocket immediately
+    wsClient.send({
+      type: 'send_message',
+      peerId: selectedChatId,
+      text,
+      replyTo: replyTo ? { id: replyTo.id, senderName: replyTo.senderName, text: replyTo.text } : undefined,
+      media,
+    });
 
     // Update last message in chat list
     setChats((prev) =>
