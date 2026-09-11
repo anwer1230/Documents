@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { TelegramChat, TelegramMessage, TelegramUser, TypingStatus } from '../types';
 import { MessageInput } from './MessageInput';
+import { VoiceWaveformPlayer } from './VoiceWaveformPlayer';
 import { getSenderColor, formatTelegramDate } from '../utils/telegramColors';
 import { ClearHistoryModal } from './modals/ClearHistoryModal';
 import { LeaveGroupModal } from './modals/LeaveGroupModal';
@@ -56,6 +57,7 @@ interface ChatWindowProps {
   onLeaveGroup: (chatId: string) => void;
   onReportChat: (chatId: string, reason: string, details?: string) => void;
   onOpenMediaViewer: (url: string, title?: string) => void;
+  onOpenMiniApp?: () => void;
   onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
   lang: 'ar' | 'en';
   isDark: boolean;
@@ -79,6 +81,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onLeaveGroup,
   onReportChat,
   onOpenMediaViewer,
+  onOpenMiniApp,
   onToast,
   lang,
   isDark,
@@ -437,6 +440,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               >
                 {isChatInfoOpen ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
               </button>
+
+              {/* Mini Apps Launcher */}
+              {onOpenMiniApp && (
+                <button
+                  onClick={onOpenMiniApp}
+                  className={`p-2 rounded-full transition ${
+                    isDark ? 'hover:bg-[#232e3c] text-amber-400' : 'hover:bg-gray-100 text-amber-500'
+                  }`}
+                  title={isAr ? 'تطبيقات الويب المصغرة' : 'Telegram Mini Apps'}
+                >
+                  <Sparkles className="w-5 h-5" />
+                </button>
+              )}
 
               {/* Official Telegram Web K 3-Dots More Menu */}
               <div className="relative">
@@ -810,35 +826,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
                   {/* Voice Note Audio */}
                   {msg.media?.type === 'voice' && (
-                    <div className="flex items-center gap-3 py-1 px-1 select-none min-w-[210px]">
-                      <button
-                        onClick={() => toggleVoicePlay(msg.id)}
-                        className="w-9 h-9 rounded-full bg-[#3390ec] hover:bg-[#2b7ec9] text-white flex items-center justify-center shadow-xs shrink-0"
-                      >
-                        {playingVoiceId === msg.id ? (
-                          <Pause className="w-4 h-4 fill-white" />
-                        ) : (
-                          <Play className="w-4 h-4 fill-white translate-x-0.5" />
-                        )}
-                      </button>
-
-                      <div className="flex-1">
-                        <div className="flex items-center gap-0.5 h-5">
-                          {[30, 70, 45, 90, 35, 80, 50, 100, 40, 75, 30, 85, 60, 40].map((h, i) => (
-                            <span
-                              key={i}
-                              className={`w-1 rounded-full transition-all ${
-                                playingVoiceId === msg.id ? 'bg-[#3390ec] animate-pulse' : 'bg-gray-400/50'
-                              }`}
-                              style={{ height: `${h}%` }}
-                            />
-                          ))}
-                        </div>
-                        <span className="text-[10px] text-gray-400 font-mono">
-                          0:{msg.media.duration?.toString().padStart(2, '0') || '04'}
-                        </span>
-                      </div>
-                    </div>
+                    <VoiceWaveformPlayer
+                      url={msg.media.url}
+                      duration={msg.media.duration}
+                      isOut={msg.isOut}
+                      isDark={isDark}
+                    />
                   )}
 
                   {/* Document File */}
@@ -1099,6 +1092,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         onSendMessage={onSendMessage}
         replyToMessage={replyingMessage}
         onCancelReply={() => setReplyingMessage(null)}
+        onOpenMiniApp={onOpenMiniApp}
         lang={lang}
         isDark={isDark}
       />

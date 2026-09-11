@@ -10,12 +10,14 @@ import { NewChatModal } from './components/NewChatModal';
 import { ContactsModal } from './components/ContactsModal';
 import { MediaViewerModal } from './components/MediaViewerModal';
 import { AddAccountModal } from './components/AddAccountModal';
+import { MiniAppModal } from './components/MiniAppModal';
 import { Toast, ToastData } from './components/Toast';
 import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
 import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
 import { ShareLinkModal } from './components/modals/ShareLinkModal';
 import { ReportChatModal } from './components/modals/ReportChatModal';
 import { ShieldCheck, Loader2, Users, UserPlus, Sparkles } from 'lucide-react';
+import { wsClient } from './utils/websocket';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -81,6 +83,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
   const [isContactsOpen, setIsContactsOpen] = useState(false);
+  const [isMiniAppOpen, setIsMiniAppOpen] = useState(false);
   
   // Media Lightbox
   const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
@@ -269,6 +272,70 @@ export default function App() {
 
     initAuthAndAccounts();
   }, []);
+
+  // Register PWA Service Worker
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((reg) => {
+          console.log('[PWA] Service Worker registered:', reg.scope);
+        })
+        .catch((err) => {
+          console.warn('[PWA] Service Worker registration skipped:', err);
+        });
+    }
+  }, []);
+
+  // Connect WebSocket & listen to real-time events
+  useEffect(() => {
+    const activeAcc = accounts.find((a) => a.id === activeAccountId);
+    const token = activeAcc?.sessionToken || 'guest_user';
+    wsClient.connect(token);
+
+    const unsubscribe = wsClient.subscribe((event) => {
+      if (event.type === 'new_message' && event.message) {
+        const msg = event.message;
+        const targetChatId = event.peerId || msg.chatId || selectedChatId;
+
+        setMessagesMap((prev) => ({
+          ...prev,
+          [targetChatId]: [...(prev[targetChatId] || []), msg],
+        }));
+
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === targetChatId
+              ? {
+                  ...c,
+                  unreadCount: c.id === selectedChatId ? 0 : (c.unreadCount || 0) + 1,
+                  lastMessage: {
+                    text: msg.text || '[وسائط]',
+                    timestamp: msg.timestamp || Date.now(),
+                    isOut: !!msg.isOut,
+                  },
+                }
+              : c
+          )
+        );
+      } else if (event.type === 'typing_status' && event.peerId) {
+        setTypingMap((prev) => ({
+          ...prev,
+          [event.peerId!]: {
+            chatId: event.peerId!,
+            userName: event.userName || 'عضو',
+            action: (event.action as any) || 'typing',
+            startedAt: Date.now(),
+            expiresAt: Date.now() + 4000,
+          },
+        }));
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeAccountId, accounts, selectedChatId]);
 
   const loadMtprotoDialogs = async (token?: string) => {
     try {
@@ -906,6 +973,7 @@ export default function App() {
           onLeaveGroup={handleLeaveGroup}
           onReportChat={handleReportChat}
           onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+          onOpenMiniApp={() => setIsMiniAppOpen(true)}
           onToast={showToast}
           lang={themeConfig.language}
           isDark={themeConfig.isDark}
@@ -1042,6 +1110,14 @@ export default function App() {
         onClose={() => setMediaViewerData(null)}
         mediaUrl={mediaViewerData?.url || null}
         title={mediaViewerData?.title}
+        isDark={themeConfig.isDark}
+      />
+
+      {/* Telegram Web Apps / Mini Apps Modal */}
+      <MiniAppModal
+        isOpen={isMiniAppOpen}
+        onClose={() => setIsMiniAppOpen(false)}
+        lang={themeConfig.language}
         isDark={themeConfig.isDark}
       />
     </div>

@@ -1,8 +1,10 @@
+import http from 'http';
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
+import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import {
   TelegramService,
@@ -20,7 +22,34 @@ const upload = multer({
 
 async function startServer() {
   const app = express();
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server });
   const PORT = 3000;
+
+  // Active WebSocket clients mapped by sessionToken
+  const activeWsClients = new Map<string, Set<WebSocket>>();
+
+  wss.on('connection', (ws: WebSocket, req) => {
+    let token = 'guest';
+    try {
+      const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+      token = url.searchParams.get('token') || 'guest';
+    } catch {}
+
+    if (!activeWsClients.has(token)) {
+      activeWsClients.set(token, new Set());
+    }
+    activeWsClients.get(token)!.add(ws);
+
+    ws.on('close', () => {
+      activeWsClients.get(token)?.delete(ws);
+      if (activeWsClients.get(token)?.size === 0) {
+        activeWsClients.delete(token);
+      }
+    });
+
+    ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
+  });
 
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json());
@@ -292,6 +321,14 @@ async function startServer() {
     }
   });
 
+  // Web Push Subscription Endpoints
+  const pushSubscriptions = new Map<string, any>();
+  app.post('/api/push/subscribe', (req, res) => {
+    const token = (req as any).sessionToken;
+    pushSubscriptions.set(token, req.body);
+    res.json({ success: true, message: 'Push subscription registered' });
+  });
+
   // Vite Middleware Setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -307,7 +344,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Telegram Web Server running on port ${PORT}`);
   });
 }
