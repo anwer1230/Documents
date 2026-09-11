@@ -1,0 +1,827 @@
+import React, { useState, useEffect } from 'react';
+import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount } from './types';
+import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
+import { LoginView } from './components/LoginView';
+import { Sidebar } from './components/Sidebar';
+import { ChatWindow } from './components/ChatWindow';
+import { ChatInfoDrawer } from './components/ChatInfoDrawer';
+import { SettingsDrawer } from './components/SettingsDrawer';
+import { NewChatModal } from './components/NewChatModal';
+import { ContactsModal } from './components/ContactsModal';
+import { MediaViewerModal } from './components/MediaViewerModal';
+import { AddAccountModal } from './components/AddAccountModal';
+import { ShieldCheck, Loader2, Users, UserPlus, Sparkles } from 'lucide-react';
+
+const MAX_TELEGRAM_ACCOUNTS = 6;
+
+export default function App() {
+  // Theme & Language state
+  const [themeConfig, setThemeConfig] = useState<TelegramThemeConfig>(() => {
+    const saved = localStorage.getItem('tg_theme_config');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {}
+    }
+    return {
+      isDark: true,
+      accentColor: '#3390ec',
+      fontSize: 'md',
+      language: 'ar',
+    };
+  });
+
+  // Multi-Accounts State (Support up to 6 isolated users)
+  const [accounts, setAccounts] = useState<TelegramAccount[]>(() => {
+    const saved = localStorage.getItem('tg_multi_accounts');
+    if (saved) {
+      try {
+        return JSON.parse(saved).slice(0, MAX_TELEGRAM_ACCOUNTS);
+      } catch {}
+    }
+    return [];
+  });
+  const [activeAccountId, setActiveAccountId] = useState<string>('');
+  const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
+
+  // Per-account isolated chat and message storage
+  const [accountsDataMap, setAccountsDataMap] = useState<Record<string, {
+    chats: TelegramChat[];
+    messagesMap: Record<string, TelegramMessage[]>;
+    selectedChatId: string;
+  }>>(() => {
+    const saved = localStorage.getItem('tg_accounts_data_map');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {}
+    }
+    return {};
+  });
+
+  // Active User Auth State
+  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  // Chat Data State (for currently active user)
+  const [chats, setChats] = useState<TelegramChat[]>(INITIAL_CHATS);
+  const [selectedChatId, setSelectedChatId] = useState<string>('saved_messages');
+  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(INITIAL_MESSAGES);
+  
+  // UI & Navigation State
+  const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isChatInfoOpen, setIsChatInfoOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isNewChatOpen, setIsNewChatOpen] = useState(false);
+  const [isContactsOpen, setIsContactsOpen] = useState(false);
+  
+  // Media Lightbox
+  const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
+
+  // Sync document direction and theme attributes
+  useEffect(() => {
+    localStorage.setItem('tg_theme_config', JSON.stringify(themeConfig));
+    document.documentElement.dir = themeConfig.language === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = themeConfig.language;
+    if (themeConfig.isDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [themeConfig]);
+
+  // Sync accounts to local storage
+  useEffect(() => {
+    if (accounts.length > 0) {
+      localStorage.setItem('tg_multi_accounts', JSON.stringify(accounts));
+    }
+  }, [accounts]);
+
+  // Load backend accounts & status on initial startup
+  useEffect(() => {
+    const initAuthAndAccounts = async () => {
+      try {
+        // Fetch server-side saved accounts
+        const accRes = await fetch('/api/telegram/accounts');
+        let serverAccounts: TelegramAccount[] = [];
+        let serverActiveId: string | undefined;
+
+        if (accRes.ok) {
+          const accData = await accRes.json();
+          if (Array.isArray(accData.accounts) && accData.accounts.length > 0) {
+            serverAccounts = accData.accounts.map((a: any) => ({
+              id: a.id,
+              sessionToken: a.sessionToken,
+              user: a.user,
+              isLoggedIn: a.isLoggedIn,
+              addedAt: a.addedAt,
+            }));
+            serverActiveId = accData.activeAccountId;
+          }
+        }
+
+        // Fetch current status
+        const statusRes = await fetch('/api/telegram/status');
+        const statusData = await statusRes.json();
+
+        if (statusData.isLoggedIn && statusData.user) {
+          const mainUser: TelegramUser = {
+            id: statusData.user.id || 'me',
+            firstName: statusData.user.firstName || 'مستخدم تليجرام',
+            lastName: statusData.user.lastName,
+            username: statusData.user.username,
+            phone: statusData.user.phone,
+            status: 'online',
+          };
+
+          const activeAccount: TelegramAccount = {
+            id: serverActiveId || 'acc_primary',
+            sessionToken: statusData.sessionToken,
+            user: mainUser,
+            isLoggedIn: true,
+            addedAt: Date.now(),
+          };
+
+          const mergedAccounts = [
+            activeAccount,
+            ...serverAccounts.filter(a => a.sessionToken !== statusData.sessionToken),
+            ...accounts.filter(a => a.sessionToken !== statusData.sessionToken && !serverAccounts.some(s => s.id === a.id)),
+          ].slice(0, MAX_TELEGRAM_ACCOUNTS);
+
+          setAccounts(mergedAccounts);
+          setActiveAccountId(activeAccount.id);
+          setCurrentUser(mainUser);
+          setIsDemoMode(false);
+          loadMtprotoDialogs(statusData.sessionToken);
+        } else if (serverAccounts.length > 0) {
+          // If server has accounts saved, switch to active one
+          const activeAcc = serverAccounts.find(a => a.id === serverActiveId) || serverAccounts[0];
+          setAccounts(serverAccounts);
+          setActiveAccountId(activeAcc.id);
+          setCurrentUser(activeAcc.user);
+          setIsDemoMode(false);
+          loadMtprotoDialogs(activeAcc.sessionToken);
+        } else if (accounts.length > 0) {
+          // Use locally saved accounts
+          const currentAcc = accounts.find(a => a.id === activeAccountId) || accounts[0];
+          setActiveAccountId(currentAcc.id);
+          setCurrentUser(currentAcc.user);
+          setIsDemoMode(!!currentAcc.isDemo);
+        } else {
+          // Check single stored session fallback
+          const savedSession = localStorage.getItem('tg_active_user');
+          if (savedSession) {
+            try {
+              const u = JSON.parse(savedSession);
+              const demoAcc: TelegramAccount = {
+                id: 'acc_demo_init',
+                sessionToken: 'demo_token_' + Math.random().toString(36).substring(2, 9),
+                user: u,
+                isLoggedIn: true,
+                isDemo: true,
+                addedAt: Date.now(),
+              };
+              setAccounts([demoAcc]);
+              setActiveAccountId(demoAcc.id);
+              setCurrentUser(u);
+              setIsDemoMode(true);
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check Telegram status:', err);
+      } finally {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    initAuthAndAccounts();
+  }, []);
+
+  const loadMtprotoDialogs = async (token?: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['x-session-token'] = token;
+      }
+      const res = await fetch('/api/telegram/dialogs', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.dialogs && data.dialogs.length > 0) {
+          setChats((prev) => {
+            const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
+            return [savedChat, ...data.dialogs.filter((d: any) => d.id !== 'saved_messages')];
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error loading MTProto dialogs:', err);
+    }
+  };
+
+  const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false) => {
+    const newAcc: TelegramAccount = {
+      id: 'acc_' + Date.now().toString(36),
+      sessionToken: 'user_session_' + Math.random().toString(36).substring(2, 12),
+      user,
+      isLoggedIn: true,
+      isDemo,
+      addedAt: Date.now(),
+    };
+
+    setAccounts([newAcc]);
+    setActiveAccountId(newAcc.id);
+    setCurrentUser(user);
+    setIsDemoMode(isDemo);
+    localStorage.setItem('tg_active_user', JSON.stringify(user));
+    if (!isDemo) {
+      loadMtprotoDialogs();
+    }
+  };
+
+  // Switch between up to 6 isolated user accounts
+  const handleSwitchAccount = async (targetId: string) => {
+    const target = accounts.find((a) => a.id === targetId);
+    if (!target) return;
+
+    // 1. Isolate and save currently active user's state
+    if (activeAccountId) {
+      setAccountsDataMap((prev) => {
+        const updated = {
+          ...prev,
+          [activeAccountId]: {
+            chats,
+            messagesMap,
+            selectedChatId,
+          },
+        };
+        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
+        return updated;
+      });
+    }
+
+    // 2. Notify backend to switch session token and cookie
+    try {
+      await fetch('/api/telegram/accounts/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: target.id, sessionToken: target.sessionToken }),
+      });
+    } catch (err) {
+      console.warn('Backend switch notice error:', err);
+    }
+
+    // 3. Set newly active user & account
+    setActiveAccountId(target.id);
+    setCurrentUser(target.user);
+    setIsDemoMode(!!target.isDemo);
+
+    // 4. Restore target account's isolated chats and messages
+    const restored = accountsDataMap[target.id];
+    if (restored && restored.chats && restored.chats.length > 0) {
+      setChats(restored.chats);
+      setMessagesMap(restored.messagesMap);
+      setSelectedChatId(restored.selectedChatId || restored.chats[0]?.id || 'saved_messages');
+    } else {
+      // Clean isolated initial chat list for new user
+      if (target.isDemo) {
+        setChats(INITIAL_CHATS);
+        setMessagesMap(INITIAL_MESSAGES);
+        setSelectedChatId('saved_messages');
+      } else {
+        setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
+        setSelectedChatId('saved_messages');
+      }
+    }
+
+    // 5. If it's a real MTProto cloud account, load its isolated dialogs
+    if (!target.isDemo) {
+      loadMtprotoDialogs(target.sessionToken);
+    }
+  };
+
+  // Add new account (up to 6)
+  const handleAccountAdded = (newAccount: TelegramAccount) => {
+    setAccounts((prev) => {
+      const filtered = prev.filter((a) => a.id !== newAccount.id && a.user.id !== newAccount.user.id);
+      if (filtered.length >= MAX_TELEGRAM_ACCOUNTS) {
+        return filtered;
+      }
+      const updated = [...filtered, newAccount];
+      localStorage.setItem('tg_multi_accounts', JSON.stringify(updated));
+      return updated;
+    });
+
+    // Save current active account's state before switching to new one
+    if (activeAccountId) {
+      setAccountsDataMap((prev) => {
+        const updated = {
+          ...prev,
+          [activeAccountId]: {
+            chats,
+            messagesMap,
+            selectedChatId,
+          },
+        };
+        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
+        return updated;
+      });
+    }
+
+    // Switch to new account immediately with isolated state
+    setActiveAccountId(newAccount.id);
+    setCurrentUser(newAccount.user);
+    setIsDemoMode(!!newAccount.isDemo);
+
+    if (newAccount.isDemo) {
+      setChats(INITIAL_CHATS);
+      setMessagesMap(INITIAL_MESSAGES);
+      setSelectedChatId('saved_messages');
+    } else {
+      setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
+      setSelectedChatId('saved_messages');
+      loadMtprotoDialogs(newAccount.sessionToken);
+    }
+  };
+
+  // Remove/disconnect an account
+  const handleRemoveAccount = async (targetId: string) => {
+    try {
+      await fetch(`/api/telegram/accounts/${targetId}`, { method: 'DELETE' });
+    } catch {}
+
+    const remaining = accounts.filter((a) => a.id !== targetId);
+    setAccounts(remaining);
+    localStorage.setItem('tg_multi_accounts', JSON.stringify(remaining));
+
+    // Clear removed account's stored messages
+    setAccountsDataMap((prev) => {
+      const copy = { ...prev };
+      delete copy[targetId];
+      localStorage.setItem('tg_accounts_data_map', JSON.stringify(copy));
+      return copy;
+    });
+
+    if (activeAccountId === targetId) {
+      if (remaining.length > 0) {
+        handleSwitchAccount(remaining[0].id);
+      } else {
+        setCurrentUser(null);
+        setActiveAccountId('');
+        setIsDemoMode(false);
+      }
+    }
+  };
+
+  const handleLogout = async () => {
+    if (activeAccountId) {
+      await handleRemoveAccount(activeAccountId);
+    } else {
+      try {
+        await fetch('/api/telegram/logout', { method: 'POST' });
+      } catch {}
+      localStorage.removeItem('tg_active_user');
+      setCurrentUser(null);
+      setIsDemoMode(false);
+    }
+  };
+
+  // Chat selection
+  const activeChat = chats.find((c) => c.id === selectedChatId) || chats[0] || null;
+  const currentMessages = selectedChatId ? messagesMap[selectedChatId] || [] : [];
+
+  // Sending a message
+  const handleSendMessage = async (text: string, replyTo?: TelegramMessage, media?: any) => {
+    if (!selectedChatId) return;
+
+    const newMsgId = 'msg_' + Date.now();
+    const newMsg: TelegramMessage = {
+      id: newMsgId,
+      chatId: selectedChatId,
+      senderId: currentUser?.id || 'me',
+      senderName: currentUser ? `${currentUser.firstName} ${currentUser.lastName || ''}`.trim() : 'أنا',
+      text,
+      timestamp: Date.now(),
+      isOut: true,
+      status: 'sent',
+      replyTo: replyTo
+        ? {
+            id: replyTo.id,
+            senderName: replyTo.senderName,
+            text: replyTo.text,
+          }
+        : undefined,
+      media,
+    };
+
+    // Update messages map
+    setMessagesMap((prev) => ({
+      ...prev,
+      [selectedChatId]: [...(prev[selectedChatId] || []), newMsg],
+    }));
+
+    // Update last message in chat list
+    setChats((prev) =>
+      prev.map((c) => {
+        if (c.id === selectedChatId) {
+          return {
+            ...c,
+            lastMessage: {
+              text,
+              timestamp: Date.now(),
+              isOut: true,
+              mediaType: media?.type,
+            },
+          };
+        }
+        return c;
+      })
+    );
+
+    // If connected via real MTProto, send to backend
+    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+      try {
+        await fetch('/api/telegram/send-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peerId: selectedChatId,
+            text,
+            replyTo: replyTo ? Number(replyTo.id) : undefined,
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to send MTProto message:', err);
+      }
+    } else {
+      // Demo Mode Simulated Automated Response for interactive chats
+      if (selectedChatId === 'bot_ai_assistant') {
+        setTimeout(() => {
+          const botReply: TelegramMessage = {
+            id: 'bot_reply_' + Date.now(),
+            chatId: 'bot_ai_assistant',
+            senderId: 'smart_helper_bot',
+            senderName: 'المساعد الذكي',
+            text: `تم استلام رسالتك: "${text}". تليجرام ويب يعمل بكفاءة مع خوادم MTProto ويدعم الرسائل الفورية وتحديثات القنوات! 🚀`,
+            timestamp: Date.now(),
+            isOut: false,
+            status: 'read',
+            reactions: [{ emoji: '⚡', count: 1, userReacted: false }],
+          };
+          setMessagesMap((prev) => ({
+            ...prev,
+            bot_ai_assistant: [...(prev['bot_ai_assistant'] || []), botReply],
+          }));
+        }, 1200);
+      } else if (selectedChatId === 'chat_ahmed') {
+        setTimeout(() => {
+          const ahmedReply: TelegramMessage = {
+            id: 'ahmed_reply_' + Date.now(),
+            chatId: 'chat_ahmed',
+            senderId: 'ahmed_mansour',
+            senderName: 'أحمد المنصور',
+            text: 'ممتاز جداً! التصميم مطابق لتليجرام الأصلي وسرعة الاستجابة ممتازة 👍',
+            timestamp: Date.now(),
+            isOut: false,
+            status: 'read',
+            reactions: [{ emoji: '🔥', count: 1, userReacted: false }],
+          };
+          setMessagesMap((prev) => ({
+            ...prev,
+            chat_ahmed: [...(prev['chat_ahmed'] || []), ahmedReply],
+          }));
+        }, 1500);
+      }
+    }
+  };
+
+  // Toggle emoji reaction
+  const handleReactMessage = (messageId: string, emoji: string) => {
+    if (!selectedChatId) return;
+
+    setMessagesMap((prev) => {
+      const list = prev[selectedChatId] || [];
+      const updated = list.map((m) => {
+        if (m.id !== messageId) return m;
+
+        const reactions = [...(m.reactions || [])];
+        const existing = reactions.find((r) => r.emoji === emoji);
+
+        if (existing) {
+          if (existing.userReacted) {
+            existing.count -= 1;
+            existing.userReacted = false;
+          } else {
+            existing.count += 1;
+            existing.userReacted = true;
+          }
+        } else {
+          reactions.push({ emoji, count: 1, userReacted: true });
+        }
+
+        return {
+          ...m,
+          reactions: reactions.filter((r) => r.count > 0),
+        };
+      });
+
+      return {
+        ...prev,
+        [selectedChatId]: updated,
+      };
+    });
+  };
+
+  // Pin message
+  const handlePinMessage = (messageId: string) => {
+    if (!selectedChatId) return;
+
+    setMessagesMap((prev) => {
+      const list = prev[selectedChatId] || [];
+      const updated = list.map((m) => {
+        if (m.id === messageId) {
+          return { ...m, isPinned: !m.isPinned };
+        }
+        return m;
+      });
+      return {
+        ...prev,
+        [selectedChatId]: updated,
+      };
+    });
+  };
+
+  // Delete message
+  const handleDeleteMessage = (messageId: string) => {
+    if (!selectedChatId) return;
+
+    setMessagesMap((prev) => {
+      const list = prev[selectedChatId] || [];
+      return {
+        ...prev,
+        [selectedChatId]: list.filter((m) => m.id !== messageId),
+      };
+    });
+  };
+
+  // Toggle Mute
+  const handleToggleMute = (chatId: string) => {
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, isMuted: !c.isMuted } : c))
+    );
+  };
+
+  // Clear History
+  const handleClearHistory = (chatId: string) => {
+    setMessagesMap((prev) => ({
+      ...prev,
+      [chatId]: [],
+    }));
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, lastMessage: undefined } : c))
+    );
+  };
+
+  // Create new channel / group
+  const handleCreateChat = (newChatData: Partial<TelegramChat>) => {
+    const id = 'custom_' + Date.now();
+    const chat: TelegramChat = {
+      id,
+      title: newChatData.title || 'محادثة جديدة',
+      username: newChatData.username,
+      type: newChatData.type || 'channel',
+      avatarColor: newChatData.avatarColor || '#3390ec',
+      description: newChatData.description,
+      unreadCount: 0,
+      membersCount: newChatData.membersCount || 1,
+      isPinned: true,
+    };
+
+    setChats([chat, ...chats]);
+    setSelectedChatId(id);
+    setMessagesMap((prev) => ({
+      ...prev,
+      [id]: [
+        {
+          id: 'welcome_' + Date.now(),
+          chatId: id,
+          senderId: currentUser?.id || 'me',
+          senderName: currentUser?.firstName || 'أنا',
+          text: `تم إنشاء ${
+            chat.type === 'channel' ? 'القناة' : chat.type === 'group' ? 'المجموعة' : 'المحادثة'
+          } بنجاح!`,
+          timestamp: Date.now(),
+          isOut: true,
+          status: 'read',
+        },
+      ],
+    }));
+  };
+
+  // Select contact from contacts modal
+  const handleSelectContact = (contact: TelegramUser) => {
+    // Check if chat already exists
+    const existing = chats.find((c) => c.title === `${contact.firstName} ${contact.lastName || ''}`.trim());
+    if (existing) {
+      setSelectedChatId(existing.id);
+    } else {
+      const id = 'contact_chat_' + contact.id;
+      const newChat: TelegramChat = {
+        id,
+        title: `${contact.firstName} ${contact.lastName || ''}`.trim(),
+        username: contact.username,
+        type: 'private',
+        avatarColor: '#3390ec',
+        unreadCount: 0,
+        isOnline: contact.status === 'online',
+      };
+      setChats([newChat, ...chats]);
+      setSelectedChatId(id);
+    }
+  };
+
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-[#0e1621] text-white flex flex-col items-center justify-center p-4">
+        <Loader2 className="w-10 h-10 text-[#3390ec] animate-spin mb-4" />
+        <p className="text-sm text-gray-400 font-medium tracking-wide">
+          جارٍ تهيئة خوادم Telegram MTProto والتحقق من الجلسة...
+        </p>
+      </div>
+    );
+  }
+
+  // If user is not logged in, show official LoginView
+  if (!currentUser) {
+    return (
+      <LoginView
+        onLoginSuccess={handleLoginSuccess}
+        lang={themeConfig.language}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`h-screen w-screen flex flex-col overflow-hidden select-none font-sans ${
+        themeConfig.isDark ? 'bg-[#0e1621] text-white' : 'bg-gray-100 text-gray-900'
+      }`}
+      dir={themeConfig.language === 'ar' ? 'rtl' : 'ltr'}
+    >
+      {/* Top Embedded API Status Ribbon */}
+      <div className="bg-[#182533] text-gray-300 text-[11px] px-3 py-1 flex items-center justify-between border-b border-[#232e3c] shrink-0">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="font-semibold text-white">Telegram Web:</span>
+          <span>MTProto API_ID: <strong className="text-emerald-400 font-mono">22043994</strong> (مثبت في التطبيق)</span>
+          <span className="hidden sm:inline text-gray-500">•</span>
+          <span className="hidden sm:inline text-gray-400 font-mono">API_HASH: 56f64582...</span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Multi-Account Ribbon Indicator */}
+          <div className="flex items-center gap-1.5 bg-[#232e3c] px-2.5 py-0.5 rounded-full text-[11px] border border-gray-700/50">
+            <Users className="w-3 h-3 text-[#3390ec]" />
+            <span className="text-gray-300">
+              {currentUser?.firstName || 'مستخدم'}: <strong className="text-white">{accounts.length} من {MAX_TELEGRAM_ACCOUNTS}</strong>
+            </span>
+            {accounts.length < MAX_TELEGRAM_ACCOUNTS && (
+              <button
+                onClick={() => setIsAddAccountOpen(true)}
+                className="text-[#3390ec] hover:text-white font-bold ms-1 px-1.5 py-0.2 rounded-sm bg-[#3390ec]/20 hover:bg-[#3390ec] transition"
+                title="إضافة مستخدم جديد"
+              >
+                + إضافة
+              </button>
+            )}
+          </div>
+
+          {isDemoMode && (
+            <span className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-md text-[10px] font-bold border border-amber-500/30">
+              وضع المعاينة (Demo)
+            </span>
+          )}
+          <span className="text-emerald-400 flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="hidden sm:inline">متصل بسحابة تليجرام</span>
+          </span>
+        </div>
+      </div>
+
+      {/* Main App Layout */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Left Sidebar */}
+        <Sidebar
+          chats={chats}
+          selectedChatId={selectedChatId}
+          onSelectChat={(chat) => setSelectedChatId(chat.id)}
+          onOpenMenu={() => setIsSettingsOpen(true)}
+          onOpenNewChat={() => setIsNewChatOpen(true)}
+          activeFolder={activeFolder}
+          onChangeFolder={setActiveFolder}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          lang={themeConfig.language}
+          isDark={themeConfig.isDark}
+          currentUser={currentUser}
+          accounts={accounts}
+          onOpenAddAccount={() => setIsAddAccountOpen(true)}
+          onSwitchAccount={handleSwitchAccount}
+        />
+
+        {/* Center Chat Window */}
+        <ChatWindow
+          chat={activeChat}
+          messages={currentMessages}
+          currentUser={currentUser}
+          onSendMessage={handleSendMessage}
+          onReactMessage={handleReactMessage}
+          onPinMessage={handlePinMessage}
+          onDeleteMessage={handleDeleteMessage}
+          onToggleChatInfo={() => setIsChatInfoOpen(!isChatInfoOpen)}
+          isChatInfoOpen={isChatInfoOpen}
+          onToggleMute={handleToggleMute}
+          onClearHistory={handleClearHistory}
+          onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+          lang={themeConfig.language}
+          isDark={themeConfig.isDark}
+        />
+
+        {/* Right Chat Info Drawer */}
+        {activeChat && (
+          <ChatInfoDrawer
+            chat={activeChat}
+            messages={currentMessages}
+            isOpen={isChatInfoOpen}
+            onClose={() => setIsChatInfoOpen(false)}
+            onToggleMute={handleToggleMute}
+            onClearHistory={handleClearHistory}
+            onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+        )}
+      </div>
+
+      {/* Settings & Main Menu Drawer */}
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        currentUser={currentUser}
+        onUpdateUser={(updated) => {
+          setCurrentUser((prev) => (prev ? { ...prev, ...updated } : prev));
+        }}
+        themeConfig={themeConfig}
+        onUpdateTheme={(up) => setThemeConfig((prev) => ({ ...prev, ...up }))}
+        onLogout={handleLogout}
+        onOpenSavedMessages={() => setSelectedChatId('saved_messages')}
+        onOpenContacts={() => setIsContactsOpen(true)}
+        accounts={accounts}
+        activeAccountId={activeAccountId}
+        onSwitchAccount={handleSwitchAccount}
+        onOpenAddAccount={() => setIsAddAccountOpen(true)}
+        onRemoveAccount={handleRemoveAccount}
+      />
+
+      {/* Add Account Modal (Up to 6 users) */}
+      <AddAccountModal
+        isOpen={isAddAccountOpen}
+        onClose={() => setIsAddAccountOpen(false)}
+        onAccountAdded={handleAccountAdded}
+        currentAccountsCount={accounts.length}
+        maxAccounts={MAX_TELEGRAM_ACCOUNTS}
+        lang={themeConfig.language}
+        isDark={themeConfig.isDark}
+      />
+
+      {/* New Chat / Channel Modal */}
+      <NewChatModal
+        isOpen={isNewChatOpen}
+        onClose={() => setIsNewChatOpen(false)}
+        onCreateChat={handleCreateChat}
+        lang={themeConfig.language}
+        isDark={themeConfig.isDark}
+      />
+
+      {/* Contacts Modal */}
+      <ContactsModal
+        isOpen={isContactsOpen}
+        onClose={() => setIsContactsOpen(false)}
+        onSelectContact={handleSelectContact}
+        lang={themeConfig.language}
+        isDark={themeConfig.isDark}
+      />
+
+      {/* Media Lightbox */}
+      <MediaViewerModal
+        isOpen={!!mediaViewerData}
+        onClose={() => setMediaViewerData(null)}
+        mediaUrl={mediaViewerData?.url || null}
+        title={mediaViewerData?.title}
+        isDark={themeConfig.isDark}
+      />
+    </div>
+  );
+}
