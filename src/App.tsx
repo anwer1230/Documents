@@ -96,7 +96,41 @@ export default function App() {
 
   // Fetch Stories
   useEffect(() => {
+    const demoStories: TelegramPeerStories[] = [
+      {
+        peerId: 'me',
+        stories: [
+          {
+            id: 'st_1',
+            peerId: 'me',
+            date: Date.now() - 3600000,
+            caption: 'مرحباً بكم في تيليجرام! استمتع بجميع الميزات الحقيقية.',
+            mediaType: 'photo',
+            reactionsCount: 12,
+          },
+        ],
+      },
+      {
+        peerId: 'telegram',
+        stories: [
+          {
+            id: 'st_2',
+            peerId: 'telegram',
+            date: Date.now() - 7200000,
+            caption: 'تحديث جديد: دعم القصص والتفاعلات والتعرف على النصوص (OCR)!',
+            mediaType: 'photo',
+            reactionsCount: 45,
+          },
+        ],
+      },
+    ];
+
     const fetchStories = async () => {
+      if (!currentUser || currentUser.id === 'demo_user' || isDemoMode) {
+        setPeerStoriesList(demoStories);
+        return;
+      }
+
       try {
         const res = await fetch('/api/telegram/stories');
         if (res.ok) {
@@ -107,39 +141,12 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Could not fetch stories from MTProto:', err);
+        // Fallback gracefully without warning
       }
-      setPeerStoriesList([
-        {
-          peerId: 'me',
-          stories: [
-            {
-              id: 'st_1',
-              peerId: 'me',
-              date: Date.now() - 3600000,
-              caption: 'مرحباً بكم في تيليجرام! استمتع بجميع الميزات الحقيقية.',
-              mediaType: 'photo',
-              reactionsCount: 12,
-            },
-          ],
-        },
-        {
-          peerId: 'telegram',
-          stories: [
-            {
-              id: 'st_2',
-              peerId: 'telegram',
-              date: Date.now() - 7200000,
-              caption: 'تحديث جديد: دعم القصص والتفاعلات والتعرف على النصوص (OCR)!',
-              mediaType: 'photo',
-              reactionsCount: 45,
-            },
-          ],
-        },
-      ]);
+      setPeerStoriesList(demoStories);
     };
     fetchStories();
-  }, [currentUser]);
+  }, [currentUser, isDemoMode]);
 
   const handleOpenStory = (peerId: string) => {
     setActiveStoryPeerId(peerId);

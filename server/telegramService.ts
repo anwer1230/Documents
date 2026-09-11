@@ -787,6 +787,20 @@ export class TelegramService {
     return { isLoggedIn: false, user: null };
   }
 
+  public static async isAuthorized(sessionToken: string): Promise<boolean> {
+    if (!sessionToken) return false;
+    const session = activeSessions.get(sessionToken);
+    if (session && session.isLoggedIn && session.client) {
+      return true;
+    }
+    const storage = loadStorage();
+    if (storage.sessions[sessionToken]) {
+      const meResult = await this.getMe(sessionToken);
+      return !!meResult.isLoggedIn;
+    }
+    return false;
+  }
+
   public static getAccounts() {
     const storage = loadStorage();
     const accounts = storage.accounts.map(acc => {
@@ -882,6 +896,9 @@ export class TelegramService {
   }
 
   public static async getDialogs(sessionToken: string, limit: number = 50) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return [];
+    }
     const client = await this.getOrCreateClient(sessionToken);
     const dialogs = await client.getDialogs({ limit });
     return dialogs.map((d: any) => {
@@ -1271,10 +1288,16 @@ export class TelegramService {
   }
 
   public static async getAllStories(sessionToken: string) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const { Api } = await import('telegram');
-
+    if (!sessionToken) return [];
     try {
+      const authorized = await this.isAuthorized(sessionToken);
+      if (!authorized) {
+        return [];
+      }
+
+      const client = await this.getOrCreateClient(sessionToken);
+      const { Api } = await import('telegram');
+
       const res: any = await client.invoke(new Api.stories.GetAllStories({}));
       if (res && res.peerStories) {
         return res.peerStories.map((ps: any) => {
@@ -1307,12 +1330,18 @@ export class TelegramService {
       }
       return [];
     } catch (err: any) {
-      console.warn('Api.stories.GetAllStories error:', err.message);
+      if (err?.message && (err.message.includes('AUTH_KEY_UNREGISTERED') || err.message.includes('401'))) {
+        return [];
+      }
+      console.warn('Api.stories.GetAllStories warning:', err?.message || err);
       return [];
     }
   }
 
   public static async readStories(sessionToken: string, peerId: string, maxId: number | string) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return { success: false, notAuthorized: true };
+    }
     const client = await this.getOrCreateClient(sessionToken);
     const { Api } = await import('telegram');
     const peer = await resolvePeer(client, peerId);
@@ -1332,6 +1361,9 @@ export class TelegramService {
     storyId: number | string,
     emoji: string
   ) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return { success: false, notAuthorized: true };
+    }
     const client = await this.getOrCreateClient(sessionToken);
     const { Api } = await import('telegram');
     const peer = await resolvePeer(client, peerId);
