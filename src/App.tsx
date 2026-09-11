@@ -629,6 +629,12 @@ export default function App() {
     }
   };
 
+  const handleToggleArchive = (chatId: string) => {
+    setChats((prev) =>
+      prev.map((c) => (c.id === chatId ? { ...c, isArchived: !c.isArchived } : c))
+    );
+  };
+
   const handleLogout = async () => {
     if (activeAccountId) {
       await handleRemoveAccount(activeAccountId);
@@ -1456,6 +1462,9 @@ export default function App() {
         onSwitchAccount={handleSwitchAccount}
         onOpenAddAccount={() => setIsAddAccountOpen(true)}
         onRemoveAccount={handleRemoveAccount}
+        chats={chats}
+        onSelectChat={(id) => setSelectedChatId(id)}
+        onToggleArchive={handleToggleArchive}
       />
 
       {/* Add Account Modal (Up to 6 users) */}

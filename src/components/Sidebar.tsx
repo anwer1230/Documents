@@ -17,6 +17,7 @@ import {
   Loader2,
   Globe,
   UserPlus,
+  Edit2,
 } from 'lucide-react';
 import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount, TypingStatus } from '../types';
 
@@ -603,14 +604,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Floating Action Button (New Message / Channel) */}
+      {/* Floating Action Button (New Message / Channel - Telegram Web K Pencil) */}
       <div className="absolute bottom-5 end-5 z-20">
         <button
           onClick={onOpenNewChat}
-          className="w-13 h-13 bg-[#3390ec] hover:bg-[#2b7ec9] text-white rounded-full flex items-center justify-center shadow-xl shadow-[#3390ec]/30 transition-transform hover:scale-105 active:scale-95"
-          title={isAr ? 'محادثة أو قناة جديدة' : 'New Chat or Channel'}
+          className="w-13 h-13 bg-[#3390ec] hover:bg-[#2881da] text-white rounded-full flex items-center justify-center shadow-xl shadow-[#3390ec]/30 transition-transform hover:scale-105 active:scale-95"
+          title={isAr ? 'محادثة أو قناة جديدة' : 'New Message or Channel'}
         >
-          <Plus className="w-6 h-6" />
+          <Edit2 className="w-5 h-5" />
         </button>
       </div>
     </aside>

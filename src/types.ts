@@ -145,6 +145,7 @@ export interface TelegramChat {
   };
   unreadCount: number;
   isPinned?: boolean;
+  isArchived?: boolean;
   isMuted?: boolean;
   isOnline?: boolean;
   isJoined?: boolean;
@@ -170,6 +171,9 @@ export interface TelegramThemeConfig {
   accentColor: string; // hex code
   fontSize: 'sm' | 'md' | 'lg';
   language: 'ar' | 'en';
+  wallpaper?: string;
+  animations?: boolean;
+  sendOnEnter?: boolean;
 }
 
 export interface TypingStatus {
