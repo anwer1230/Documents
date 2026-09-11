@@ -4,7 +4,14 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
-import { TelegramService, TELEGRAM_API_ID, TELEGRAM_API_HASH } from './server/telegramService.js';
+import {
+  TelegramService,
+  TELEGRAM_API_ID,
+  TELEGRAM_API_HASH,
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY,
+  VAPID_SUBJECT,
+} from './server/telegramService.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -38,6 +45,8 @@ async function startServer() {
       res.json({
         apiId: TELEGRAM_API_ID,
         apiHashConfigured: !!TELEGRAM_API_HASH,
+        vapidPublicKey: VAPID_PUBLIC_KEY,
+        vapidSubject: VAPID_SUBJECT,
         sessionToken: token,
         isLoggedIn: auth.isLoggedIn,
         user: auth.user,
@@ -46,11 +55,24 @@ async function startServer() {
       res.json({
         apiId: TELEGRAM_API_ID,
         apiHashConfigured: true,
+        vapidPublicKey: VAPID_PUBLIC_KEY,
+        vapidSubject: VAPID_SUBJECT,
         sessionToken: token,
         isLoggedIn: false,
         error: err.message,
       });
     }
+  });
+
+  // System Configuration Endpoint (Fixed permanent variables)
+  app.get('/api/system/config', (_req, res) => {
+    res.json({
+      TELEGRAM_API_ID,
+      TELEGRAM_API_HASH_CONFIGURED: !!TELEGRAM_API_HASH,
+      VAPID_PUBLIC_KEY,
+      VAPID_SUBJECT,
+      isPermanent: true,
+    });
   });
 
   // Multi-Account Management Endpoints (Up to 6 accounts)
