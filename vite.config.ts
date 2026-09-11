@@ -2,10 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
+import settingsSearchPlugin from './plugins/settingsSearchPlugin.js';
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), settingsSearchPlugin(__dirname)],
+    build: {
+      sourcemap: true,
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

@@ -1,0 +1,10 @@
+id,title,section,url
+general,General Settings,General,/settings/general
+privacy,Privacy and Security,Privacy,/settings/privacy
+notifications,Notifications and Sounds,Notifications,/settings/notifications
+data,Data and Storage,Data,/settings/data
+chat,Chat Settings,Chat,/settings/chat
+language,Language,Language,/settings/language
+folders,Chat Folders,Folders,/settings/folders
+devices,Devices,Devices,/settings/devices
+stories,Stories,Stories,/settings/stories

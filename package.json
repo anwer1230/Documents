@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && node scripts/check-bundle-mangling.mjs dist",
+    "check:mangling": "node scripts/check-bundle-mangling.mjs dist",
+    "vendor:tlottie": "node scripts/vendor-tlottie.mjs",
+    "test:api": "bash scripts/run-api-test.sh",
+    "preview:auth": "bash scripts/start-preview.sh",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
