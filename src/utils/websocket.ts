@@ -8,12 +8,18 @@
  */
 
 export interface WebSocketMessage {
-  type: 'connected' | 'new_message' | 'typing_status' | 'user_status' | 'message_read' | 'notification';
+  type: 'connected' | 'new_message' | 'typing_status' | 'user_status' | 'message_read' | 'message_edited' | 'messages_deleted' | 'notification';
   payload?: any;
   peerId?: string;
   action?: string;
   userName?: string;
   message?: any;
+  messageId?: string;
+  messageIds?: string[];
+  text?: string;
+  editDate?: number;
+  isOnline?: boolean;
+  userId?: string;
   time?: number;
 }
 

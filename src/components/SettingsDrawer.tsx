@@ -673,7 +673,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <div>
                   <span className="text-gray-400 block text-[11px]">VAPID_SUBJECT (ثابت):</span>
                   <span className="font-mono text-gray-300 break-all text-[10px]">
-                    mailto:anwerfoud80@gmail.com
+                    mailto:anwrfwad178@gmail.com
                   </span>
                 </div>
 

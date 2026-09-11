@@ -128,6 +128,26 @@ async function startServer() {
         peerId: update.peerId,
         messageId: update.messageId,
       });
+    } else if (update.type === 'message_edited') {
+      broadcastToSession(sessionToken, {
+        type: 'message_edited',
+        peerId: update.peerId,
+        messageId: update.messageId,
+        text: update.text,
+        editDate: update.editDate,
+      });
+    } else if (update.type === 'messages_deleted') {
+      broadcastToSession(sessionToken, {
+        type: 'messages_deleted',
+        peerId: update.peerId,
+        messageIds: update.messageIds,
+      });
+    } else if (update.type === 'user_status') {
+      broadcastToSession(sessionToken, {
+        type: 'user_status',
+        userId: update.userId,
+        isOnline: update.isOnline,
+      });
     } else if (update.type === 'typing_status') {
       broadcastToSession(sessionToken, {
         type: 'typing_status',
@@ -149,6 +169,13 @@ async function startServer() {
       activeWsClients.set(token, new Set());
     }
     activeWsClients.get(token)!.add(ws);
+
+    // Boot continuous MTProto client listener for this session token if authenticated
+    if (token && token !== 'guest' && !token.startsWith('demo_')) {
+      TelegramService.getOrCreateClient(token).catch((err) => {
+        console.warn('[WS] Could not boot MTProto client for session:', err?.message || err);
+      });
+    }
 
     // Initial connection confirmation
     ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
@@ -196,6 +223,32 @@ async function startServer() {
           });
           if (peerId) {
             TelegramService.markAsRead(token, peerId).catch(() => {});
+          }
+        } else if (data.type === 'edit_message') {
+          const { peerId, messageId, text } = data;
+          broadcastToSession(token, {
+            type: 'message_edited',
+            peerId,
+            messageId: String(messageId),
+            text,
+            editDate: Date.now(),
+          });
+          if (peerId && messageId && text) {
+            TelegramService.editMessage(token, peerId, Number(messageId), text).catch(() => {});
+          }
+        } else if (data.type === 'delete_message') {
+          const { peerId, messageId, messageIds } = data;
+          const targetIds = messageIds || (messageId ? [messageId] : []);
+          broadcastToSession(token, {
+            type: 'messages_deleted',
+            peerId,
+            messageIds: targetIds.map(String),
+          });
+          if (peerId && targetIds.length > 0) {
+            const numericIds = targetIds.map((id: any) => Number(id)).filter((id: number) => !isNaN(id));
+            if (numericIds.length > 0) {
+              TelegramService.deleteMessages(token, peerId, numericIds).catch(() => {});
+            }
           }
         } else if (data.type === 'typing_status') {
           const { peerId, action, userName } = data;
@@ -678,6 +731,11 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`Telegram Web Server running on port ${PORT}`);
+    
+    // Auto-bootstrap continuous MTProto updates engine for all saved accounts
+    TelegramService.initAllSavedSessions().catch((err) => {
+      console.warn('[Server] Auto-session bootstrap warning:', err?.message || err);
+    });
   });
 }
 

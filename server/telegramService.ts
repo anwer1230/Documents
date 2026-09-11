@@ -13,7 +13,7 @@ export const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 22043994);
 export const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
 export const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8';
 export const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4';
-export const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:anwerfoud80@gmail.com';
+export const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:anwrfwad178@gmail.com';
 export const MAX_TELEGRAM_ACCOUNTS = 6;
 
 export interface SavedAccount {
@@ -145,6 +145,211 @@ export class TelegramService {
     TelegramService.onUpdateCallback = cb;
   }
 
+  /**
+   * Bootstraps continuous MTProto listeners for all saved accounts on server startup
+   */
+  public static async initAllSavedSessions(): Promise<void> {
+    const storage = loadStorage();
+    const tokens = Object.keys(storage.sessions);
+    console.log(`[MTProto Updates Engine] Bootstrapping continuous listeners for ${tokens.length} saved sessions`);
+    for (const token of tokens) {
+      try {
+        await this.getOrCreateClient(token, storage.sessions[token]);
+        console.log(`[MTProto Updates Engine] Connected & listening on session: ${token.slice(0, 10)}...`);
+      } catch (err: any) {
+        console.warn(`[MTProto Updates Engine] Warning restoring session ${token}:`, err?.message || err);
+      }
+    }
+  }
+
+  /**
+   * Continuous UpdatesHandler matching Telegram Web K specification
+   * Unpacks recursive Updates containers, new messages, reads, edits, deletes, and typing indicators
+   */
+  public static handleMtprotoUpdate(sessionToken: string, update: any, client: TelegramClient) {
+    if (!TelegramService.onUpdateCallback || !update) return;
+
+    try {
+      const className = update.className || update.constructor?.name || '';
+
+      // 1. Unpack bulk updates (Updates or UpdatesCombined container)
+      if (className === 'Updates' || className === 'UpdatesCombined') {
+        if (Array.isArray(update.updates)) {
+          for (const subUpdate of update.updates) {
+            this.handleMtprotoUpdate(sessionToken, subUpdate, client);
+          }
+        }
+        return;
+      }
+
+      // 2. Unpack UpdateShort
+      if (className === 'UpdateShort' && update.update) {
+        this.handleMtprotoUpdate(sessionToken, update.update, client);
+        return;
+      }
+
+      // 3. New Messages (Private, Group, Supergroup, Channel)
+      if (
+        className === 'UpdateNewMessage' ||
+        className === 'UpdateNewChannelMessage' ||
+        className === 'UpdateShortMessage' ||
+        className === 'UpdateShortChatMessage'
+      ) {
+        const msg = update.message || update;
+        const text = msg.message || msg.text || '';
+        const rawPeer = msg.peerId;
+        const peerId =
+          rawPeer?.userId?.toString() ||
+          rawPeer?.channelId?.toString() ||
+          rawPeer?.chatId?.toString() ||
+          msg.chatId?.toString() ||
+          msg.fromId?.userId?.toString() ||
+          msg.fromId?.channelId?.toString() ||
+          msg.userId?.toString() ||
+          'user';
+
+        const isOut = !!msg.out;
+        const senderId = isOut
+          ? 'me'
+          : (msg.fromId?.userId?.toString() || msg.fromId?.channelId?.toString() || msg.userId?.toString() || peerId);
+        const senderName = isOut ? 'أنا' : 'Telegram';
+
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'new_message',
+          peerId,
+          message: {
+            id: msg.id?.toString() || 'msg_' + Date.now(),
+            chatId: peerId,
+            senderId,
+            senderName,
+            text,
+            timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
+            isOut,
+            status: isOut ? 'sent' : 'received',
+            replyTo: msg.replyTo?.replyToMsgId ? { id: msg.replyTo.replyToMsgId.toString() } : undefined,
+            media: msg.media ? sanitizeData(msg.media) : undefined,
+          },
+        });
+        return;
+      }
+
+      // 4. Edited Messages (UpdateEditMessage / UpdateEditChannelMessage)
+      if (className === 'UpdateEditMessage' || className === 'UpdateEditChannelMessage') {
+        const msg = update.message;
+        if (msg) {
+          const rawPeer = msg.peerId;
+          const peerId =
+            rawPeer?.userId?.toString() ||
+            rawPeer?.channelId?.toString() ||
+            rawPeer?.chatId?.toString() ||
+            msg.fromId?.userId?.toString() ||
+            'user';
+
+          TelegramService.onUpdateCallback(sessionToken, {
+            type: 'message_edited',
+            peerId,
+            messageId: msg.id?.toString(),
+            text: msg.message || '',
+            editDate: (msg.editDate || Math.floor(Date.now() / 1000)) * 1000,
+          });
+        }
+        return;
+      }
+
+      // 5. Deleted Messages (UpdateDeleteMessages / UpdateDeleteChannelMessages)
+      if (className === 'UpdateDeleteMessages') {
+        const messageIds = (update.messages || []).map((id: any) => id.toString());
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'messages_deleted',
+          messageIds,
+        });
+        return;
+      }
+      if (className === 'UpdateDeleteChannelMessages') {
+        const channelId = update.channelId?.toString();
+        const messageIds = (update.messages || []).map((id: any) => id.toString());
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'messages_deleted',
+          peerId: channelId,
+          messageIds,
+        });
+        return;
+      }
+
+      // 6. Read History Updates (Outbox = sent messages read; Inbox = incoming messages read)
+      if (
+        className === 'UpdateReadHistoryOutbox' ||
+        className === 'UpdateReadChannelOutbox'
+      ) {
+        const peerId =
+          update.peer?.userId?.toString() ||
+          update.peer?.channelId?.toString() ||
+          update.peer?.chatId?.toString() ||
+          update.channelId?.toString();
+
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'message_read',
+          peerId,
+          messageId: update.maxId?.toString(),
+          isOutbox: true,
+        });
+        return;
+      }
+      if (
+        className === 'UpdateReadHistoryInbox' ||
+        className === 'UpdateReadChannelInbox'
+      ) {
+        const peerId =
+          update.peer?.userId?.toString() ||
+          update.peer?.channelId?.toString() ||
+          update.peer?.chatId?.toString() ||
+          update.channelId?.toString();
+
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'message_read',
+          peerId,
+          messageId: update.maxId?.toString(),
+          isInbox: true,
+        });
+        return;
+      }
+
+      // 7. Typing Updates (UpdateUserTyping / UpdateChatUserTyping / UpdateChannelUserTyping)
+      if (
+        className === 'UpdateUserTyping' ||
+        className === 'UpdateChatUserTyping' ||
+        className === 'UpdateChannelUserTyping'
+      ) {
+        const peerId =
+          update.chatId?.toString() ||
+          update.channelId?.toString() ||
+          update.userId?.toString() ||
+          update.peer?.userId?.toString();
+
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'typing_status',
+          peerId,
+          action: 'typing',
+        });
+        return;
+      }
+
+      // 8. User Status Updates (Online / Offline)
+      if (className === 'UpdateUserStatus') {
+        const userId = update.userId?.toString();
+        const isOnline = update.status?.className === 'UserStatusOnline';
+        TelegramService.onUpdateCallback(sessionToken, {
+          type: 'user_status',
+          userId,
+          isOnline,
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn('[MTProto Updates Engine] Error processing update:', err);
+    }
+  }
+
   public static async markAsRead(sessionToken: string, peerId: string) {
     try {
       const client = await this.getOrCreateClient(sessionToken);
@@ -225,46 +430,10 @@ export class TelegramService {
         throw connErr;
       }
 
-      // Attach real-time update event handler for MTProto
+      // Attach continuous MTProto updates handler matching Telegram Web K
       try {
         client.addEventHandler(async (update: any) => {
-          if (!TelegramService.onUpdateCallback) return;
-          try {
-            const className = update.className || '';
-            if (className === 'UpdateNewMessage' || className === 'UpdateShortMessage' || className === 'UpdateShortChatMessage') {
-              const msg = update.message || update;
-              const text = msg.message || msg.text || '';
-              const peerId = msg.peerId?.userId?.toString() || msg.peerId?.chatId?.toString() || msg.peerId?.channelId?.toString() || msg.fromId?.userId?.toString() || 'user';
-              TelegramService.onUpdateCallback(sessionToken, {
-                type: 'new_message',
-                peerId,
-                message: {
-                  id: msg.id?.toString() || 'msg_' + Date.now(),
-                  chatId: peerId,
-                  senderId: msg.out ? 'me' : peerId,
-                  senderName: msg.out ? 'أنا' : 'Telegram',
-                  text,
-                  timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
-                  isOut: !!msg.out,
-                  status: 'sent',
-                },
-              });
-            } else if (className === 'UpdateReadHistoryInbox' || className === 'UpdateReadHistoryOutbox') {
-              const peerId = update.peer?.channelId?.toString() || update.peer?.chatId?.toString() || update.peer?.userId?.toString();
-              TelegramService.onUpdateCallback(sessionToken, {
-                type: 'message_read',
-                peerId,
-                messageId: update.maxId?.toString(),
-              });
-            } else if (className === 'UpdateUserTyping' || className === 'UpdateChatUserTyping') {
-              const peerId = update.userId?.toString() || update.chatId?.toString();
-              TelegramService.onUpdateCallback(sessionToken, {
-                type: 'typing_status',
-                peerId,
-                action: 'typing',
-              });
-            }
-          } catch (e) {}
+          TelegramService.handleMtprotoUpdate(sessionToken, update, client);
         });
       } catch (handlerErr) {
         console.warn('Could not attach update handler:', handlerErr);
@@ -641,6 +810,35 @@ export class TelegramService {
       replyTo: replyTo ? Number(replyTo) : undefined,
     });
     return sanitizeData(res);
+  }
+
+  public static async deleteMessages(sessionToken: string, peerId: string, messageIds: number[], revoke: boolean = true) {
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const { Api } = await import('telegram');
+      await client.invoke(
+        new Api.messages.DeleteMessages({
+          id: messageIds,
+          revoke,
+        })
+      );
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public static async editMessage(sessionToken: string, peerId: string, messageId: number, text: string) {
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res = await client.editMessage(peerId, {
+        message: messageId,
+        text,
+      });
+      return sanitizeData(res);
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   }
 
   public static async setTyping(sessionToken: string, peerId: string, action: string = 'typing') {

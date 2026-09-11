@@ -299,10 +299,16 @@ export default function App() {
         const msg = event.message;
         const targetChatId = event.peerId || msg.chatId || selectedChatId;
 
-        setMessagesMap((prev) => ({
-          ...prev,
-          [targetChatId]: [...(prev[targetChatId] || []), msg],
-        }));
+        setMessagesMap((prev) => {
+          const currentList = prev[targetChatId] || [];
+          if (currentList.some((m) => m.id === msg.id)) {
+            return prev;
+          }
+          return {
+            ...prev,
+            [targetChatId]: [...currentList, msg],
+          };
+        });
 
         setChats((prev) =>
           prev.map((c) =>
@@ -334,6 +340,50 @@ export default function App() {
         setChats((prev) =>
           prev.map((c) =>
             c.id === targetChatId ? { ...c, unreadCount: 0 } : c
+          )
+        );
+      } else if (event.type === 'message_edited' && event.peerId && event.messageId) {
+        const targetChatId = event.peerId;
+        setMessagesMap((prev) => {
+          const list = prev[targetChatId];
+          if (!list) return prev;
+          return {
+            ...prev,
+            [targetChatId]: list.map((m) =>
+              m.id === event.messageId
+                ? { ...m, text: event.text || m.text, isEdited: true }
+                : m
+            ),
+          };
+        });
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === targetChatId && c.lastMessage
+              ? {
+                  ...c,
+                  lastMessage: { ...c.lastMessage, text: event.text || c.lastMessage.text },
+                }
+              : c
+          )
+        );
+      } else if (event.type === 'messages_deleted' && event.messageIds) {
+        const delIds = new Set(event.messageIds);
+        setMessagesMap((prev) => {
+          const updated: Record<string, TelegramMessage[]> = {};
+          for (const [chatId, msgs] of Object.entries(prev) as [string, TelegramMessage[]][]) {
+            updated[chatId] = msgs.filter((m) => !delIds.has(m.id));
+          }
+          return updated;
+        });
+      } else if (event.type === 'user_status' && event.userId) {
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === event.userId
+              ? {
+                  ...c,
+                  isOnline: !!event.isOnline,
+                }
+              : c
           )
         );
       } else if (event.type === 'typing_status' && event.peerId) {
