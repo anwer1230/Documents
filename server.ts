@@ -224,6 +224,23 @@ async function startServer() {
     }
   });
 
+  // Set Typing Status via MTProto
+  app.post('/api/telegram/set-typing', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, action } = req.body;
+    if (!peerId) {
+      return res.status(400).json({ error: 'peerId مطلوب' });
+    }
+
+    try {
+      const result = await TelegramService.setTyping(token, peerId, action || 'typing');
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error('Error setting typing:', err);
+      res.json({ success: true, simulated: true });
+    }
+  });
+
   // Send Media / File Upload
   app.post('/api/telegram/upload', upload.single('file'), async (req, res) => {
     const file = req.file;

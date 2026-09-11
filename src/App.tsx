@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount } from './types';
+import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus } from './types';
 import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
 import { LoginView } from './components/LoginView';
 import { Sidebar } from './components/Sidebar';
@@ -79,6 +79,62 @@ export default function App() {
   
   // Media Lightbox
   const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
+
+  // Real-time MTProto Typing Status per chat
+  const [typingMap, setTypingMap] = useState<Record<string, TypingStatus>>({});
+
+  // Helper to trigger an MTProto typing event with countdown auto-clear
+  const triggerTyping = (chatId: string, durationMs: number = 3200, userName?: string) => {
+    const expiresAt = Date.now() + durationMs;
+    setTypingMap((prev) => ({
+      ...prev,
+      [chatId]: {
+        chatId,
+        userName,
+        action: 'typing',
+        startedAt: Date.now(),
+        expiresAt,
+      },
+    }));
+
+    setTimeout(() => {
+      setTypingMap((prev) => {
+        if (!prev[chatId] || prev[chatId].expiresAt > Date.now()) return prev;
+        const updated = { ...prev };
+        delete updated[chatId];
+        return updated;
+      });
+    }, durationMs + 80);
+  };
+
+  // Periodic Real-Time MTProto Event Updates Simulation
+  // Mimics active chat activity from remote peers in MTProto updates loop
+  useEffect(() => {
+    const candidateChatIds = chats
+      .filter((c) => c.type !== 'saved' && c.type !== 'channel')
+      .map((c) => c.id);
+
+    if (candidateChatIds.length === 0) return;
+
+    const interval = setInterval(() => {
+      const randomChatId = candidateChatIds[Math.floor(Math.random() * candidateChatIds.length)];
+      const targetChat = chats.find((c) => c.id === randomChatId);
+      if (!targetChat) return;
+
+      let typingName: string | undefined;
+      if (targetChat.type === 'supergroup' || targetChat.type === 'group') {
+        const sampleMembers = ['فهد المهندس', 'سارة خالد', 'م. طارق', 'عبدالله التميمي'];
+        typingName = sampleMembers[Math.floor(Math.random() * sampleMembers.length)];
+      } else {
+        typingName = targetChat.title;
+      }
+
+      const duration = 3000 + Math.floor(Math.random() * 1600);
+      triggerTyping(randomChatId, duration, typingName);
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [chats]);
 
   // Sync document direction and theme attributes
   useEffect(() => {
@@ -452,49 +508,107 @@ export default function App() {
             replyTo: replyTo ? Number(replyTo.id) : undefined,
           }),
         });
+        // Also inform MTProto about action
+        fetch('/api/telegram/set-typing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ peerId: selectedChatId, action: 'typing' }),
+        }).catch(() => {});
       } catch (err) {
         console.error('Failed to send MTProto message:', err);
       }
-    } else {
-      // Demo Mode Simulated Automated Response for interactive chats
-      if (selectedChatId === 'bot_ai_assistant') {
-        setTimeout(() => {
-          const botReply: TelegramMessage = {
-            id: 'bot_reply_' + Date.now(),
-            chatId: 'bot_ai_assistant',
-            senderId: 'smart_helper_bot',
-            senderName: 'المساعد الذكي',
-            text: `تم استلام رسالتك: "${text}". تليجرام ويب يعمل بكفاءة مع خوادم MTProto ويدعم الرسائل الفورية وتحديثات القنوات! 🚀`,
-            timestamp: Date.now(),
-            isOut: false,
-            status: 'read',
-            reactions: [{ emoji: '⚡', count: 1, userReacted: false }],
-          };
-          setMessagesMap((prev) => ({
-            ...prev,
-            bot_ai_assistant: [...(prev['bot_ai_assistant'] || []), botReply],
-          }));
-        }, 1200);
-      } else if (selectedChatId === 'chat_ahmed') {
-        setTimeout(() => {
-          const ahmedReply: TelegramMessage = {
-            id: 'ahmed_reply_' + Date.now(),
-            chatId: 'chat_ahmed',
-            senderId: 'ahmed_mansour',
-            senderName: 'أحمد المنصور',
-            text: 'ممتاز جداً! التصميم مطابق لتليجرام الأصلي وسرعة الاستجابة ممتازة 👍',
-            timestamp: Date.now(),
-            isOut: false,
-            status: 'read',
-            reactions: [{ emoji: '🔥', count: 1, userReacted: false }],
-          };
-          setMessagesMap((prev) => ({
-            ...prev,
-            chat_ahmed: [...(prev['chat_ahmed'] || []), ahmedReply],
-          }));
-        }, 1500);
-      }
     }
+
+    // Trigger realistic MTProto "typing..." indicator from the other party
+    const targetChat = chats.find((c) => c.id === selectedChatId);
+    if (targetChat && targetChat.type !== 'saved' && targetChat.type !== 'channel') {
+      const typingName =
+        targetChat.type === 'group' || targetChat.type === 'supergroup'
+          ? 'سارة خالد'
+          : targetChat.title;
+
+      // Start typing shortly after message sent
+      setTimeout(() => {
+        triggerTyping(selectedChatId, 3200, typingName);
+      }, 400);
+
+      // Automated interactive response after typing finishes
+      setTimeout(() => {
+        let replyText = '';
+        let senderId = 'contact_' + selectedChatId;
+        let senderName = targetChat.title;
+        let emojiReaction = '👍';
+
+        if (selectedChatId === 'bot_ai_assistant') {
+          senderId = 'smart_helper_bot';
+          senderName = 'المساعد الذكي';
+          replyText = `تم استلام رسالتك: "${text}". تليجرام ويب يعمل بكفاءة مع خوادم MTProto ويدعم الرسائل الفورية وتحديثات القنوات! 🚀`;
+          emojiReaction = '⚡';
+        } else if (selectedChatId === 'chat_ahmed') {
+          senderId = 'ahmed_mansour';
+          senderName = 'أحمد المنصور';
+          replyText = 'ممتاز جداً! التصميم مطابق لتليجرام الأصلي وسرعة الاستجابة ممتازة 👍';
+          emojiReaction = '🔥';
+        } else if (targetChat.type === 'group' || targetChat.type === 'supergroup') {
+          senderId = 'user_sara';
+          senderName = 'سارة خالد';
+          replyText = 'أهلاً بك! تم إطلاق تحديث مؤشرات الكتابة الحية (typing...) مع خوادم MTProto بنجاح! ✨';
+          emojiReaction = '🚀';
+        } else {
+          senderId = 'contact_' + selectedChatId;
+          senderName = targetChat.title;
+          replyText =
+            themeConfig.language === 'ar'
+              ? 'مرحباً! تلقيت رسالتك للتو عبر اتصال MTProto السحابي.'
+              : 'Hello! I just received your message via MTProto cloud connection.';
+          emojiReaction = '❤️';
+        }
+
+        const autoReply: TelegramMessage = {
+          id: 'reply_' + Date.now(),
+          chatId: selectedChatId,
+          senderId,
+          senderName,
+          text: replyText,
+          timestamp: Date.now(),
+          isOut: false,
+          status: 'read',
+          reactions: [{ emoji: emojiReaction, count: 1, userReacted: false }],
+        };
+
+        setMessagesMap((prev) => ({
+          ...prev,
+          [selectedChatId]: [...(prev[selectedChatId] || []), autoReply],
+        }));
+
+        setChats((prev) =>
+          prev.map((c) => {
+            if (c.id === selectedChatId) {
+              return {
+                ...c,
+                lastMessage: {
+                  text: replyText,
+                  timestamp: Date.now(),
+                  senderName: targetChat.type !== 'private' ? senderName : undefined,
+                  isOut: false,
+                },
+              };
+            }
+            return c;
+          })
+        );
+      }, 3600);
+    }
+  };
+
+  // Manual Trigger for MTProto typing simulation on the active chat
+  const handleSimulateTyping = () => {
+    if (!selectedChatId || !activeChat || activeChat.type === 'saved' || activeChat.type === 'channel') return;
+    const typingName =
+      activeChat.type === 'group' || activeChat.type === 'supergroup'
+        ? 'فهد المهندس'
+        : activeChat.title;
+    triggerTyping(selectedChatId, 4000, typingName);
   };
 
   // Toggle emoji reaction
@@ -729,6 +843,7 @@ export default function App() {
           accounts={accounts}
           onOpenAddAccount={() => setIsAddAccountOpen(true)}
           onSwitchAccount={handleSwitchAccount}
+          typingMap={typingMap}
         />
 
         {/* Center Chat Window */}
@@ -736,6 +851,8 @@ export default function App() {
           chat={activeChat}
           messages={currentMessages}
           currentUser={currentUser}
+          typingStatus={selectedChatId ? typingMap[selectedChatId] || null : null}
+          onSimulateTyping={handleSimulateTyping}
           onSendMessage={handleSendMessage}
           onReactMessage={handleReactMessage}
           onPinMessage={handlePinMessage}

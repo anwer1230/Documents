@@ -14,7 +14,7 @@ import {
   Plus,
   VolumeX,
 } from 'lucide-react';
-import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount } from '../types';
+import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount, TypingStatus } from '../types';
 
 interface SidebarProps {
   chats: TelegramChat[];
@@ -32,6 +32,7 @@ interface SidebarProps {
   accounts?: TelegramAccount[];
   onOpenAddAccount?: () => void;
   onSwitchAccount?: (accountId: string) => void;
+  typingMap?: Record<string, TypingStatus>;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -50,6 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   accounts = [],
   onOpenAddAccount,
   onSwitchAccount,
+  typingMap = {},
 }) => {
   const isAr = lang === 'ar';
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -184,29 +186,62 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="flex items-center justify-between gap-1 text-xs">
-            <p
-              className={`truncate flex-1 text-start ${
-                isSelected ? 'text-blue-100' : isDark ? 'text-gray-400' : 'text-gray-500'
-              }`}
-            >
-              {chat.lastMessage ? (
-                <>
-                  {chat.lastMessage.isOut && (
-                    <span className="inline-flex items-center gap-0.5 me-1 text-emerald-400 align-middle">
-                      <CheckCheck className="w-3.5 h-3.5 inline" />
-                    </span>
-                  )}
-                  {chat.lastMessage.senderName && chat.type !== 'private' && (
-                    <span className="font-medium me-1">{chat.lastMessage.senderName}:</span>
-                  )}
-                  <span>{chat.lastMessage.text}</span>
-                </>
-              ) : (
-                <span className="italic text-gray-500">
-                  {isAr ? 'لا توجد رسائل بعد' : 'No messages yet'}
+            {typingMap && typingMap[chat.id] && Date.now() < typingMap[chat.id].expiresAt ? (
+              <div
+                className={`flex items-center gap-1.5 flex-1 truncate font-medium ${
+                  isSelected ? 'text-white' : 'text-[#3390ec]'
+                }`}
+              >
+                <span className="inline-flex items-center gap-0.5 shrink-0" aria-hidden="true">
+                  <span
+                    className={`w-1 h-1 rounded-full animate-bounce [animation-delay:-0.3s] ${
+                      isSelected ? 'bg-white' : 'bg-[#3390ec]'
+                    }`}
+                  />
+                  <span
+                    className={`w-1 h-1 rounded-full animate-bounce [animation-delay:-0.15s] ${
+                      isSelected ? 'bg-white' : 'bg-[#3390ec]'
+                    }`}
+                  />
+                  <span
+                    className={`w-1 h-1 rounded-full animate-bounce ${
+                      isSelected ? 'bg-white' : 'bg-[#3390ec]'
+                    }`}
+                  />
                 </span>
-              )}
-            </p>
+                <span className="truncate">
+                  {chat.type === 'group' || chat.type === 'supergroup'
+                    ? `${typingMap[chat.id].userName || ''} ${isAr ? 'يكتب...' : 'is typing...'}`
+                    : isAr
+                    ? 'يكتب...'
+                    : 'typing...'}
+                </span>
+              </div>
+            ) : (
+              <p
+                className={`truncate flex-1 text-start ${
+                  isSelected ? 'text-blue-100' : isDark ? 'text-gray-400' : 'text-gray-500'
+                }`}
+              >
+                {chat.lastMessage ? (
+                  <>
+                    {chat.lastMessage.isOut && (
+                      <span className="inline-flex items-center gap-0.5 me-1 text-emerald-400 align-middle">
+                        <CheckCheck className="w-3.5 h-3.5 inline" />
+                      </span>
+                    )}
+                    {chat.lastMessage.senderName && chat.type !== 'private' && (
+                      <span className="font-medium me-1">{chat.lastMessage.senderName}:</span>
+                    )}
+                    <span>{chat.lastMessage.text}</span>
+                  </>
+                ) : (
+                  <span className="italic text-gray-500">
+                    {isAr ? 'لا توجد رسائل بعد' : 'No messages yet'}
+                  </span>
+                )}
+              </p>
+            )}
 
             <div className="flex items-center gap-1.5 shrink-0">
               {chat.isPinned && (

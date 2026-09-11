@@ -92,3 +92,11 @@ export interface TelegramThemeConfig {
   fontSize: 'sm' | 'md' | 'lg';
   language: 'ar' | 'en';
 }
+
+export interface TypingStatus {
+  chatId: string;
+  userName?: string;
+  action?: 'typing' | 'recording' | 'uploading';
+  startedAt: number;
+  expiresAt: number;
+}
