@@ -80,6 +80,9 @@ export interface TelegramChat {
   isPinned?: boolean;
   isMuted?: boolean;
   isOnline?: boolean;
+  isJoined?: boolean;
+  isVerified?: boolean;
+  participantsCount?: number;
   membersCount?: number;
   description?: string;
   inviteLink?: string;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Menu,
   Search,
@@ -13,6 +13,10 @@ import {
   CheckCheck,
   Plus,
   VolumeX,
+  CheckCircle2,
+  Loader2,
+  Globe,
+  UserPlus,
 } from 'lucide-react';
 import { TelegramChat, ChatFolder, TelegramUser, TelegramAccount, TypingStatus } from '../types';
 
@@ -55,6 +59,67 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isAr = lang === 'ar';
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [globalResults, setGlobalResults] = useState<any[]>([]);
+  const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
+
+  // Debounced Telegram Global Search (MTProto contacts.search & channels lookup)
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length === 0) {
+      setGlobalResults([]);
+      setIsSearchingGlobal(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingGlobal(true);
+      try {
+        const res = await fetch(`/api/telegram/search-global?q=${encodeURIComponent(searchQuery.trim())}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.results) {
+            setGlobalResults(data.results);
+          }
+        }
+      } catch (err) {
+        console.error('Error in Telegram global search:', err);
+      } finally {
+        setIsSearchingGlobal(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const formatFollowers = (count?: number) => {
+    if (!count) return '';
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+    if (count >= 1000) return `${(count / 1000).toFixed(0)}K`;
+    return count.toLocaleString();
+  };
+
+  const handleSelectGlobalResult = (result: any) => {
+    const existing = chats.find(
+      (c) => c.id === result.id || (c.username && c.username.toLowerCase() === result.username?.toLowerCase())
+    );
+    if (existing) {
+      onSelectChat(existing);
+      return;
+    }
+
+    const newChat: TelegramChat = {
+      id: result.id || `channel_${result.username || Date.now()}`,
+      title: result.title || result.username || 'قناة تليجرام',
+      username: result.username,
+      type: result.type || 'channel',
+      isJoined: result.isJoined ?? false,
+      isVerified: result.isVerified ?? false,
+      membersCount: result.participantsCount || 12000,
+      description: result.description,
+      unreadCount: 0,
+      avatarColor: '#3390ec',
+    };
+    onSelectChat(newChat);
+  };
 
   // Filter chats by Folder and Search query
   const filteredChats = chats.filter((chat) => {
@@ -387,17 +452,140 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Chat List Scroll Area */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1 divide-y divide-transparent">
-        {filteredChats.length === 0 ? (
+        {searchQuery.trim() ? (
+          <div>
+            {/* Section 1: Chats and Contacts */}
+            {filteredChats.length > 0 && (
+              <div className="mb-3">
+                <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-gray-400 flex items-center justify-between">
+                  <span>{isAr ? 'المحادثات وجهات الاتصال' : 'Chats and Contacts'}</span>
+                  <span className="text-[10px] bg-gray-500/10 px-2 py-0.5 rounded-full">{filteredChats.length}</span>
+                </div>
+                <div className="space-y-1">
+                  {filteredChats.map(renderChatItem)}
+                </div>
+              </div>
+            )}
+
+            {/* Section 2: Telegram Global Search */}
+            <div className="mt-2">
+              <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[#3390ec] flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>{isAr ? 'البحث العام في تيليجرام' : 'Global Search'}</span>
+                </span>
+                {isSearchingGlobal && <Loader2 className="w-3.5 h-3.5 animate-spin text-[#3390ec]" />}
+              </div>
+
+              {isSearchingGlobal ? (
+                <div className="py-6 text-center text-xs text-gray-400 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#3390ec]" />
+                  <span>{isAr ? 'جارٍ البحث عن القنوات في تيليجرام...' : 'Searching channels on Telegram...'}</span>
+                </div>
+              ) : globalResults.length > 0 ? (
+                <div className="space-y-1">
+                  {globalResults.map((item) => {
+                    const isChannel = item.type === 'channel';
+                    const isGroup = item.type === 'group' || item.type === 'supergroup';
+                    const isSelected = selectedChatId === item.id;
+                    const isAlreadyMember =
+                      item.isJoined ||
+                      chats.some(
+                        (c) =>
+                          c.id === item.id ||
+                          (c.username && c.username.toLowerCase() === item.username?.toLowerCase() && c.isJoined !== false)
+                      );
+
+                    return (
+                      <button
+                        key={item.id || item.username}
+                        onClick={() => handleSelectGlobalResult(item)}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-start relative group select-none ${
+                          isSelected
+                            ? isDark
+                              ? 'bg-[#2b5278] text-white'
+                              : 'bg-[#3390ec] text-white'
+                            : isDark
+                            ? 'hover:bg-[#202b36] text-gray-200'
+                            : 'hover:bg-[#f4f4f5] text-gray-900'
+                        }`}
+                      >
+                        {/* Avatar */}
+                        <div className="relative shrink-0">
+                          <div
+                            className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-base shadow-sm text-white"
+                            style={{
+                              backgroundColor: isChannel ? '#3390ec' : isGroup ? '#2fa28a' : '#8e54e9',
+                            }}
+                          >
+                            {isChannel ? (
+                              <Radio className="w-5 h-5" />
+                            ) : isGroup ? (
+                              <Users className="w-5 h-5" />
+                            ) : (
+                              <Bot className="w-5 h-5" />
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Title & info */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-1 mb-0.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-semibold text-sm truncate">{item.title}</span>
+                              {item.isVerified && (
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[#3390ec] fill-[#3390ec]/20 shrink-0" />
+                              )}
+                            </div>
+                            {isAlreadyMember ? (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium shrink-0 bg-green-500/15 text-green-400">
+                                {isAr ? 'عضو' : 'Joined'}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-medium shrink-0 bg-[#3390ec]/15 text-[#3390ec] group-hover:bg-[#3390ec] group-hover:text-white transition">
+                                {isChannel ? (isAr ? 'قناة' : 'Channel') : isGroup ? (isAr ? 'مجموعة' : 'Group') : (isAr ? 'بوت' : 'Bot')}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 text-xs text-gray-400">
+                            {item.username && <span>@{item.username}</span>}
+                            {item.participantsCount && (
+                              <>
+                                <span>•</span>
+                                <span>
+                                  {formatFollowers(item.participantsCount)}{' '}
+                                  {isChannel
+                                    ? isAr
+                                      ? 'مشترك'
+                                      : 'subscribers'
+                                    : isAr
+                                    ? 'عضو'
+                                    : 'members'}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : filteredChats.length === 0 ? (
+                <div className="text-center py-12 px-4">
+                  <MessageSquare className="w-12 h-12 mx-auto text-gray-500/40 mb-3" />
+                  <p className="text-sm text-gray-400 font-medium">
+                    {isAr ? 'لا توجد نتائج مطابقة لبحثك في تيليجرام' : 'No results found on Telegram'}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : filteredChats.length === 0 ? (
           <div className="text-center py-12 px-4">
             <MessageSquare className="w-12 h-12 mx-auto text-gray-500/40 mb-3" />
             <p className="text-sm text-gray-400 font-medium">
-              {searchQuery
-                ? isAr
-                  ? 'لا توجد نتائج مطابقة لبحثك'
-                  : 'No chats found matching your search'
-                : isAr
-                ? 'لا توجد محادثات في هذا المجلد'
-                : 'No chats in this folder'}
+              {isAr ? 'لا توجد محادثات في هذا المجلد' : 'No chats in this folder'}
             </p>
           </div>
         ) : (

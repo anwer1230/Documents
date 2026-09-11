@@ -28,6 +28,12 @@ import {
   Square,
   CornerDownRight,
   ExternalLink,
+  Radio,
+  CheckCircle2,
+  Loader2,
+  Bell,
+  BellOff,
+  UserPlus,
 } from 'lucide-react';
 import { TelegramChat, TelegramMessage, TelegramUser, TypingStatus } from '../types';
 import { MessageInput } from './MessageInput';
@@ -58,6 +64,8 @@ interface ChatWindowProps {
   onReportChat: (chatId: string, reason: string, details?: string) => void;
   onOpenMediaViewer: (url: string, title?: string) => void;
   onOpenMiniApp?: () => void;
+  onJoinChannel?: (chatId: string) => Promise<void> | void;
+  isJoiningChannel?: boolean;
   onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
   lang: 'ar' | 'en';
   isDark: boolean;
@@ -82,6 +90,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onReportChat,
   onOpenMediaViewer,
   onOpenMiniApp,
+  onJoinChannel,
+  isJoiningChannel,
   onToast,
   lang,
   isDark,
@@ -319,7 +329,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               <div className="min-w-0 flex-1">
                 <h2 className="font-bold text-sm truncate flex items-center gap-1.5">
                   <span>{chat.title}</span>
-                  {chat.isMuted && <VolumeX className="w-3.5 h-3.5 text-gray-400" />}
+                  {chat.isVerified && (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#3390ec] fill-[#3390ec]/20 shrink-0" />
+                  )}
+                  {chat.isMuted && <VolumeX className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
                 </h2>
                 {typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt ? (
                   <div className="flex items-center gap-1.5 text-xs text-[#3390ec] font-semibold transition-all">
@@ -1087,15 +1100,88 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
       )}
 
-      {/* Bottom Message Input Bar */}
-      <MessageInput
-        onSendMessage={onSendMessage}
-        replyToMessage={replyingMessage}
-        onCancelReply={() => setReplyingMessage(null)}
-        onOpenMiniApp={onOpenMiniApp}
-        lang={lang}
-        isDark={isDark}
-      />
+      {/* Bottom Action Bar: JOIN CHANNEL or MUTE/UNMUTE or Message Input */}
+      {chat.type === 'channel' && chat.isJoined === false ? (
+        <div
+          className={`w-full px-4 py-3 border-t flex flex-col sm:flex-row items-center justify-between gap-3 backdrop-blur-md transition-colors ${
+            isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <Radio className="w-4 h-4 text-[#3390ec]" />
+            <span>
+              {isAr
+                ? 'أنت في وضع معاينة القناة. انضم لتصلك منشورات وتحديثات القناة.'
+                : 'Preview mode. Join to receive posts and updates from this channel.'}
+            </span>
+          </div>
+          <button
+            onClick={() => onJoinChannel && onJoinChannel(chat.id)}
+            disabled={isJoiningChannel}
+            className="w-full sm:w-auto min-w-[200px] py-2.5 px-6 rounded-xl bg-[#3390ec] hover:bg-[#2b7ec9] active:scale-98 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-[#3390ec]/25 transition disabled:opacity-60"
+          >
+            {isJoiningChannel ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>{isAr ? 'جارٍ الانضمام...' : 'JOINING...'}</span>
+              </>
+            ) : (
+              <>
+                <UserPlus className="w-4 h-4" />
+                <span>{isAr ? 'الانضمام إلى القناة' : 'JOIN CHANNEL'}</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : chat.type === 'channel' && chat.isJoined !== false ? (
+        <div
+          className={`w-full px-4 py-2.5 border-t flex items-center justify-between gap-3 backdrop-blur-md transition-colors ${
+            isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
+          }`}
+        >
+          <div className="text-xs text-gray-400 flex items-center gap-2">
+            <Radio className="w-3.5 h-3.5 text-[#3390ec]" />
+            <span>
+              {isAr
+                ? 'قناة إذاعية عامة • تُنشر المنشورات بواسطة الإدارة'
+                : 'Broadcast channel • Only admins can post'}
+            </span>
+          </div>
+
+          <button
+            onClick={() => onToggleMute(chat.id)}
+            className={`px-4 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${
+              chat.isMuted
+                ? isDark
+                  ? 'bg-[#242f3d] text-gray-300 hover:bg-[#2b394a]'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                : 'bg-[#3390ec]/10 text-[#3390ec] hover:bg-[#3390ec]/20'
+            }`}
+          >
+            {chat.isMuted ? (
+              <>
+                <Volume2 className="w-4 h-4" />
+                <span>{isAr ? 'إلغاء كتم الإشعارات' : 'UNMUTE'}</span>
+              </>
+            ) : (
+              <>
+                <VolumeX className="w-4 h-4" />
+                <span>{isAr ? 'كتم الإشعارات' : 'MUTE'}</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : (
+        /* Bottom Message Input Bar */
+        <MessageInput
+          onSendMessage={onSendMessage}
+          replyToMessage={replyingMessage}
+          onCancelReply={() => setReplyingMessage(null)}
+          onOpenMiniApp={onOpenMiniApp}
+          lang={lang}
+          isDark={isDark}
+        />
+      )}
 
       {/* Modals */}
       {/* 1. Clear History Modal */}

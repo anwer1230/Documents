@@ -543,6 +543,60 @@ async function startServer() {
     });
   });
 
+  // Global Search for Channels, Groups, and Bots (Telegram Web K mechanism)
+  app.get('/api/telegram/search-global', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const query = (req.query.q as string) || '';
+    try {
+      const results = await TelegramService.searchGlobal(token, query);
+      res.json({ success: true, results });
+    } catch (err: any) {
+      console.error('Error in search-global:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Join Channel or Supergroup (Telegram Web K mechanism)
+  app.post('/api/telegram/join-channel', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { channel } = req.body;
+    if (!channel) {
+      return res.status(400).json({ error: 'المعرف الخاص بالقناة مطلوب' });
+    }
+    try {
+      const result = await TelegramService.joinChannel(token, channel);
+      // Broadcast update to session via WebSocket
+      broadcastToSession(token, {
+        type: 'channel_joined',
+        channel: result.channel,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error joining channel:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Leave Channel or Supergroup
+  app.post('/api/telegram/leave-channel', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { channel } = req.body;
+    if (!channel) {
+      return res.status(400).json({ error: 'المعرف الخاص بالقناة مطلوب' });
+    }
+    try {
+      const result = await TelegramService.leaveChannel(token, channel);
+      broadcastToSession(token, {
+        type: 'channel_left',
+        channelId: channel,
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error leaving channel:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Logout
   app.post('/api/telegram/logout', async (req, res) => {
     const token = (req as any).sessionToken;
