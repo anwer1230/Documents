@@ -276,12 +276,23 @@ async function startServer() {
   app.use(express.json());
   app.use(cookieParser());
 
-  // Session Token Middleware
+  // Session Token Middleware (Header -> Body -> Query -> Cookie)
   app.use((req, res, next) => {
-    let token = (req.headers['x-session-token'] as string) || req.cookies?.tg_session_id;
+    let token =
+      (req.headers['x-session-token'] as string) ||
+      (req.body && typeof req.body === 'object' && (req.body.sessionToken as string)) ||
+      (req.query && typeof req.query.sessionToken === 'string' && req.query.sessionToken) ||
+      req.cookies?.tg_session_id;
+
     if (!token) {
       token = 'user_session_' + Math.random().toString(36).substring(2, 12);
-      res.cookie('tg_session_id', token, { maxAge: 365 * 24 * 60 * 60 * 1000, httpOnly: false });
+      res.cookie('tg_session_id', token, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        httpOnly: false,
+        sameSite: 'none',
+        secure: true,
+        path: '/',
+      });
     }
     (req as any).sessionToken = token;
     next();
@@ -350,8 +361,14 @@ async function startServer() {
       const target = accountId || sessionToken;
       const account = TelegramService.setActiveAccount(target);
       if (account) {
-        res.cookie('tg_session_id', account.sessionToken, { maxAge: 365 * 24 * 60 * 60 * 1000, httpOnly: false });
-        res.json({ success: true, account });
+        res.cookie('tg_session_id', account.sessionToken, {
+          maxAge: 365 * 24 * 60 * 60 * 1000,
+          httpOnly: false,
+          sameSite: 'none',
+          secure: true,
+          path: '/',
+        });
+        res.json({ success: true, account, sessionToken: account.sessionToken });
       } else {
         res.status(404).json({ error: 'الحساب غير موجود' });
       }
@@ -373,7 +390,7 @@ async function startServer() {
 
   // Real MTProto Send Verification Code
   app.post('/api/telegram/send-code', async (req, res) => {
-    const token = (req as any).sessionToken;
+    const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
     const { phoneNumber } = req.body;
     if (!phoneNumber) {
       return res.status(400).json({ error: 'رقم الهاتف مطلوب' });
@@ -381,7 +398,7 @@ async function startServer() {
 
     try {
       const result = await TelegramService.sendCode(token, phoneNumber);
-      res.json(result);
+      res.json({ ...result, sessionToken: token });
     } catch (err: any) {
       console.error('Error in send-code:', err);
       res.status(500).json({
@@ -393,15 +410,15 @@ async function startServer() {
 
   // Real MTProto Complete Sign In
   app.post('/api/telegram/sign-in', async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { phoneCode, phoneCodeHash } = req.body;
+    const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
+    const { phoneCode, phoneCodeHash, phoneNumber } = req.body;
     if (!phoneCode) {
       return res.status(400).json({ error: 'كود التحقق مطلوب' });
     }
 
     try {
-      const result = await TelegramService.signIn(token, phoneCode, phoneCodeHash);
-      res.json(result);
+      const result = await TelegramService.signIn(token, phoneCode, phoneCodeHash, phoneNumber);
+      res.json({ ...result, sessionToken: result.sessionToken || token });
     } catch (err: any) {
       console.error('Error in sign-in:', err);
       res.status(500).json({
@@ -413,7 +430,7 @@ async function startServer() {
 
   // Real MTProto 2FA Password
   app.post('/api/telegram/sign-in-password', async (req, res) => {
-    const token = (req as any).sessionToken;
+    const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
     const { password } = req.body;
     if (!password) {
       return res.status(400).json({ error: 'كلمة المرور مطلوبة' });
@@ -421,7 +438,7 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signInWithPassword(token, password);
-      res.json(result);
+      res.json({ ...result, sessionToken: result.sessionToken || token });
     } catch (err: any) {
       console.error('Error in 2FA sign-in:', err);
       res.status(500).json({
@@ -433,7 +450,7 @@ async function startServer() {
 
   // Bot Token Login
   app.post('/api/telegram/bot-login', async (req, res) => {
-    const token = (req as any).sessionToken;
+    const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
     const { botToken } = req.body;
     if (!botToken) {
       return res.status(400).json({ error: 'رمز البوت (Bot Token) مطلوب' });
@@ -441,7 +458,7 @@ async function startServer() {
 
     try {
       const result = await TelegramService.botLogin(token, botToken);
-      res.json(result);
+      res.json({ ...result, sessionToken: token });
     } catch (err: any) {
       console.error('Error in bot-login:', err);
       res.status(500).json({

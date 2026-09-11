@@ -49,6 +49,8 @@ interface ActiveSession {
 
 const activeSessions = new Map<string, ActiveSession>();
 const connectionLocks = new Map<string, Promise<TelegramClient>>();
+const pendingAuthByHash = new Map<string, { sessionToken: string; phoneNumber: string; createdAt: number }>();
+const pendingAuthByPhone = new Map<string, { sessionToken: string; phoneCodeHash?: string; createdAt: number }>();
 const SESSIONS_FILE = path.join(process.cwd(), '.telegram_sessions.json');
 
 // Helper to sanitize BigInt and non-serializable properties for JSON response
@@ -474,21 +476,91 @@ export class TelegramService {
       session.phoneNumber = cleanedPhone;
     }
 
+    pendingAuthByHash.set(res.phoneCodeHash, { sessionToken, phoneNumber: cleanedPhone, createdAt: Date.now() });
+    pendingAuthByPhone.set(cleanedPhone, { sessionToken, phoneCodeHash: res.phoneCodeHash, createdAt: Date.now() });
+
     return {
       success: true,
       phoneCodeHash: res.phoneCodeHash,
       isCodeViaApp: res.isCodeViaApp,
+      sessionToken,
     };
   }
 
-  public static async signIn(sessionToken: string, phoneCode: string, phoneCodeHash?: string) {
-    const session = activeSessions.get(sessionToken);
+  public static async signIn(sessionToken: string, phoneCode: string, phoneCodeHash?: string, phoneNumber?: string) {
+    let session = activeSessions.get(sessionToken);
+    let matchedToken = sessionToken;
+
+    // 1. Resolve session via pendingAuthByHash
+    if (!session && phoneCodeHash && pendingAuthByHash.has(phoneCodeHash)) {
+      const pending = pendingAuthByHash.get(phoneCodeHash)!;
+      const s = activeSessions.get(pending.sessionToken);
+      if (s) {
+        session = s;
+        matchedToken = pending.sessionToken;
+      }
+    }
+
+    // 2. Resolve session via pendingAuthByPhone
+    if (!session && phoneNumber) {
+      const clean = phoneNumber.replace(/[\s\-\(\)]/g, '');
+      if (pendingAuthByPhone.has(clean)) {
+        const pending = pendingAuthByPhone.get(clean)!;
+        const s = activeSessions.get(pending.sessionToken);
+        if (s) {
+          session = s;
+          matchedToken = pending.sessionToken;
+        }
+      }
+    }
+
+    // 3. Resolve session via iterate over activeSessions matching phoneCodeHash
+    if (!session && phoneCodeHash) {
+      for (const [tok, s] of activeSessions.entries()) {
+        if (s.phoneCodeHash === phoneCodeHash) {
+          session = s;
+          matchedToken = tok;
+          break;
+        }
+      }
+    }
+
+    // 4. Resolve session if there is any pending unauthenticated session
+    if (!session) {
+      for (const [tok, s] of activeSessions.entries()) {
+        if (s.phoneCodeHash && !s.isLoggedIn) {
+          session = s;
+          matchedToken = tok;
+          break;
+        }
+      }
+    }
+
+    const hash = phoneCodeHash || session?.phoneCodeHash;
+    const phone = phoneNumber ? phoneNumber.replace(/[\s\-\(\)]/g, '') : session?.phoneNumber;
+
+    // 5. If still no in-memory session but we have hash and phone, dynamically re-create client
+    if (!session && hash && phone) {
+      const client = await this.getOrCreateClient(sessionToken);
+      session = {
+        client,
+        phoneCodeHash: hash,
+        phoneNumber: phone,
+        isLoggedIn: false,
+        createdAt: Date.now(),
+      };
+      activeSessions.set(sessionToken, session);
+      matchedToken = sessionToken;
+    }
+
     if (!session) {
       throw new Error('No active authentication session found. Please request a code first.');
     }
 
-    const hash = phoneCodeHash || session.phoneCodeHash;
-    const phone = session.phoneNumber;
+    // Alias this session to current sessionToken so future calls always match
+    if (sessionToken && !activeSessions.has(sessionToken)) {
+      activeSessions.set(sessionToken, session);
+    }
 
     if (!hash || !phone) {
       throw new Error('Phone number or phone code hash is missing. Please restart login.');
@@ -512,12 +584,20 @@ export class TelegramService {
       // Save StringSession
       const sessionString = client.session.save() as unknown as string;
       persistSession(sessionToken, sessionString);
+      if (matchedToken !== sessionToken) {
+        persistSession(matchedToken, sessionString);
+      }
       this.saveAccount(sessionToken, me);
+
+      // Clean up consumed pending auth maps
+      if (hash) pendingAuthByHash.delete(hash);
+      if (phone) pendingAuthByPhone.delete(phone);
 
       return {
         success: true,
         user: sanitizeData(me),
         sessionString,
+        sessionToken,
       };
     } catch (err: any) {
       if (err.errorMessage === 'SESSION_PASSWORD_NEEDED') {
@@ -525,6 +605,7 @@ export class TelegramService {
           success: false,
           needs2FA: true,
           message: 'Two-Step Verification (2FA) password is required.',
+          sessionToken,
         };
       }
       throw err;
@@ -532,10 +613,40 @@ export class TelegramService {
   }
 
   public static async signInWithPassword(sessionToken: string, password: string) {
-    const session = activeSessions.get(sessionToken);
+    let session = activeSessions.get(sessionToken);
+    let matchedToken = sessionToken;
+
     if (!session) {
-      throw new Error('No active session.');
+      // Find any session waiting for 2FA password
+      for (const [tok, s] of activeSessions.entries()) {
+        if (s.phoneCodeHash || s.phoneNumber) {
+          session = s;
+          matchedToken = tok;
+          break;
+        }
+      }
     }
+
+    if (!session) {
+      // Fallback: try active client
+      for (const [tok, s] of activeSessions.entries()) {
+        if (s.client && !s.isLoggedIn) {
+          session = s;
+          matchedToken = tok;
+          break;
+        }
+      }
+    }
+
+    if (!session) {
+      throw new Error('No active session. Please restart login.');
+    }
+
+    // Alias session
+    if (sessionToken && !activeSessions.has(sessionToken)) {
+      activeSessions.set(sessionToken, session);
+    }
+
     const client = session.client;
     await client.signInWithPassword(
       {
@@ -556,12 +667,16 @@ export class TelegramService {
 
     const sessionString = client.session.save() as unknown as string;
     persistSession(sessionToken, sessionString);
+    if (matchedToken !== sessionToken) {
+      persistSession(matchedToken, sessionString);
+    }
     this.saveAccount(sessionToken, me);
 
     return {
       success: true,
       user: sanitizeData(me),
       sessionString,
+      sessionToken,
     };
   }
 

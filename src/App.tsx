@@ -475,10 +475,17 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false) => {
+  const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false, authenticatedSessionToken?: string) => {
+    const finalSessionToken =
+      authenticatedSessionToken ||
+      localStorage.getItem('tg_active_session_token') ||
+      'user_session_' + Math.random().toString(36).substring(2, 12);
+
+    localStorage.setItem('tg_active_session_token', finalSessionToken);
+
     const newAcc: TelegramAccount = {
       id: 'acc_' + Date.now().toString(36),
-      sessionToken: 'user_session_' + Math.random().toString(36).substring(2, 12),
+      sessionToken: finalSessionToken,
       user,
       isLoggedIn: true,
       isDemo,
@@ -491,7 +498,7 @@ export default function App() {
     setIsDemoMode(isDemo);
     localStorage.setItem('tg_active_user', JSON.stringify(user));
     if (!isDemo) {
-      loadMtprotoDialogs();
+      loadMtprotoDialogs(finalSessionToken);
     }
   };
 

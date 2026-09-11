@@ -21,7 +21,7 @@ import {
 import { TelegramUser } from '../types';
 
 interface LoginViewProps {
-  onLoginSuccess: (user: TelegramUser, isDemo?: boolean) => void;
+  onLoginSuccess: (user: TelegramUser, isDemo?: boolean, sessionToken?: string) => void;
   lang: 'ar' | 'en';
 }
 
@@ -75,6 +75,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keepSignedIn, setKeepSignedIn] = useState(true);
+  const [sessionToken, setSessionToken] = useState<string>(() => {
+    return (
+      localStorage.getItem('tg_active_session_token') ||
+      'user_session_' + Math.random().toString(36).substring(2, 12)
+    );
+  });
 
   const fullPhoneNumber = `${countryCode}${phoneNational.replace(/^0+/, '')}`;
   const currentCountry = COUNTRY_CODES.find((c) => c.code === countryCode) || COUNTRY_CODES[0];
@@ -102,13 +108,25 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
     try {
       const res = await fetch('/api/telegram/send-code', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneNumber: fullPhoneNumber }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': sessionToken,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          phoneNumber: fullPhoneNumber,
+          sessionToken,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || data.details || 'فشل إرسال كود التحقق');
+      }
+
+      if (data.sessionToken) {
+        setSessionToken(data.sessionToken);
+        localStorage.setItem('tg_active_session_token', data.sessionToken);
       }
 
       setPhoneCodeHash(data.phoneCodeHash);
@@ -135,10 +153,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
     try {
       const res = await fetch('/api/telegram/sign-in', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': sessionToken,
+        },
+        credentials: 'include',
         body: JSON.stringify({
           phoneCode: verificationCode.trim(),
           phoneCodeHash,
+          phoneNumber: fullPhoneNumber,
+          sessionToken,
         }),
       });
       const data = await res.json();
@@ -146,6 +170,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
       if (!res.ok) {
         throw new Error(data.error || data.details || 'فشل التحقق من الكود');
       }
+
+      const effectiveToken = data.sessionToken || sessionToken;
+      localStorage.setItem('tg_active_session_token', effectiveToken);
 
       if (data.needs2FA) {
         setStep('password');
@@ -161,7 +188,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
           phone: fullPhoneNumber,
           status: 'online',
         };
-        onLoginSuccess(u, false);
+        onLoginSuccess(u, false, effectiveToken);
       }
     } catch (err: any) {
       console.error('Sign in error:', err);
@@ -185,14 +212,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
     try {
       const res = await fetch('/api/telegram/sign-in-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: password2FA }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': sessionToken,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          password: password2FA,
+          sessionToken,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || 'كلمة المرور غير صحيحة');
       }
+
+      const effectiveToken = data.sessionToken || sessionToken;
+      localStorage.setItem('tg_active_session_token', effectiveToken);
 
       if (data.user) {
         const u: TelegramUser = {
@@ -203,7 +240,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
           phone: fullPhoneNumber,
           status: 'online',
         };
-        onLoginSuccess(u, false);
+        onLoginSuccess(u, false, effectiveToken);
       }
     } catch (err: any) {
       setError(err.message || 'كلمة المرور غير صحيحة');
@@ -226,14 +263,24 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
     try {
       const res = await fetch('/api/telegram/bot-login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botToken: botToken.trim() }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': sessionToken,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          botToken: botToken.trim(),
+          sessionToken,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || 'فشل تسجيل الدخول برمز البوت');
       }
+
+      const effectiveToken = data.sessionToken || sessionToken;
+      localStorage.setItem('tg_active_session_token', effectiveToken);
 
       const u: TelegramUser = {
         id: data.user?.id || 'bot_user',
@@ -242,7 +289,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
         isBot: true,
         status: 'online',
       };
-      onLoginSuccess(u, false);
+      onLoginSuccess(u, false, effectiveToken);
     } catch (err: any) {
       setError(err.message || 'رمز البوت غير صالح');
     } finally {

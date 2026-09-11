@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   X,
   Smartphone,
@@ -113,23 +113,33 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allocatedSessionToken, setAllocatedSessionToken] = useState<string | null>(null);
+  const tokenRef = useRef<string | null>(null);
 
   if (!isOpen) return null;
 
   // Initialize a fresh isolated session token for this new account slot
   const ensureIsolatedSlot = async (): Promise<string> => {
-    if (allocatedSessionToken) return allocatedSessionToken;
+    if (tokenRef.current) return tokenRef.current;
+    if (allocatedSessionToken) {
+      tokenRef.current = allocatedSessionToken;
+      return allocatedSessionToken;
+    }
     try {
-      const res = await fetch('/api/telegram/accounts/new', { method: 'POST' });
+      const res = await fetch('/api/telegram/accounts/new', {
+        method: 'POST',
+        credentials: 'include',
+      });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'تعذر حجز فتحة مستخدم جديدة');
       }
+      tokenRef.current = data.sessionToken;
       setAllocatedSessionToken(data.sessionToken);
       return data.sessionToken;
     } catch (err: any) {
       // Fallback unique session token
       const fallbackToken = 'user_session_' + Math.random().toString(36).substring(2, 12);
+      tokenRef.current = fallbackToken;
       setAllocatedSessionToken(fallbackToken);
       return fallbackToken;
     }
@@ -155,12 +165,21 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
           'Content-Type': 'application/json',
           'x-session-token': token,
         },
-        body: JSON.stringify({ phoneNumber: cleanNumber }),
+        credentials: 'include',
+        body: JSON.stringify({
+          phoneNumber: cleanNumber,
+          sessionToken: token,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || data.details || 'فشل إرسال كود التحقق');
+      }
+
+      if (data.sessionToken) {
+        tokenRef.current = data.sessionToken;
+        setAllocatedSessionToken(data.sessionToken);
       }
 
       setPhoneCodeHash(data.phoneCodeHash);
@@ -184,15 +203,20 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
 
     try {
       const token = await ensureIsolatedSlot();
+      const cleanNumber = `${countryCode}${phoneNumber.replace(/^0+/, '')}`;
+
       const res = await fetch('/api/telegram/sign-in', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-session-token': token,
         },
+        credentials: 'include',
         body: JSON.stringify({
           phoneCode: verificationCode.trim(),
           phoneCodeHash,
+          phoneNumber: cleanNumber,
+          sessionToken: token,
         }),
       });
       const data = await res.json();
@@ -200,6 +224,9 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
       if (!res.ok) {
         throw new Error(data.error || data.details || 'فشل التحقق من الكود');
       }
+
+      const effectiveToken = data.sessionToken || token;
+      tokenRef.current = effectiveToken;
 
       if (data.needs2FA) {
         setStep('password');
@@ -209,7 +236,7 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
       if (data.user) {
         const newAcc: TelegramAccount = {
           id: 'acc_' + Date.now().toString(36),
-          sessionToken: token,
+          sessionToken: effectiveToken,
           user: {
             id: data.user.id || 'me_' + Date.now(),
             firstName: data.user.firstName || 'مستخدم تيليجرام',
@@ -250,7 +277,11 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
           'Content-Type': 'application/json',
           'x-session-token': token,
         },
-        body: JSON.stringify({ password: password2FA }),
+        credentials: 'include',
+        body: JSON.stringify({
+          password: password2FA,
+          sessionToken: token,
+        }),
       });
       const data = await res.json();
 
@@ -258,10 +289,13 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
         throw new Error(data.error || data.details || 'كلمة المرور غير صحيحة');
       }
 
+      const effectiveToken = data.sessionToken || token;
+      tokenRef.current = effectiveToken;
+
       if (data.user) {
         const newAcc: TelegramAccount = {
           id: 'acc_' + Date.now().toString(36),
-          sessionToken: token,
+          sessionToken: effectiveToken,
           user: {
             id: data.user.id || 'me_' + Date.now(),
             firstName: data.user.firstName || 'مستخدم تيليجرام',
@@ -301,13 +335,20 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
           'Content-Type': 'application/json',
           'x-session-token': token,
         },
-        body: JSON.stringify({ botToken: botToken.trim() }),
+        credentials: 'include',
+        body: JSON.stringify({
+          botToken: botToken.trim(),
+          sessionToken: token,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok) {
         throw new Error(data.error || 'فشل تسجيل الدخول برمز البوت');
       }
+
+      const effectiveToken = data.sessionToken || token;
+      tokenRef.current = effectiveToken;
 
       if (data.user) {
         const newAcc: TelegramAccount = {
