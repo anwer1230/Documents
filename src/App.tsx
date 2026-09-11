@@ -99,6 +99,8 @@ export default function App() {
     const demoStories: TelegramPeerStories[] = [
       {
         peerId: 'me',
+        peerTitle: 'قصتي',
+        hasUnread: true,
         stories: [
           {
             id: 'st_1',
@@ -112,6 +114,8 @@ export default function App() {
       },
       {
         peerId: 'telegram',
+        peerTitle: 'Telegram',
+        hasUnread: true,
         stories: [
           {
             id: 'st_2',

@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
-import settingsSearchPlugin from './plugins/settingsSearchPlugin.js';
+import settingsSearchPlugin from './plugins/settingsSearchPlugin';
 
 export default defineConfig(() => {
   return {
