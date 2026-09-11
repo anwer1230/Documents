@@ -10,8 +10,13 @@ import {
   Trash2,
   Sparkles,
   Layers,
+  LayoutGrid,
+  Bot,
+  Terminal,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
-import { TelegramMessage } from '../types';
+import { TelegramMessage, TelegramChat, TelegramBotCommand, TelegramReplyMarkup, TelegramInlineQueryResult } from '../types';
 import { StickerAndGifDrawer } from './StickerAndGifDrawer';
 
 interface MessageInputProps {
@@ -19,6 +24,8 @@ interface MessageInputProps {
   replyToMessage?: TelegramMessage | null;
   onCancelReply: () => void;
   onOpenMiniApp?: () => void;
+  chat?: TelegramChat | null;
+  activeReplyKeyboard?: TelegramReplyMarkup | null;
   lang: 'ar' | 'en';
   isDark: boolean;
 }
@@ -28,6 +35,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   replyToMessage,
   onCancelReply,
   onOpenMiniApp,
+  chat,
+  activeReplyKeyboard,
   lang,
   isDark,
 }) => {
@@ -35,6 +44,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [text, setText] = useState('');
   const [showPicker, setShowPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showCommandsMenu, setShowCommandsMenu] = useState(false);
+  const [showReplyKeyboard, setShowReplyKeyboard] = useState(true);
 
   // Real Voice recording with MediaRecorder
   const [isRecording, setIsRecording] = useState(false);
@@ -47,6 +58,105 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const isBotChat = chat?.type === 'bot' || chat?.isBot;
+
+  // Bot commands list
+  const botCommands: TelegramBotCommand[] = chat?.botInfo?.commands || [
+    { command: 'start', description: isAr ? 'تشغيل البوت وبدء المحادثة' : 'Start the bot' },
+    { command: 'help', description: isAr ? 'دليل الأوامر والمساعدة' : 'Show help and guide' },
+    { command: 'app', description: isAr ? 'فتح تطبيق الويب المصغر (Mini App)' : 'Launch Mini App' },
+    { command: 'keyboard', description: isAr ? 'إظهار لوحة الأزرار التفاعلية' : 'Show interactive keyboard' },
+    { command: 'settings', description: isAr ? 'إعدادات وتخصيص البوت' : 'Bot settings & config' },
+    { command: 'inline', description: isAr ? 'دليل الاستعلام الفوري عبر @' : 'Inline query guide' },
+  ];
+
+  // Autocomplete command matching when text starts with '/'
+  const isSlashCommand = text.startsWith('/') && !text.includes(' ');
+  const matchingCommands = isSlashCommand
+    ? botCommands.filter((c) =>
+        c.command.toLowerCase().startsWith(text.slice(1).toLowerCase())
+      )
+    : [];
+
+  // Inline Query detection: e.g. "@gif " or "@pic " or "@smart_helper_bot "
+  const inlineMatch = text.match(/^@([a-zA-Z0-9_]+)\s*(.*)$/);
+  const isInlineQuery = !!inlineMatch && text.includes(' ');
+  const inlineBotName = inlineMatch ? inlineMatch[1] : '';
+  const inlineQueryString = inlineMatch ? inlineMatch[2] : '';
+
+  // Mock inline results based on bot name & query
+  const getInlineResults = (): TelegramInlineQueryResult[] => {
+    if (!isInlineQuery) return [];
+    const bot = inlineBotName.toLowerCase();
+    const q = inlineQueryString.toLowerCase();
+
+    if (bot === 'gif') {
+      const gifs = [
+        {
+          id: 'in_gif_1',
+          type: 'gif' as const,
+          title: 'Party & Celebration 🎉',
+          thumbUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&auto=format&fit=crop&q=80',
+          contentText: '🎉 احتفال مميز!',
+        },
+        {
+          id: 'in_gif_2',
+          type: 'gif' as const,
+          title: 'Thumbs Up 👍',
+          thumbUrl: 'https://images.unsplash.com/photo-1584447141267-3c72b223cb60?w=300&auto=format&fit=crop&q=80',
+          contentText: '👍 رائع جداً وممتاز!',
+        },
+        {
+          id: 'in_gif_3',
+          type: 'gif' as const,
+          title: 'Rocket Launch 🚀',
+          thumbUrl: 'https://images.unsplash.com/photo-1517976487541-112df8b1a8d0?w=300&auto=format&fit=crop&q=80',
+          contentText: '🚀 انطلاق إلى القمة!',
+        },
+      ];
+      return q ? gifs.filter((g) => g.title.toLowerCase().includes(q)) : gifs;
+    }
+
+    if (bot === 'pic' || bot === 'bing') {
+      const pics = [
+        {
+          id: 'in_pic_1',
+          type: 'photo' as const,
+          title: 'Nature Mountain 🏔️',
+          thumbUrl: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=300&auto=format&fit=crop&q=80',
+          contentText: '🏔️ منظر طبيعي خلاب للجبال',
+        },
+        {
+          id: 'in_pic_2',
+          type: 'photo' as const,
+          title: 'Golden Sunset 🌅',
+          thumbUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=300&auto=format&fit=crop&q=80',
+          contentText: '🌅 غروب الشمس الذهبي',
+        },
+      ];
+      return q ? pics.filter((p) => p.title.toLowerCase().includes(q)) : pics;
+    }
+
+    return [
+      {
+        id: 'in_def_1',
+        type: 'article' as const,
+        title: `${isAr ? 'إرسال استعلام' : 'Send query'}: ${inlineQueryString || 'بحث عام'}`,
+        description: `@${inlineBotName} • ${isAr ? 'نتيجة استعلام فوري' : 'Instant inline result'}`,
+        contentText: `[استعلام فوري @${inlineBotName}]: ${inlineQueryString || 'تم استلام الاستعلام بنجاح'}`,
+      },
+      {
+        id: 'in_def_2',
+        type: 'article' as const,
+        title: isAr ? 'دليل بوتات تيليجرام التفاعلية' : 'Telegram Bot Guide',
+        description: 'https://core.telegram.org/bots',
+        contentText: 'وثائق بوتات تيليجرام الرسمية: https://core.telegram.org/bots',
+      },
+    ];
+  };
+
+  const inlineResults = getInlineResults();
 
   // Recording timer
   useEffect(() => {
@@ -316,6 +426,160 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         lang={lang}
       />
 
+      {/* Bot Commands Menu / Autocomplete Popup */}
+      {(showCommandsMenu || (isSlashCommand && matchingCommands.length > 0)) && (
+        <div
+          className={`absolute bottom-full mb-2 start-0 end-0 z-30 max-h-64 overflow-y-auto rounded-2xl shadow-2xl border backdrop-blur-md animate-scale-in p-2 ${
+            isDark ? 'bg-[#17212b]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
+          }`}
+        >
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700/20 mb-1">
+            <div className="flex items-center gap-2 text-xs font-bold text-[#3390ec]">
+              <Terminal className="w-3.5 h-3.5" />
+              <span>{isAr ? 'أوامر البوت المتاحة' : 'Bot Commands'}</span>
+              <span className="text-[10px] text-gray-400 font-normal">
+                ({(isSlashCommand ? matchingCommands : botCommands).length})
+              </span>
+            </div>
+            {showCommandsMenu && (
+              <button
+                onClick={() => setShowCommandsMenu(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            {(isSlashCommand ? matchingCommands : botCommands).map((cmd) => (
+              <button
+                key={cmd.command}
+                type="button"
+                onClick={() => {
+                  onSendMessage(`/${cmd.command}`, replyToMessage || undefined);
+                  setText('');
+                  setShowCommandsMenu(false);
+                }}
+                className={`w-full text-start px-3 py-2 rounded-xl text-xs flex items-center justify-between transition ${
+                  isDark ? 'hover:bg-[#242f3d]' : 'hover:bg-gray-100'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-[#3390ec]">/{cmd.command}</span>
+                  <span className="text-gray-400 text-[11px] truncate">{cmd.description}</span>
+                </div>
+                <span className="text-[10px] text-gray-500 font-mono hidden sm:inline">↵</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bot Inline Query Results Overlay (@bot query) */}
+      {isInlineQuery && inlineResults.length > 0 && (
+        <div
+          className={`absolute bottom-full mb-2 start-0 end-0 z-30 max-h-72 overflow-y-auto rounded-2xl shadow-2xl border backdrop-blur-md animate-scale-in p-2 ${
+            isDark ? 'bg-[#17212b]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
+          }`}
+        >
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700/20 mb-1.5">
+            <div className="flex items-center gap-2 text-xs font-bold text-[#3390ec]">
+              <Search className="w-3.5 h-3.5" />
+              <span>
+                {isAr ? 'نتائج الاستعلام الفوري عبر' : 'Inline Bot Results from'} @{inlineBotName}
+              </span>
+            </div>
+            <span className="text-[11px] text-gray-400">{inlineResults.length} {isAr ? 'نتيجة' : 'results'}</span>
+          </div>
+
+          {/* If results are media (gifs or photos), display in a responsive visual grid */}
+          {inlineResults.some((r) => r.type === 'gif' || r.type === 'photo') ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
+              {inlineResults.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    onSendMessage(item.contentText, replyToMessage || undefined, {
+                      type: item.type === 'gif' ? 'video' : 'photo',
+                      url: item.thumbUrl || item.url,
+                      title: item.title,
+                    });
+                    setText('');
+                  }}
+                  className={`group relative rounded-xl overflow-hidden aspect-video border transition transform hover:scale-[1.02] active:scale-95 text-start ${
+                    isDark ? 'border-gray-700/60 bg-[#242f3d]' : 'border-gray-200 bg-gray-100'
+                  }`}
+                >
+                  <img
+                    src={item.thumbUrl || item.url}
+                    alt={item.title}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5">
+                    <p className="text-[10px] text-white font-medium truncate">{item.title}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {inlineResults.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    onSendMessage(item.contentText, replyToMessage || undefined);
+                    setText('');
+                  }}
+                  className={`w-full text-start px-3 py-2 rounded-xl text-xs flex items-center justify-between transition ${
+                    isDark ? 'hover:bg-[#242f3d]' : 'hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-semibold">{item.title}</span>
+                    {item.description && (
+                      <span className="text-[11px] text-gray-400 truncate">{item.description}</span>
+                    )}
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-gray-400 shrink-0 ms-2" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Bot Custom Reply Keyboard (ReplyKeyboardMarkup) */}
+      {activeReplyKeyboard?.keyboard && activeReplyKeyboard.keyboard.length > 0 && showReplyKeyboard && (
+        <div
+          className={`mb-2.5 p-2 rounded-2xl border space-y-1.5 transition-all ${
+            isDark ? 'bg-[#17212b]/80 border-[#2f3f50]' : 'bg-gray-50 border-gray-200'
+          }`}
+        >
+          {activeReplyKeyboard.keyboard.map((row, rowIdx) => (
+            <div key={rowIdx} className="flex gap-1.5 w-full">
+              {row.map((btn, btnIdx) => (
+                <button
+                  key={btnIdx}
+                  type="button"
+                  onClick={() => onSendMessage(btn.text, replyToMessage || undefined)}
+                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold text-center shadow-sm border transition transform active:scale-98 ${
+                    isDark
+                      ? 'bg-[#242f3d] hover:bg-[#3390ec] hover:text-white border-[#2f3f50] text-gray-200'
+                      : 'bg-white hover:bg-[#3390ec] hover:text-white border-gray-200 text-gray-800'
+                  }`}
+                >
+                  {btn.text}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Main Input Row */}
       <div className="flex items-end gap-2">
         {isRecording ? (
@@ -379,6 +643,49 @@ export const MessageInput: React.FC<MessageInputProps> = ({
             >
               <Paperclip className="w-5 h-5" />
             </button>
+
+            {/* Bot Command Menu Button (Telegram Web K mechanism) */}
+            {isBotChat && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCommandsMenu(!showCommandsMenu);
+                  setShowPicker(false);
+                  setShowAttachMenu(false);
+                }}
+                className={`h-10 px-2.5 rounded-xl font-mono text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
+                  showCommandsMenu
+                    ? 'bg-[#3390ec] text-white'
+                    : isDark
+                    ? 'bg-[#242f3d] text-[#3390ec] hover:bg-[#2e3b4d]'
+                    : 'bg-blue-50 text-[#3390ec] hover:bg-blue-100'
+                }`}
+                title={isAr ? 'أوامر البوت' : 'Bot Menu'}
+              >
+                <Bot className="w-4 h-4" />
+                <span className="hidden sm:inline text-[11px] font-sans font-semibold">
+                  {chat?.botInfo?.menuButton?.text || (isAr ? 'الأوامر' : 'Menu')}
+                </span>
+              </button>
+            )}
+
+            {/* Toggle Bot Reply Keyboard Button if available */}
+            {activeReplyKeyboard?.keyboard && activeReplyKeyboard.keyboard.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowReplyKeyboard(!showReplyKeyboard)}
+                className={`p-2.5 rounded-full transition shrink-0 ${
+                  showReplyKeyboard
+                    ? 'text-[#3390ec]'
+                    : isDark
+                    ? 'text-gray-400 hover:text-white hover:bg-[#202b36]'
+                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+                title={isAr ? 'لوحة الأزرار' : 'Reply Keyboard'}
+              >
+                <LayoutGrid className="w-5 h-5" />
+              </button>
+            )}
 
             {/* Input Box with Emoji Button inside */}
             <div

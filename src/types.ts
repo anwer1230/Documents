@@ -7,6 +7,59 @@ export interface TelegramAccount {
   addedAt: number;
 }
 
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
+export interface TelegramBotMenuButton {
+  type: 'commands' | 'web_app' | 'default';
+  text?: string;
+  url?: string;
+}
+
+export interface TelegramInlineButton {
+  text: string;
+  url?: string;
+  callbackData?: string;
+  webApp?: {
+    url: string;
+  };
+  switchInlineQuery?: string;
+  switchInlineQueryCurrentChat?: string;
+  buy?: boolean;
+}
+
+export interface TelegramReplyButton {
+  text: string;
+  requestContact?: boolean;
+  requestLocation?: boolean;
+  webApp?: {
+    url: string;
+  };
+}
+
+export interface TelegramReplyMarkup {
+  type: 'inline' | 'keyboard' | 'remove';
+  inlineKeyboard?: TelegramInlineButton[][];
+  keyboard?: TelegramReplyButton[][];
+  resizeKeyboard?: boolean;
+  oneTimeKeyboard?: boolean;
+  isPersistent?: boolean;
+}
+
+export interface TelegramInlineQueryResult {
+  id: string;
+  type: 'article' | 'photo' | 'gif' | 'video' | 'sticker';
+  title: string;
+  description?: string;
+  thumbUrl?: string;
+  url?: string;
+  contentText: string;
+  caption?: string;
+  replyMarkup?: TelegramReplyMarkup;
+}
+
 export interface TelegramUser {
   id: string;
   firstName: string;
@@ -19,6 +72,12 @@ export interface TelegramUser {
   isVerified?: boolean;
   isPremium?: boolean;
   status?: 'online' | 'offline' | 'recently';
+  botInfo?: {
+    description?: string;
+    about?: string;
+    commands?: TelegramBotCommand[];
+    menuButton?: TelegramBotMenuButton;
+  };
 }
 
 export type ChatType = 'private' | 'group' | 'supergroup' | 'channel' | 'bot' | 'saved';
@@ -60,6 +119,7 @@ export interface TelegramMessage {
   isPinned?: boolean;
   isForwarded?: boolean;
   forwardedFrom?: string;
+  replyMarkup?: TelegramReplyMarkup;
 }
 
 export interface TelegramChat {
@@ -69,6 +129,13 @@ export interface TelegramChat {
   type: ChatType;
   avatarUrl?: string;
   avatarColor?: string;
+  isBot?: boolean;
+  botInfo?: {
+    description?: string;
+    about?: string;
+    commands?: TelegramBotCommand[];
+    menuButton?: TelegramBotMenuButton;
+  };
   lastMessage?: {
     text: string;
     timestamp: number;

@@ -650,6 +650,61 @@ async function startServer() {
     }
   });
 
+  // Bot Callback Query Answer (Telegram Web K mechanism)
+  app.post('/api/telegram/bot-callback', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, messageId, data, game } = req.body;
+    if (!peerId) {
+      return res.status(400).json({ error: 'peerId مطلوب' });
+    }
+    try {
+      const result = await TelegramService.getBotCallbackAnswer(
+        token,
+        peerId,
+        messageId ? Number(messageId) : 0,
+        data,
+        game
+      );
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error in bot-callback:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Bot Info & Commands (Telegram Web K mechanism)
+  app.get('/api/telegram/bot-info', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const botPeer = (req.query.bot as string) || '';
+    if (!botPeer) {
+      return res.status(400).json({ error: 'معرف البوت مطلوب' });
+    }
+    try {
+      const result = await TelegramService.getBotInfo(token, botPeer);
+      res.json({ success: true, botInfo: result });
+    } catch (err: any) {
+      console.error('Error getting bot info:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Inline Bot Query Execution (Telegram Web K mechanism: @bot query)
+  app.get('/api/telegram/inline-query', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const bot = (req.query.bot as string) || '';
+    const query = (req.query.q as string) || '';
+    if (!bot) {
+      return res.status(400).json({ error: 'اسم البوت مطلوب' });
+    }
+    try {
+      const results = await TelegramService.getInlineBotResults(token, bot, query);
+      res.json({ success: true, results });
+    } catch (err: any) {
+      console.error('Error in inline-query:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Logout
   app.post('/api/telegram/logout', async (req, res) => {
     const token = (req as any).sessionToken;

@@ -86,17 +86,93 @@ export const INITIAL_CHATS: TelegramChat[] = [
   },
   {
     id: 'bot_ai_assistant',
-    title: 'بوت المساعد الذكي 🤖',
+    title: 'المساعد الذكي 🤖',
     username: 'smart_helper_bot',
     type: 'bot',
+    isBot: true,
     avatarUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
     avatarColor: '#9b5de5',
-    unreadCount: 0,
-    description: 'مساعد آلي للترجمة والتلخيص والإجابة الفورية.',
+    unreadCount: 1,
+    description: 'مساعد ذكي تفاعلي متكامل يدعم أزرار الـ Inline، تطبيقات الويب المصغرة Mini Apps، وقوائم الأوامر السريعة.',
+    botInfo: {
+      description: 'مساعد آلي ذكي متعدد الإمكانيات، يقدم خدمات الترجمة والتلخيص، وإطلاق تطبيقات الويب التفاعلية داخل الدردشة مباشرة.',
+      about: 'Telegram Bot Platform Showcase',
+      commands: [
+        { command: 'start', description: 'تشغيل البوت وبدء المحادثة' },
+        { command: 'help', description: 'المساعدة ودليل استخدام البوت' },
+        { command: 'app', description: 'فتح تطبيق الويب المصغر (Mini App)' },
+        { command: 'keyboard', description: 'إظهار لوحة الأزرار التفاعلية' },
+        { command: 'settings', description: 'تخصيص الإعدادات والتفضيلات' },
+        { command: 'inline', description: 'دليل الاستعلام الفوري عبر @' },
+      ],
+      menuButton: {
+        type: 'commands',
+        text: 'Menu',
+      },
+    },
     lastMessage: {
-      text: 'أهلاً بك! يمكنك إرسال أي سؤال أو استفسار وسأجيبك فوراً.',
-      timestamp: Date.now() - 1000 * 60 * 180,
+      text: 'مرحباً بك! أنا بوت تليجرام التجريبي. جرب الأزرار التفاعلية أدناه:',
+      timestamp: Date.now() - 1000 * 60 * 30,
       senderName: 'المساعد الذكي',
+    },
+  },
+  {
+    id: 'bot_botfather',
+    title: 'BotFather 🤖',
+    username: 'BotFather',
+    type: 'bot',
+    isBot: true,
+    isVerified: true,
+    avatarUrl: 'https://images.unsplash.com/photo-1614680376593-902f749f7ffc?w=150&auto=format&fit=crop&q=80',
+    avatarColor: '#2481cc',
+    unreadCount: 0,
+    description: 'BotFather is the one bot to rule them all. Use it to create new bot accounts and manage your existing bots.',
+    botInfo: {
+      description: 'BotFather is the official bot used to create and configure Telegram bots.',
+      about: 'Official Telegram BotFather',
+      commands: [
+        { command: 'newbot', description: 'create a new bot' },
+        { command: 'mybots', description: 'edit your bots' },
+        { command: 'setname', description: "change a bot's name" },
+        { command: 'setdescription', description: 'change bot description' },
+        { command: 'setcommands', description: 'change the list of commands' },
+        { command: 'token', description: 'generate authorization token' },
+      ],
+      menuButton: {
+        type: 'commands',
+        text: 'Menu',
+      },
+    },
+    lastMessage: {
+      text: 'I can help you create and manage Telegram bots. What would you like to do?',
+      timestamp: Date.now() - 1000 * 60 * 120,
+      senderName: 'BotFather',
+    },
+  },
+  {
+    id: 'bot_wallet',
+    title: 'Telegram Wallet 💳',
+    username: 'wallet',
+    type: 'bot',
+    isBot: true,
+    isVerified: true,
+    avatarUrl: 'https://images.unsplash.com/photo-1559526324-4b87b5e36e44?w=150&auto=format&fit=crop&q=80',
+    avatarColor: '#0088cc',
+    unreadCount: 0,
+    description: 'المحفظة الرسمية لتليجرام: إرسال واستقبال الأصول الرقمية والتطبيقات المالية مباشرة داخل المحادثات.',
+    botInfo: {
+      description: 'المحفظة المالية الآمنة المدمجة بتليجرام.',
+      commands: [
+        { command: 'start', description: 'فتح لوحة المحفظة' },
+        { command: 'deposit', description: 'شحن الرصيد' },
+        { command: 'send', description: 'تحويل الأموال' },
+        { command: 'history', description: 'سجل المعاملات' },
+      ],
+    },
+    lastMessage: {
+      text: 'رصيدك الحالي: 145.50 TON ($800.25). اضغط لفتح المحفظة المصغرة:',
+      timestamp: Date.now() - 1000 * 60 * 240,
+      senderName: 'Telegram Wallet',
     },
   },
   {
@@ -240,10 +316,97 @@ export const INITIAL_MESSAGES: Record<string, TelegramMessage[]> = {
       chatId: 'bot_ai_assistant',
       senderId: 'smart_helper_bot',
       senderName: 'المساعد الذكي',
-      text: 'أهلاً بك! يمكنك إرسال أي سؤال أو استفسار وسأجيبك فوراً. جرب أن تسألني عن ميزات تليجرام أو تطلب ترجمة.',
-      timestamp: Date.now() - 1000 * 60 * 180,
+      text: '🤖 مرحباً بك في منصة بوتات تليجرام المتكاملة (Telegram Web K)!\n\nأنا بوت تجريبي يوضح جميع قدرات البوتات:\n• أزرار الـ Inline التفاعلية\n• تطبيقات الويب المصغرة (Telegram Mini Apps)\n• لوحات الرد السريع والأوامر الفورية\n\nاضغط على أي زر أدناه لتجربة الرد الفوري:',
+      timestamp: Date.now() - 1000 * 60 * 30,
       isOut: false,
       status: 'read',
+      replyMarkup: {
+        type: 'inline',
+        inlineKeyboard: [
+          [
+            {
+              text: '🚀 فتح تطبيق الويب (Mini App)',
+              webApp: { url: 'https://telegram.org' },
+            },
+          ],
+          [
+            {
+              text: '⚙️ الإعدادات والتفضيلات',
+              callbackData: 'bot_settings',
+            },
+            {
+              text: '📊 الإحصائيات الحية',
+              callbackData: 'bot_stats',
+            },
+          ],
+          [
+            {
+              text: '🔍 استعلام فوري @smart_helper_bot',
+              switchInlineQuery: 'search ',
+            },
+            {
+              text: '🌐 دليل تليجرام للبوتات',
+              url: 'https://core.telegram.org/bots/webapps',
+            },
+          ],
+        ],
+      },
+    },
+  ],
+  bot_botfather: [
+    {
+      id: 'msg_bf1',
+      chatId: 'bot_botfather',
+      senderId: 'BotFather',
+      senderName: 'BotFather',
+      text: 'I can help you create and manage Telegram bots. If you\'re new to the Bot API, please see the manual: https://core.telegram.org/bots\n\nChoose an action from the options below or send /help for a complete list of commands.',
+      timestamp: Date.now() - 1000 * 60 * 120,
+      isOut: false,
+      status: 'read',
+      replyMarkup: {
+        type: 'inline',
+        inlineKeyboard: [
+          [
+            { text: '➕ Create New Bot (/newbot)', callbackData: 'bf_newbot' },
+            { text: '🤖 My Bots (/mybots)', callbackData: 'bf_mybots' },
+          ],
+          [
+            { text: '📝 Bot Settings', callbackData: 'bf_settings' },
+            { text: '🔑 API Tokens', callbackData: 'bf_tokens' },
+          ],
+        ],
+      },
+    },
+  ],
+  bot_wallet: [
+    {
+      id: 'msg_w1',
+      chatId: 'bot_wallet',
+      senderId: 'wallet',
+      senderName: 'Telegram Wallet',
+      text: '💳 **محفظة تليجرام الرسمية**\n\nالرصيد المتاح:\n🔹 **145.50 TON** (~$800.25 USD)\n🔸 **0.015 BTC** (~$1,020.00 USD)\n\nاضغط أدناه لفتح المحفظة التفاعلية أو إجراء عمليات فورية:',
+      timestamp: Date.now() - 1000 * 60 * 240,
+      isOut: false,
+      status: 'read',
+      replyMarkup: {
+        type: 'inline',
+        inlineKeyboard: [
+          [
+            {
+              text: '⚡ فتح المحفظة المصغرة (Wallet App)',
+              webApp: { url: 'https://wallet.tg' },
+            },
+          ],
+          [
+            { text: '📥 إيداع TON', callbackData: 'wallet_deposit' },
+            { text: '📤 إرسال أموال', callbackData: 'wallet_send' },
+          ],
+          [
+            { text: '📜 سجل المعاملات', callbackData: 'wallet_history' },
+            { text: '💱 تبادل العملات', callbackData: 'wallet_exchange' },
+          ],
+        ],
+      },
     },
   ],
   channel_telegram_tips: [

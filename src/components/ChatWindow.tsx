@@ -34,6 +34,7 @@ import {
   Bell,
   BellOff,
   UserPlus,
+  Bot,
 } from 'lucide-react';
 import { TelegramChat, TelegramMessage, TelegramUser, TypingStatus } from '../types';
 import { MessageInput } from './MessageInput';
@@ -63,7 +64,8 @@ interface ChatWindowProps {
   onLeaveGroup: (chatId: string) => void;
   onReportChat: (chatId: string, reason: string, details?: string) => void;
   onOpenMediaViewer: (url: string, title?: string) => void;
-  onOpenMiniApp?: () => void;
+  onOpenMiniApp?: (url?: string, appName?: string) => void;
+  onBotCallback?: (messageId: string, callbackData: string) => Promise<void> | void;
   onJoinChannel?: (chatId: string) => Promise<void> | void;
   isJoiningChannel?: boolean;
   onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
@@ -90,6 +92,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onReportChat,
   onOpenMediaViewer,
   onOpenMiniApp,
+  onBotCallback,
   onJoinChannel,
   isJoiningChannel,
   onToast,
@@ -661,6 +664,75 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto px-3 sm:px-4 py-3 relative space-y-1"
       >
+        {/* Telegram Web K Bot Profile Intro Card ("What can this bot do?") */}
+        {chat && (chat.type === 'bot' || chat.isBot) && (
+          <div
+            className={`max-w-md mx-auto my-4 p-5 rounded-2xl border text-center shadow-lg backdrop-blur-md select-none transition-all ${
+              isDark ? 'bg-[#17212b]/90 border-[#2f3f50] text-white' : 'bg-white/90 border-gray-200 text-gray-800'
+            }`}
+          >
+            <div className="w-16 h-16 mx-auto rounded-full bg-[#3390ec]/15 text-[#3390ec] flex items-center justify-center font-bold text-2xl mb-3 shadow-inner">
+              {chat.avatarUrl ? (
+                <img
+                  src={chat.avatarUrl}
+                  alt={chat.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full rounded-full object-cover"
+                />
+              ) : (
+                <Bot className="w-8 h-8 text-[#3390ec]" />
+              )}
+            </div>
+            <div className="flex items-center justify-center gap-1.5 mb-1">
+              <h3 className="font-bold text-base">{chat.name}</h3>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#3390ec]/20 text-[#3390ec]">
+                bot
+              </span>
+            </div>
+            <p className="text-xs text-[#3390ec] font-semibold mb-2">
+              {isAr ? 'ماذا يستطيع هذا البوت فعله؟' : 'What can this bot do?'}
+            </p>
+            <p className="text-xs text-gray-400 whitespace-pre-wrap leading-relaxed mb-4">
+              {chat.botInfo?.description ||
+                chat.bio ||
+                (isAr
+                  ? 'منصة بوتات تيليجرام الرسمية تدعم الردود التفاعلية وتطبيقات الويب المصغرة وأزرار الـ Inline.'
+                  : 'Official Telegram bot platform supporting interactive inline replies, mini apps, and bot commands.')}
+            </p>
+
+            {chat.botInfo?.commands && chat.botInfo.commands.length > 0 && (
+              <div
+                className={`text-start rounded-xl p-3 mb-3 space-y-1.5 text-xs border ${
+                  isDark ? 'bg-[#1c2733]/80 border-[#2f3f50]' : 'bg-gray-50 border-gray-200'
+                }`}
+              >
+                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  {isAr ? 'الأوامر الشائعة:' : 'Common Commands:'}
+                </p>
+                {chat.botInfo.commands.slice(0, 4).map((cmd) => (
+                  <button
+                    key={cmd.command}
+                    type="button"
+                    onClick={() => onSendMessage(`/${cmd.command}`)}
+                    className="w-full flex items-center justify-between hover:text-[#3390ec] py-0.5 text-start transition"
+                  >
+                    <span className="font-mono text-[#3390ec] font-semibold">/{cmd.command}</span>
+                    <span className="text-gray-400 text-[11px] truncate ms-2">{cmd.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => onSendMessage('/start')}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#3390ec] hover:bg-[#2881da] active:scale-98 text-white font-bold text-xs uppercase tracking-wider shadow-md transition flex items-center justify-center gap-2"
+            >
+              <span>{isAr ? 'بدء المحادثة (/start)' : 'START BOT (/start)'}</span>
+            </button>
+          </div>
+        )}
+
         {displayedMessages.map((msg, index) => {
           const isOut = msg.isOut;
           const prevMsg = displayedMessages[index - 1];
@@ -911,6 +983,47 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                           <span>{r.emoji}</span>
                           <span className="text-[11px] font-semibold">{r.count}</span>
                         </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Telegram Web K Inline Keyboard (InlineKeyboardMarkup) */}
+                  {msg.replyMarkup?.inlineKeyboard && msg.replyMarkup.inlineKeyboard.length > 0 && (
+                    <div className="mt-2 space-y-1 select-none">
+                      {msg.replyMarkup.inlineKeyboard.map((row, rIdx) => (
+                        <div key={rIdx} className="flex gap-1 w-full">
+                          {row.map((btn, bIdx) => (
+                            <button
+                              key={bIdx}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (btn.webApp) {
+                                  onOpenMiniApp ? onOpenMiniApp(btn.webApp.url, btn.text) : window.open(btn.webApp.url, '_blank');
+                                } else if (btn.url) {
+                                  window.open(btn.url, '_blank', 'noopener,noreferrer');
+                                } else if (btn.callbackData) {
+                                  if (onBotCallback) {
+                                    onBotCallback(msg.id, btn.callbackData);
+                                  } else {
+                                    onToast(isAr ? `تم إرسال الاستجابة: ${btn.text}` : `Callback sent: ${btn.text}`, 'info');
+                                  }
+                                } else if (btn.switchInlineQuery !== undefined) {
+                                  onSendMessage(`@${chat?.username || chat?.id || 'bot'} ${btn.switchInlineQuery}`);
+                                }
+                              }}
+                              className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 shadow-xs border ${
+                                isDark
+                                  ? 'bg-[#242f3d] hover:bg-[#2e3c4e] text-[#3390ec] border-[#2f3f50]'
+                                  : 'bg-white hover:bg-gray-50 text-[#3390ec] border-gray-200'
+                              }`}
+                            >
+                              {btn.webApp && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                              {btn.url && <ExternalLink className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                              <span className="truncate">{btn.text}</span>
+                            </button>
+                          ))}
+                        </div>
                       ))}
                     </div>
                   )}
@@ -1178,6 +1291,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           replyToMessage={replyingMessage}
           onCancelReply={() => setReplyingMessage(null)}
           onOpenMiniApp={onOpenMiniApp}
+          chat={chat}
+          activeReplyKeyboard={
+            [...messages].reverse().find((m) => m.replyMarkup?.keyboard)?.replyMarkup || null
+          }
           lang={lang}
           isDark={isDark}
         />

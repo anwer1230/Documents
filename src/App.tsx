@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus } from './types';
+import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
 import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
 import { LoginView } from './components/LoginView';
 import { Sidebar } from './components/Sidebar';
@@ -84,6 +84,7 @@ export default function App() {
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
   const [isContactsOpen, setIsContactsOpen] = useState(false);
   const [isMiniAppOpen, setIsMiniAppOpen] = useState(false);
+  const [miniAppData, setMiniAppData] = useState<{ url?: string; appName?: string; botUsername?: string } | null>(null);
   const [isJoiningChannel, setIsJoiningChannel] = useState(false);
   
   // Media Lightbox
@@ -93,6 +94,54 @@ export default function App() {
   const [toast, setToast] = useState<ToastData | null>(null);
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     setToast({ id: String(Date.now()), message, type });
+  };
+
+  // Bot Mini App opener
+  const handleOpenMiniApp = (url?: string, appName?: string) => {
+    setMiniAppData({
+      url,
+      appName,
+      botUsername: activeChat?.username || 'telegram_bot',
+    });
+    setIsMiniAppOpen(true);
+  };
+
+  // Bot Callback Handler (Telegram Web K protocol)
+  const handleBotCallback = async (messageId: string, callbackData: string) => {
+    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+      try {
+        const res = await fetch('/api/telegram/bot-callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peerId: selectedChatId,
+            msgId: Number(messageId.replace(/\D/g, '')) || 1,
+            data: callbackData,
+          }),
+        });
+        const data = await res.json();
+        if (data.message) {
+          showToast(data.message, 'info');
+          return;
+        }
+      } catch {}
+    }
+
+    if (callbackData === 'bot_settings') {
+      showToast(themeConfig.language === 'ar' ? '⚙️ تم فتح إعدادات البوت' : '⚙️ Bot settings opened', 'info');
+    } else if (callbackData === 'bot_stats') {
+      showToast(themeConfig.language === 'ar' ? '📊 تم تحديث الإحصائيات الحية' : '📊 Live statistics updated', 'info');
+    } else if (callbackData === 'wallet_deposit') {
+      showToast(themeConfig.language === 'ar' ? '📥 عنوان إيداع TON: EQBvW8Z...x8p' : '📥 TON Deposit Address: EQBvW8Z...x8p', 'success');
+    } else if (callbackData === 'wallet_send') {
+      showToast(themeConfig.language === 'ar' ? '📤 أدخل العنوان والمبلغ المطلوب إرساله' : '📤 Enter recipient address & amount', 'info');
+    } else if (callbackData === 'wallet_history') {
+      showToast(themeConfig.language === 'ar' ? '📜 لا توجد معاملات معلقة' : '📜 No pending transactions', 'info');
+    } else if (callbackData.startsWith('bf_')) {
+      showToast(themeConfig.language === 'ar' ? `🤖 أمر BotFather: ${callbackData}` : `🤖 BotFather action: ${callbackData}`, 'info');
+    } else {
+      showToast(themeConfig.language === 'ar' ? `استجابة البوت: ${callbackData}` : `Bot response: ${callbackData}`, 'info');
+    }
   };
 
   // Drawer modal state
@@ -858,12 +907,103 @@ export default function App() {
         let senderId = 'contact_' + selectedChatId;
         let senderName = targetChat.title;
         let emojiReaction = '👍';
+        let replyMarkup: TelegramReplyMarkup | undefined = undefined;
 
-        if (selectedChatId === 'bot_ai_assistant') {
+        if (selectedChatId === 'bot_ai_assistant' || targetChat.type === 'bot' || targetChat.isBot) {
           senderId = 'smart_helper_bot';
-          senderName = 'المساعد الذكي';
-          replyText = `تم استلام رسالتك: "${text}". تليجرام ويب يعمل بكفاءة مع خوادم MTProto ويدعم الرسائل الفورية وتحديثات القنوات! 🚀`;
+          senderName = targetChat.title || 'المساعد الذكي';
           emojiReaction = '⚡';
+
+          if (text.startsWith('/start')) {
+            replyText =
+              themeConfig.language === 'ar'
+                ? '🤖 مرحباً بك في منصة بوتات تليجرام المتكاملة (Telegram Web K)!\n\nيمكنك استخدام الأزرار التفاعلية أدناه لتشغيل تطبيقات الويب المصغرة وإدارة العمليات:'
+                : '🤖 Welcome to the Telegram Web K bot platform!\n\nUse the interactive buttons below to launch mini apps and manage operations:';
+            replyMarkup = {
+              type: 'inline',
+              inlineKeyboard: [
+                [
+                  {
+                    text: '🚀 تشغيل تطبيق الويب (Mini App)',
+                    webApp: { url: 'https://telegram.org' },
+                  },
+                ],
+                [
+                  { text: '⚙️ الإعدادات', callbackData: 'bot_settings' },
+                  { text: '📊 الإحصائيات الحية', callbackData: 'bot_stats' },
+                ],
+                [
+                  { text: '🔍 استعلام فوري', switchInlineQuery: 'search ' },
+                ],
+              ],
+            };
+          } else if (text.startsWith('/keyboard')) {
+            replyText =
+              themeConfig.language === 'ar'
+                ? '⌨️ تم تفعيل لوحة الأزرار التفاعلية (Reply Keyboard). اضغط على أي خيار أدناه:'
+                : '⌨️ Reply keyboard activated. Tap any button below:';
+            replyMarkup = {
+              type: 'keyboard',
+              keyboard: [
+                [{ text: '🚀 فحص السرعة' }, { text: '📊 الإحصائيات' }],
+                [{ text: '⚙️ الإعدادات' }, { text: '❓ مساعدة' }],
+              ],
+            };
+          } else if (text.startsWith('/app')) {
+            replyText =
+              themeConfig.language === 'ar'
+                ? '📱 افتح تطبيق الويب المصغر التفاعلي عبر الزر التالي:'
+                : '📱 Launch the interactive mini app using the button below:';
+            replyMarkup = {
+              type: 'inline',
+              inlineKeyboard: [
+                [{ text: '⚡ فتح تطبيق الويب المصغر', webApp: { url: 'https://wallet.tg' } }],
+              ],
+            };
+          } else if (text.startsWith('/help')) {
+            replyText =
+              themeConfig.language === 'ar'
+                ? '📖 **دليل أوامر البوت (Telegram Web K):**\n\n/start - تشغيل البوت وعرض الأزرار\n/app - فتح تطبيق ويب مصغر\n/keyboard - تفعيل لوحة الأزرار\n/settings - ضبط الخيارات\n/help - عرض هذه القائمة'
+                : '📖 **Bot Commands Manual (Telegram Web K):**\n\n/start - Start the bot & show buttons\n/app - Open Mini App\n/keyboard - Show Reply Keyboard\n/settings - Settings\n/help - Show this manual';
+            replyMarkup = {
+              type: 'inline',
+              inlineKeyboard: [
+                [{ text: '🌐 وثائق تليجرام الرسمية للبوتات', url: 'https://core.telegram.org/bots' }],
+              ],
+            };
+          } else {
+            replyText =
+              themeConfig.language === 'ar'
+                ? `تم استلام طلبك: "${text}".\nأنا جاهز لأداء أي مهمة تطلبها، اضغط على أحد الخيارات:`
+                : `Received: "${text}".\nReady to assist. Select an action below:`;
+            replyMarkup = {
+              type: 'inline',
+              inlineKeyboard: [
+                [{ text: '⚙️ الإعدادات', callbackData: 'bot_settings' }, { text: '📊 الإحصائيات', callbackData: 'bot_stats' }],
+              ],
+            };
+          }
+        } else if (selectedChatId === 'bot_botfather') {
+          senderId = 'BotFather';
+          senderName = 'BotFather';
+          replyText = 'I can help you create and manage Telegram bots. Please choose an action:';
+          replyMarkup = {
+            type: 'inline',
+            inlineKeyboard: [
+              [{ text: '➕ Create New Bot (/newbot)', callbackData: 'bf_newbot' }, { text: '🤖 My Bots (/mybots)', callbackData: 'bf_mybots' }],
+            ],
+          };
+        } else if (selectedChatId === 'bot_wallet') {
+          senderId = 'wallet';
+          senderName = 'Telegram Wallet';
+          replyText = '💳 **محفظة تليجرام**\n\nالرصيد المحدث:\n🔹 145.50 TON (~$800.25 USD)\n\nاختر العملية المطلوبة:';
+          replyMarkup = {
+            type: 'inline',
+            inlineKeyboard: [
+              [{ text: '⚡ فتح المحفظة المصغرة', webApp: { url: 'https://wallet.tg' } }],
+              [{ text: '📥 إيداع TON', callbackData: 'wallet_deposit' }, { text: '📤 إرسال أموال', callbackData: 'wallet_send' }],
+            ],
+          };
         } else if (selectedChatId === 'chat_ahmed') {
           senderId = 'ahmed_mansour';
           senderName = 'أحمد المنصور';
@@ -893,6 +1033,7 @@ export default function App() {
           timestamp: Date.now(),
           isOut: false,
           status: 'read',
+          replyMarkup,
           reactions: [{ emoji: emojiReaction, count: 1, userReacted: false }],
         };
 
@@ -1212,7 +1353,8 @@ export default function App() {
           onLeaveGroup={handleLeaveGroup}
           onReportChat={handleReportChat}
           onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
-          onOpenMiniApp={() => setIsMiniAppOpen(true)}
+          onOpenMiniApp={(url, appName) => handleOpenMiniApp(url, appName)}
+          onBotCallback={handleBotCallback}
           onJoinChannel={handleJoinChannel}
           isJoiningChannel={isJoiningChannel}
           onToast={showToast}
@@ -1357,7 +1499,20 @@ export default function App() {
       {/* Telegram Web Apps / Mini Apps Modal */}
       <MiniAppModal
         isOpen={isMiniAppOpen}
-        onClose={() => setIsMiniAppOpen(false)}
+        onClose={() => {
+          setIsMiniAppOpen(false);
+          setMiniAppData(null);
+        }}
+        appName={miniAppData?.appName}
+        botUsername={miniAppData?.botUsername || activeChat?.username || 'telegram_bot'}
+        appUrl={miniAppData?.url}
+        onSendData={(data) => {
+          handleSendMessage(`[بيانات تطبيق الويب]: ${data}`);
+          showToast(
+            themeConfig.language === 'ar' ? 'تم إرسال بيانات التطبيق للبوت بنجاح' : 'Data sent to bot successfully',
+            'success'
+          );
+        }}
         lang={themeConfig.language}
         isDark={themeConfig.isDark}
       />
