@@ -182,6 +182,14 @@ class TelegramWebSocketClient {
     });
   }
 
+  public sendSyncRequest() {
+    const lastTs = this.getLastTimestamp();
+    this.send({
+      action: 'sync_request',
+      lastTimestamp: lastTs,
+    });
+  }
+
   public send(data: any) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(data));

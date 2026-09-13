@@ -580,13 +580,26 @@ export class TelegramRPCRegistry {
 
         case 'updates.getDifference': {
           const { pts, date, qts = 0, ptsTotalLimit = 100 } = params;
-          const diff = await TelegramService.getDifference(
-            sessionToken,
-            Number(pts) || 0,
-            date ? Number(date) : undefined,
-            Number(qts) || 0,
-            Number(ptsTotalLimit) || 100
-          );
+          let diff: any = null;
+          if (client) {
+            let targetPts = Number(pts) || 0;
+            if (targetPts <= 0) {
+              try {
+                const state: any = await client.invoke(new Api.updates.GetState());
+                targetPts = state?.pts || 1;
+              } catch {
+                targetPts = 1;
+              }
+            }
+            diff = await client.invoke(
+              new Api.updates.GetDifference({
+                pts: targetPts,
+                date: Number(date) || Math.floor(Date.now() / 1000) - 86400,
+                qts: Number(qts) || 0,
+                ptsTotalLimit: Number(ptsTotalLimit) || 100,
+              })
+            );
+          }
           return {
             success: true,
             rpc: method,

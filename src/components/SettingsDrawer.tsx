@@ -7,6 +7,7 @@ import {
   Globe,
   Palette,
   Shield,
+  ShieldCheck,
   LogOut,
   Bookmark,
   Users,
