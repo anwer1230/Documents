@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
 import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
 import { LoginView } from './components/LoginView';
@@ -447,6 +447,47 @@ export default function App() {
     }
   }, []);
 
+  // MTProto Sync State tracking (pts, date, qts)
+  const syncPtsRef = useRef<number>(0);
+  const syncDateRef = useRef<number>(Math.floor(Date.now() / 1000));
+
+  // Perform MTProto Gap Recovery (updates.getDifference)
+  const recoverGap = useCallback(async () => {
+    if (!activeAccountId || isDemoMode) return;
+    try {
+      const url = syncPtsRef.current > 0
+        ? `/api/telegram/updates/difference?pts=${syncPtsRef.current}&date=${syncDateRef.current}`
+        : '/api/telegram/updates/state';
+
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (data.pts) {
+        syncPtsRef.current = data.pts;
+        if (data.date) syncDateRef.current = data.date;
+      } else if (data.state?.pts) {
+        syncPtsRef.current = data.state.pts;
+        if (data.state.date) syncDateRef.current = data.state.date;
+      }
+
+      if (data.newMessages && Array.isArray(data.newMessages) && data.newMessages.length > 0) {
+        setMessagesMap((prev) => {
+          const next = { ...prev };
+          data.newMessages.forEach((msg: any) => {
+            const list = next[msg.chatId] || [];
+            if (!list.some((m) => m.id === msg.id)) {
+              next[msg.chatId] = [...list, msg];
+            }
+          });
+          return next;
+        });
+      }
+    } catch {
+      // Silent sync recovery
+    }
+  }, [activeAccountId, isDemoMode]);
+
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
     const activeAcc = accounts.find((a) => a.id === activeAccountId);
@@ -454,7 +495,12 @@ export default function App() {
     wsClient.connect(token);
 
     const unsubscribe = wsClient.subscribe((event) => {
-      if (event.type === 'new_message' && event.message) {
+      if (event.type === 'connected') {
+        recoverGap();
+      } else if (event.type === 'new_message' && event.message) {
+        if ((event as any).pts) {
+          syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
+        }
         const msg = event.message;
         const targetChatId = event.peerId || msg.chatId || selectedChatId;
 
@@ -563,6 +609,18 @@ export default function App() {
       unsubscribe();
     };
   }, [activeAccountId, accounts, selectedChatId]);
+
+  // Auto-sync gap recovery when switching back to tab
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        recoverGap();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [recoverGap]);
+
 
   const loadMtprotoDialogs = async (token?: string) => {
     try {

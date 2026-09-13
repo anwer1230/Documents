@@ -479,6 +479,225 @@ async function startServer() {
     }
   });
 
+  // ==========================================
+  // PHASE 1 & PHASE 2: MTPROTO SYNC & MEDIA ENDPOINTS
+  // ==========================================
+
+  // Binary Media In-Memory LRU Cache
+  const mediaCache = new Map<string, { buffer: Buffer; mimeType: string; fileName?: string; timestamp: number }>();
+  const MAX_MEDIA_CACHE_ITEMS = 300;
+
+  const cacheMediaItem = (key: string, item: { buffer: Buffer; mimeType: string; fileName?: string }) => {
+    if (mediaCache.size >= MAX_MEDIA_CACHE_ITEMS) {
+      const oldestKey = mediaCache.keys().next().value;
+      if (oldestKey) mediaCache.delete(oldestKey);
+    }
+    mediaCache.set(key, { ...item, timestamp: Date.now() });
+  };
+
+  // Media Streaming Endpoint (with HTTP 206 Range Support & LRU Cache)
+  app.get(['/api/telegram/media/:chatId/:messageId', '/api/media/:chatId/:messageId'], async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { chatId, messageId } = req.params;
+    const cacheKey = `${chatId}_${messageId}`;
+
+    try {
+      let media = mediaCache.get(cacheKey);
+      if (!media) {
+        const downloaded = await TelegramService.downloadMedia(token, chatId, Number(messageId));
+        if (!downloaded) {
+          return res.status(404).json({ error: 'الوسائط غير موجودة أو غير مدعومة' });
+        }
+        cacheMediaItem(cacheKey, downloaded);
+        media = mediaCache.get(cacheKey);
+      }
+
+      if (!media) {
+        return res.status(404).json({ error: 'فشل تحميل الوسائط' });
+      }
+
+      const { buffer, mimeType, fileName } = media;
+      const totalSize = buffer.length;
+
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+      if (fileName) {
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(fileName)}"`);
+      }
+
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+        if (start >= totalSize || end >= totalSize) {
+          res.status(416).setHeader('Content-Range', `bytes */${totalSize}`);
+          return res.end();
+        }
+
+        const chunkSize = end - start + 1;
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+          'Content-Length': chunkSize,
+        });
+        return res.end(buffer.subarray(start, end + 1));
+      }
+
+      res.setHeader('Content-Length', totalSize);
+      return res.end(buffer);
+    } catch (err: any) {
+      console.error('Error serving media stream:', err);
+      res.status(500).json({ error: err?.message || 'فشل تدفق الوسائط' });
+    }
+  });
+
+  // Updates State: updates.getState
+  app.get('/api/telegram/updates/state', async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const state = await TelegramService.getUpdatesState(token);
+      res.json(state);
+    } catch (err: any) {
+      console.error('Error fetching updates state:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب حالة التحديثات' });
+    }
+  });
+
+  // Updates Gap Recovery: updates.getDifference
+  app.get('/api/telegram/updates/difference', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { pts, date, qts, limit } = req.query;
+    try {
+      const diff = await TelegramService.getDifference(
+        token,
+        Number(pts) || 0,
+        date ? Number(date) : undefined,
+        qts ? Number(qts) : 0,
+        limit ? Number(limit) : 100
+      );
+      res.json(diff);
+    } catch (err: any) {
+      console.error('Error fetching updates difference:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب فروقات التحديثات' });
+    }
+  });
+
+  // Channel Updates Difference: updates.getChannelDifference
+  app.get('/api/telegram/updates/channel-difference', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { channelPeer, pts, limit } = req.query;
+    if (!channelPeer) {
+      return res.status(400).json({ error: 'channelPeer مطلوب' });
+    }
+    try {
+      const diff = await TelegramService.getChannelDifference(
+        token,
+        channelPeer as string,
+        Number(pts) || 0,
+        limit ? Number(limit) : 100
+      );
+      res.json(diff);
+    } catch (err: any) {
+      console.error('Error fetching channel difference:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب فروقات القناة' });
+    }
+  });
+
+  // Privacy: account.getPrivacy & account.setPrivacy
+  app.get('/api/telegram/privacy', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { key } = req.query;
+    try {
+      const privacy = await TelegramService.getPrivacy(token, (key as string) || 'statusTimestamp');
+      res.json(privacy);
+    } catch (err: any) {
+      console.error('Error fetching privacy:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب إعدادات الخصوصية' });
+    }
+  });
+
+  app.post('/api/telegram/privacy', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { key, rules } = req.body;
+    if (!key) {
+      return res.status(400).json({ error: 'key مطلوب' });
+    }
+    try {
+      const result = await TelegramService.setPrivacy(token, key, rules);
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error('Error updating privacy:', err);
+      res.status(500).json({ error: err.message || 'فشل تحديث الخصوصية' });
+    }
+  });
+
+  // Notify Settings: account.getNotifySettings & account.updateNotifySettings
+  app.get('/api/telegram/notify-settings', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId } = req.query;
+    if (!peerId) return res.status(400).json({ error: 'peerId مطلوب' });
+    try {
+      const settings = await TelegramService.getNotifySettings(token, peerId as string);
+      res.json(settings);
+    } catch (err: any) {
+      console.error('Error fetching notify settings:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب إعدادات الإشعارات' });
+    }
+  });
+
+  app.post('/api/telegram/notify-settings', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, muteUntil } = req.body;
+    if (!peerId) return res.status(400).json({ error: 'peerId مطلوب' });
+    try {
+      const result = await TelegramService.updateNotifySettings(token, peerId, Number(muteUntil) || 0);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error updating notify settings:', err);
+      res.status(500).json({ error: err.message || 'فشل تحديث إعدادات الإشعارات' });
+    }
+  });
+
+  // Contacts Block & Unblock
+  app.post('/api/telegram/block-user', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId } = req.body;
+    if (!peerId) return res.status(400).json({ error: 'peerId مطلوب' });
+    try {
+      const result = await TelegramService.blockUser(token, peerId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error blocking user:', err);
+      res.status(500).json({ error: err.message || 'فشل حظر المستخدم' });
+    }
+  });
+
+  app.post('/api/telegram/unblock-user', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId } = req.body;
+    if (!peerId) return res.status(400).json({ error: 'peerId مطلوب' });
+    try {
+      const result = await TelegramService.unblockUser(token, peerId);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error unblocking user:', err);
+      res.status(500).json({ error: err.message || 'فشل إلغاء حظر المستخدم' });
+    }
+  });
+
+  app.get('/api/telegram/blocked-users', async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const blocked = await TelegramService.getBlocked(token);
+      res.json(blocked);
+    } catch (err: any) {
+      console.error('Error fetching blocked users:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب المستخدمين المحظورين' });
+    }
+  });
+
   // Fetch Messages for Chat
   app.get('/api/telegram/messages', async (req, res) => {
     const token = (req as any).sessionToken;

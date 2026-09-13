@@ -54,6 +54,7 @@ class TelegramWebSocketClient {
       this.socket.onopen = () => {
         this.isConnecting = false;
         console.log('[WebSocket] Connected to Telegram Web real-time server');
+        this.notifyListeners({ type: 'connected' });
       };
 
       this.socket.onmessage = (event) => {

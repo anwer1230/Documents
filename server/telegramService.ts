@@ -944,16 +944,19 @@ export class TelegramService {
 
       if (m.media) {
         const className = m.media.className || '';
+        mediaUrl = `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`;
         if (className.includes('Photo')) {
           mediaType = 'photo';
         } else if (className.includes('Document')) {
           const mime = m.media.document?.mimeType || '';
-          if (mime.startsWith('audio/') || mime.includes('ogg')) {
+          if (mime.startsWith('audio/') || mime.includes('ogg') || Boolean(m.media.voice)) {
             mediaType = 'voice';
+          } else if (mime.startsWith('video/') || Boolean(m.media.video)) {
+            mediaType = 'video';
           } else {
             mediaType = 'document';
           }
-          mediaTitle = m.media.document?.attributes?.find((a: any) => a.fileName)?.fileName || 'مستند';
+          mediaTitle = m.media.document?.attributes?.find((a: any) => a.fileName || a.title)?.fileName || 'مستند';
         }
       }
 
@@ -1470,4 +1473,278 @@ export class TelegramService {
     removePersistedSession(sessionToken);
     return { success: true };
   }
+
+  // ==========================================
+  // PHASE 1 & PHASE 2: MTPROTO SYNC ARCHITECTURE
+  // ==========================================
+
+  /**
+   * 1. Get Updates State (pts, qts, date, seq, unreadCount)
+   * Official MTProto method: updates.getState
+   */
+  public static async getUpdatesState(sessionToken: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const state: any = await client.invoke(new Api.updates.GetState());
+    return {
+      pts: state.pts,
+      qts: state.qts,
+      date: state.date,
+      seq: state.seq,
+      unreadCount: state.unreadCount || 0,
+    };
+  }
+
+  /**
+   * 2. Comprehensive Gap Recovery & Difference Sync
+   * Official MTProto method: updates.getDifference
+   */
+  public static async getDifference(
+    sessionToken: string,
+    pts: number,
+    date?: number,
+    qts: number = 0,
+    ptsTotalLimit: number = 100
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const diff: any = await client.invoke(
+      new Api.updates.GetDifference({
+        pts: Number(pts) || 0,
+        date: Number(date) || Math.floor(Date.now() / 1000) - 86400,
+        qts: Number(qts) || 0,
+        ptsTotalLimit: Number(ptsTotalLimit) || 100,
+      })
+    );
+
+    const newMessages = (diff.newMessages || []).map((m: any) => {
+      const rawPeer = m.peerId;
+      const peerId =
+        rawPeer?.userId?.toString() ||
+        rawPeer?.channelId?.toString() ||
+        rawPeer?.chatId?.toString() ||
+        m.fromId?.userId?.toString() ||
+        'chat';
+
+      let media: any = undefined;
+      if (m.media) {
+        const isPhoto = Boolean(m.media.photo);
+        const isDoc = Boolean(m.media.document);
+        const isVoice = Boolean(m.media.voice) || m.media.document?.mimeType?.includes('audio') || m.media.document?.mimeType?.includes('ogg');
+        const isVideo = Boolean(m.media.video) || m.media.document?.mimeType?.includes('video');
+        const type = isVoice ? 'voice' : isVideo ? 'video' : isPhoto ? 'photo' : 'document';
+        const docAttr = m.media.document?.attributes?.find((a: any) => a.fileName || a.title);
+
+        media = {
+          type,
+          url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
+          fileName: docAttr?.fileName || docAttr?.title,
+        };
+      }
+
+      return {
+        id: String(m.id),
+        chatId: peerId,
+        senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
+        senderName: m.out ? 'أنا' : 'عضو',
+        text: m.message || (media ? `[${media.type}]` : ''),
+        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+        isOut: !!m.out,
+        status: m.out ? 'read' : 'sent',
+        media,
+      };
+    });
+
+    return {
+      className: diff.className,
+      state: diff.state ? {
+        pts: diff.state.pts,
+        qts: diff.state.qts,
+        date: diff.state.date,
+        seq: diff.state.seq,
+        unreadCount: diff.state.unreadCount || 0,
+      } : undefined,
+      newMessages,
+      otherUpdates: sanitizeData(diff.otherUpdates || []),
+      isIntermediate: diff.className === 'updates.DifferenceSlice',
+    };
+  }
+
+  /**
+   * 3. Channel & Supergroup Difference Sync
+   * Official MTProto method: updates.getChannelDifference
+   */
+  public static async getChannelDifference(
+    sessionToken: string,
+    channelPeer: string,
+    pts: number,
+    limit: number = 100
+  ) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, channelPeer);
+    const diff: any = await client.invoke(
+      new Api.updates.GetChannelDifference({
+        channel: peer as any,
+        filter: new Api.ChannelMessagesFilterEmpty(),
+        pts: Number(pts) || 0,
+        limit: Number(limit) || 100,
+      })
+    );
+
+    const newMessages = (diff.newMessages || []).map((m: any) => {
+      const peerId = String(channelPeer);
+      let media: any = undefined;
+      if (m.media) {
+        media = {
+          type: m.media.photo ? 'photo' : 'document',
+          url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
+        };
+      }
+      return {
+        id: String(m.id),
+        chatId: peerId,
+        senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
+        senderName: m.out ? 'أنا' : 'قناة',
+        text: m.message || '',
+        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+        isOut: !!m.out,
+        status: 'sent',
+        media,
+      };
+    });
+
+    return {
+      className: diff.className,
+      pts: diff.pts,
+      timeout: diff.timeout,
+      newMessages,
+      otherUpdates: sanitizeData(diff.otherUpdates || []),
+      isFinal: diff.className === 'updates.ChannelDifference',
+    };
+  }
+
+  /**
+   * 4. Binary Media Stream Downloader (Images, Audio, Voice, Video, Documents)
+   */
+  public static async downloadMedia(sessionToken: string, peerId: string, messageId: number) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const msgs = await client.getMessages(peer, { ids: [Number(messageId)] });
+    if (!msgs || msgs.length === 0 || !msgs[0]?.media) {
+      return null;
+    }
+
+    const msg = msgs[0];
+    const buffer = await client.downloadMedia(msg, {});
+    if (!buffer || !(buffer instanceof Buffer) || buffer.length === 0) {
+      return null;
+    }
+
+    let mimeType = 'application/octet-stream';
+    let fileName: string | undefined = undefined;
+    const mediaObj = msg.media as any;
+
+    if (mediaObj.photo) {
+      mimeType = 'image/jpeg';
+      fileName = `photo_${messageId}.jpg`;
+    } else if (mediaObj.document) {
+      mimeType = mediaObj.document.mimeType || 'application/octet-stream';
+      const docAttr = mediaObj.document.attributes?.find((a: any) => a.fileName || a.title);
+      fileName = docAttr?.fileName || docAttr?.title || `file_${messageId}`;
+    } else if (mediaObj.voice) {
+      mimeType = 'audio/ogg';
+      fileName = `voice_${messageId}.ogg`;
+    }
+
+    return { buffer, mimeType, fileName };
+  }
+
+  /**
+   * 5. Account Privacy Settings Subsystem (account.getPrivacy / account.setPrivacy)
+   */
+  public static async getPrivacy(sessionToken: string, key: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
+    if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
+    else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+    else if (key === 'forwards') inputKey = new Api.InputPrivacyKeyForwards();
+    else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
+    else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+
+    const res: any = await client.invoke(new Api.account.GetPrivacy({ key: inputKey }));
+    return sanitizeData(res);
+  }
+
+  public static async setPrivacy(sessionToken: string, key: string, rules?: any[]) {
+    const client = await this.getOrCreateClient(sessionToken);
+    let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
+    if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
+    else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+    else if (key === 'forwards') inputKey = new Api.InputPrivacyKeyForwards();
+    else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
+    else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+
+    const finalRules = rules && rules.length > 0 ? rules : [new Api.InputPrivacyValueAllowAll()];
+    const res: any = await client.invoke(new Api.account.SetPrivacy({ key: inputKey, rules: finalRules }));
+    return sanitizeData(res);
+  }
+
+  /**
+   * 6. Chat Notification Settings (Mute / Unmute / Sound)
+   */
+  public static async getNotifySettings(sessionToken: string, peerId: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const inputPeer = await client.getInputEntity(peer);
+    const res: any = await client.invoke(
+      new Api.account.GetNotifySettings({
+        peer: new Api.InputNotifyPeer({ peer: inputPeer as any }),
+      })
+    );
+    return sanitizeData(res);
+  }
+
+  public static async updateNotifySettings(sessionToken: string, peerId: string, muteUntil: number = 0) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const inputPeer = await client.getInputEntity(peer);
+    const settings = new Api.InputPeerNotifySettings({
+      muteUntil,
+      showPreviews: true,
+      silent: muteUntil > 0,
+    });
+    const res = await client.invoke(
+      new Api.account.UpdateNotifySettings({
+        peer: new Api.InputNotifyPeer({ peer: inputPeer as any }),
+        settings,
+      })
+    );
+    return { success: !!res, muteUntil };
+  }
+
+  /**
+   * 7. Contacts Block & Unblock
+   */
+  public static async blockUser(sessionToken: string, peerId: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const inputPeer = await client.getInputEntity(peer);
+    const res = await client.invoke(new Api.contacts.Block({ id: inputPeer as any }));
+    return { success: !!res };
+  }
+
+  public static async unblockUser(sessionToken: string, peerId: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const peer = await resolvePeer(client, peerId);
+    const inputPeer = await client.getInputEntity(peer);
+    const res = await client.invoke(new Api.contacts.Unblock({ id: inputPeer as any }));
+    return { success: !!res };
+  }
+
+  public static async getBlocked(sessionToken: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const res: any = await client.invoke(new Api.contacts.GetBlocked({ offset: 0, limit: 100 }));
+    return sanitizeData(res);
+  }
+
 }
