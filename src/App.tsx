@@ -20,6 +20,7 @@ import { ShareLinkModal } from './components/modals/ShareLinkModal';
 import { ReportChatModal } from './components/modals/ReportChatModal';
 import { ShieldCheck, Loader2, Users, UserPlus, Sparkles } from 'lucide-react';
 import { wsClient } from './utils/websocket';
+import { Api } from './services/api';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -450,43 +451,162 @@ export default function App() {
   // MTProto Sync State tracking (pts, date, qts)
   const syncPtsRef = useRef<number>(0);
   const syncDateRef = useRef<number>(Math.floor(Date.now() / 1000));
+  const isRecoveringGapRef = useRef<boolean>(false);
 
-  // Perform MTProto Gap Recovery (updates.getDifference)
+  // Helper to ingest and deduplicate sync batch / recovered messages across chats and messagesMap
+  const applySyncBatchMessages = useCallback((batch: any[]) => {
+    if (!Array.isArray(batch) || batch.length === 0) return;
+
+    let highestTimestamp = 0;
+
+    setMessagesMap((prev) => {
+      const next = { ...prev };
+      batch.forEach((msg) => {
+        const targetChatId = msg.chatId || selectedChatId;
+        if (!targetChatId) return;
+        const currentList = next[targetChatId] || [];
+        if (!currentList.some((m) => m.id === msg.id)) {
+          // Keep messages chronologically ordered
+          next[targetChatId] = [...currentList, msg].sort(
+            (a, b) => (a.timestamp || 0) - (b.timestamp || 0)
+          );
+        }
+        if (msg.timestamp && msg.timestamp > highestTimestamp) {
+          highestTimestamp = msg.timestamp;
+        }
+      });
+      return next;
+    });
+
+    if (highestTimestamp > 0) {
+      wsClient.setLastTimestamp(highestTimestamp);
+      syncDateRef.current = Math.floor(highestTimestamp / 1000);
+    }
+
+    setChats((prev) =>
+      prev.map((c) => {
+        const matchingMsgs = batch.filter((m) => (m.chatId || selectedChatId) === c.id);
+        if (matchingMsgs.length === 0) return c;
+        const latest = [...matchingMsgs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
+        const unreadInc = matchingMsgs.filter((m) => !m.isOut && c.id !== selectedChatId).length;
+        const shouldUpdateLast =
+          !c.lastMessage ||
+          !c.lastMessage.timestamp ||
+          (latest?.timestamp && latest.timestamp >= c.lastMessage.timestamp);
+
+        return {
+          ...c,
+          unreadCount: (c.unreadCount || 0) + unreadInc,
+          lastMessage: shouldUpdateLast && latest
+            ? {
+                text: latest.text || (latest.media ? `[${latest.media.type || 'وسائط'}]` : '[رسالة]'),
+                timestamp: latest.timestamp || Date.now(),
+                isOut: !!latest.isOut,
+              }
+            : c.lastMessage,
+        };
+      })
+    );
+  }, [selectedChatId]);
+
+  // Perform MTProto Gap Recovery (orchestrating Api.updates.GetDifference & sync_batch)
   const recoverGap = useCallback(async () => {
-    if (!activeAccountId || isDemoMode) return;
+    if (!activeAccountId || isDemoMode || isRecoveringGapRef.current) return;
+    isRecoveringGapRef.current = true;
+
     try {
-      const url = syncPtsRef.current > 0
-        ? `/api/telegram/updates/difference?pts=${syncPtsRef.current}&date=${syncDateRef.current}`
-        : '/api/telegram/updates/state';
+      // 1. Request immediate WebSocket sync catchup
+      wsClient.sendSyncRequest();
 
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = await res.json();
-
-      if (data.pts) {
-        syncPtsRef.current = data.pts;
-        if (data.date) syncDateRef.current = data.date;
-      } else if (data.state?.pts) {
-        syncPtsRef.current = data.state.pts;
-        if (data.state.date) syncDateRef.current = data.state.date;
+      // 2. Query initial updates state if PTS is unset
+      if (syncPtsRef.current <= 0) {
+        try {
+          const stateData: any = await Api.updates.GetState();
+          if (stateData?.pts) {
+            syncPtsRef.current = stateData.pts;
+            if (stateData.date) syncDateRef.current = stateData.date;
+          }
+        } catch (stateErr) {
+          console.warn('[recoverGap] Could not query updates.getState:', stateErr);
+        }
       }
 
-      if (data.newMessages && Array.isArray(data.newMessages) && data.newMessages.length > 0) {
-        setMessagesMap((prev) => {
-          const next = { ...prev };
-          data.newMessages.forEach((msg: any) => {
-            const list = next[msg.chatId] || [];
-            if (!list.some((m) => m.id === msg.id)) {
-              next[msg.chatId] = [...list, msg];
+      // 3. Orchestrate GetDifference loop to retrieve all difference slices
+      let hasMoreSlices = true;
+      let iteration = 0;
+      const MAX_SLICES = 10;
+      const allRecoveredMessages: any[] = [];
+
+      while (hasMoreSlices && iteration < MAX_SLICES) {
+        iteration++;
+        const currentPts = syncPtsRef.current;
+        const currentDate = syncDateRef.current;
+
+        const diffData: any = await Api.updates.GetDifference({
+          pts: currentPts,
+          date: currentDate,
+          ptsTotalLimit: 100,
+        });
+
+        if (!diffData) break;
+
+        // Collect newMessages from difference payload
+        if (Array.isArray(diffData.newMessages) && diffData.newMessages.length > 0) {
+          allRecoveredMessages.push(...diffData.newMessages);
+        }
+
+        // Collect messages from otherUpdates if wrapped in UpdateNewMessage
+        if (Array.isArray(diffData.otherUpdates)) {
+          diffData.otherUpdates.forEach((upd: any) => {
+            if (upd?.message && (upd.className === 'UpdateNewMessage' || upd.className === 'UpdateNewChannelMessage')) {
+              const m = upd.message;
+              const peerId = m.peerId?.userId?.toString() || m.peerId?.chatId?.toString() || m.peerId?.channelId?.toString();
+              if (peerId) {
+                allRecoveredMessages.push({
+                  id: String(m.id),
+                  chatId: peerId,
+                  senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
+                  senderName: m.out ? 'أنا' : 'عضو',
+                  text: m.message || '',
+                  timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+                  isOut: !!m.out,
+                  status: m.out ? 'read' : 'sent',
+                });
+              }
             }
           });
-          return next;
-        });
+        }
+
+        // Advance PTS and Date from diff state
+        if (diffData.state?.pts) {
+          syncPtsRef.current = diffData.state.pts;
+          if (diffData.state.date) syncDateRef.current = diffData.state.date;
+        } else if (diffData.pts) {
+          syncPtsRef.current = diffData.pts;
+          if (diffData.date) syncDateRef.current = diffData.date;
+        }
+
+        // Check if more difference slices remain (DifferenceSlice)
+        const isSlice = diffData.isIntermediate || diffData.className === 'updates.DifferenceSlice';
+        hasMoreSlices = Boolean(isSlice);
+
+        // Break early if PTS did not advance and no more slices
+        if (currentPts > 0 && syncPtsRef.current === currentPts && !isSlice) {
+          break;
+        }
       }
-    } catch {
-      // Silent sync recovery
+
+      // 4. Ingest and apply all recovered messages across chats and state
+      if (allRecoveredMessages.length > 0) {
+        console.log(`[recoverGap] Successfully recovered ${allRecoveredMessages.length} missed messages across ${iteration} slices`);
+        applySyncBatchMessages(allRecoveredMessages);
+      }
+    } catch (err) {
+      console.warn('[recoverGap] Gap recovery encountered error:', err);
+    } finally {
+      isRecoveringGapRef.current = false;
     }
-  }, [activeAccountId, isDemoMode]);
+  }, [activeAccountId, isDemoMode, applySyncBatchMessages]);
 
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
@@ -499,42 +619,10 @@ export default function App() {
         recoverGap();
       } else if (event.type === 'sync_batch' || (event as any).action === 'sync_batch') {
         const batch: any[] = (event as any).messages || [];
-        if (Array.isArray(batch) && batch.length > 0) {
-          console.log(`[WebSocket] Received sync_batch catchup: ${batch.length} messages`);
-          setMessagesMap((prev) => {
-            const next = { ...prev };
-            batch.forEach((msg) => {
-              const targetChatId = msg.chatId || selectedChatId;
-              const currentList = next[targetChatId] || [];
-              if (!currentList.some((m) => m.id === msg.id)) {
-                next[targetChatId] = [...currentList, msg];
-              }
-              if (msg.timestamp) {
-                wsClient.setLastTimestamp(msg.timestamp);
-              }
-            });
-            return next;
-          });
-
-          setChats((prev) =>
-            prev.map((c) => {
-              const matchingMsgs = batch.filter((m) => (m.chatId || selectedChatId) === c.id);
-              if (matchingMsgs.length === 0) return c;
-              const latest = [...matchingMsgs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
-              const unreadInc = matchingMsgs.filter((m) => !m.isOut && c.id !== selectedChatId).length;
-              return {
-                ...c,
-                unreadCount: (c.unreadCount || 0) + unreadInc,
-                lastMessage: latest
-                  ? {
-                      text: latest.text || '[وسائط]',
-                      timestamp: latest.timestamp || Date.now(),
-                      isOut: !!latest.isOut,
-                    }
-                  : c.lastMessage,
-              };
-            })
-          );
+        console.log(`[WebSocket] Received sync_batch catchup: ${batch.length} messages`);
+        applySyncBatchMessages(batch);
+        if ((event as any).lastTimestamp) {
+          wsClient.setLastTimestamp((event as any).lastTimestamp);
         }
       } else if (event.type === 'new_message' && event.message) {
         if ((event as any).pts) {

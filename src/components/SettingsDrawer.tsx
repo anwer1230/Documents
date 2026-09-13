@@ -51,7 +51,7 @@ import {
   sendTestWebPush,
   getPushSubscription,
 } from '../utils/pushNotifications';
-import api from '../services/api';
+import api, { Api } from '../services/api';
 import { PrivacySettings } from './PrivacySettings';
 
 interface SettingsDrawerProps {
@@ -80,6 +80,7 @@ type SettingsSection =
   | 'edit-profile'
   | 'chat-settings'
   | 'privacy-security'
+  | 'two-step-verification'
   | 'notifications-sounds'
   | 'data-storage'
   | 'chat-folders'
@@ -174,8 +175,17 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [show2faPassword, setShow2faPassword] = useState(false);
   const [twoStepEnabled, setTwoStepEnabled] = useState(false);
   const [twoStepHint, setTwoStepHint] = useState('');
+  const [twoStepDetails, setTwoStepDetails] = useState<{
+    hasRecovery?: boolean;
+    loginEmailPattern?: string;
+    emailUnconfirmedPattern?: string;
+    pendingResetDate?: number;
+  }>({});
   const [privacyLoading, setPrivacyLoading] = useState(false);
   const [twoStepLoading, setTwoStepLoading] = useState(false);
+  const [newTwoStepHint, setNewTwoStepHint] = useState('');
+  const [isSaving2FA, setIsSaving2FA] = useState(false);
+  const [twoStepSuccessMsg, setTwoStepSuccessMsg] = useState<string | null>(null);
   const [privacySyncSuccess, setPrivacySyncSuccess] = useState<string | null>(null);
   const [privacySyncError, setPrivacySyncError] = useState<string | null>(null);
   const [updatingPrivacyKey, setUpdatingPrivacyKey] = useState<string | null>(null);
@@ -252,24 +262,35 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const fetchCloud2FA = async () => {
     setTwoStepLoading(true);
     try {
-      // 2FA status check (Api.account.GetPassword)
-      const res: any = await api.privacy.getPassword();
+      // Direct call to Api.account.GetPassword as requested
+      const res: any = await Api.account.GetPassword();
       const data = res?.result || res;
       if (data) {
         setTwoStepEnabled(Boolean(data.hasPassword));
         setTwoStepHint(data.hint || '');
+        setNewTwoStepHint(data.hint || '');
+        setTwoStepDetails({
+          hasRecovery: Boolean(data.hasRecovery),
+          loginEmailPattern: data.loginEmailPattern || data.emailUnconfirmedPattern || '',
+          emailUnconfirmedPattern: data.emailUnconfirmedPattern || '',
+          pendingResetDate: data.pendingResetDate,
+        });
       }
     } catch (err: any) {
-      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password:', err);
+      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password via Api.account.GetPassword:', err);
     } finally {
       setTwoStepLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isOpen && activeSection === 'privacy-security') {
-      fetchCloudPrivacy();
-      fetchCloud2FA();
+    if (isOpen) {
+      if (activeSection === 'privacy-security' || activeSection === 'two-step-verification' || activeSection === 'settings-root') {
+        fetchCloud2FA();
+      }
+      if (activeSection === 'privacy-security') {
+        fetchCloudPrivacy();
+      }
     }
   }, [isOpen, activeSection]);
 
@@ -841,6 +862,45 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <ChevronRight className="w-4 h-4 text-gray-400 rtl:rotate-180" />
               </button>
 
+              {/* Two-Step Verification (2FA) */}
+              <button
+                onClick={() => {
+                  fetchCloud2FA();
+                  setActiveSection('two-step-verification');
+                }}
+                className={`w-full flex items-center gap-4 px-4 py-3 text-sm font-medium rounded-xl transition ${
+                  themeConfig.isDark ? 'hover:bg-[#232e3c] text-white' : 'hover:bg-gray-100 text-gray-800'
+                }`}
+              >
+                <Key className="w-5 h-5 text-[#3390ec]" />
+                <div className="flex-1 text-start">
+                  <div className="flex items-center gap-2">
+                    <span>{isAr ? 'التحقق بخطوتين (2FA)' : 'Two-Step Verification'}</span>
+                    {twoStepLoading ? (
+                      <RefreshCw className="w-3 h-3 text-[#3390ec] animate-spin" />
+                    ) : twoStepEnabled ? (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/20 text-green-400 font-semibold">
+                        {isAr ? 'مفعل' : 'Active'}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-semibold">
+                        {isAr ? 'غير مفعل' : 'Off'}
+                      </span>
+                    )}
+                  </div>
+                  {twoStepEnabled && twoStepHint ? (
+                    <div className="text-[11px] text-gray-400 truncate max-w-[220px]">
+                      {isAr ? `تلميح: ${twoStepHint}` : `Hint: ${twoStepHint}`}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-gray-400">
+                      {isAr ? 'كلمة مرور إضافية لحماية الحساب' : 'Extra password for account safety'}
+                    </div>
+                  )}
+                </div>
+                <ChevronRight className="w-4 h-4 text-gray-400 rtl:rotate-180" />
+              </button>
+
               {/* Notifications and Sounds */}
               <button
                 onClick={() => setActiveSection('notifications-sounds')}
@@ -1365,6 +1425,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Button to open the full dedicated 2FA section */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchCloud2FA();
+                    setActiveSection('two-step-verification');
+                  }}
+                  className="w-full mt-2 py-2 px-3 rounded-lg bg-[#3390ec]/15 hover:bg-[#3390ec]/25 text-[#3390ec] text-xs font-semibold flex items-center justify-between transition"
+                >
+                  <div className="flex items-center gap-2">
+                    <Key className="w-3.5 h-3.5" />
+                    <span>{isAr ? 'عرض وتعديل إعدادات التحقق بخطوتين بالتفصيل' : 'Open Two-Step Verification Section'}</span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 rtl:rotate-180" />
+                </button>
               </div>
 
               {/* PrivacySettings Component (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
@@ -1392,6 +1468,254 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-400 rtl:rotate-180" />
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* 5B. SUB-VIEW: TWO-STEP VERIFICATION (2FA) */}
+        {/* ========================================================================= */}
+        {activeSection === 'two-step-verification' && (
+          <div className="flex flex-col h-full overflow-hidden">
+            <div className={`p-4 flex items-center justify-between border-b ${
+              themeConfig.isDark ? 'border-gray-800 bg-[#17212b]' : 'border-gray-200 bg-white'
+            }`}>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setActiveSection('privacy-security')}
+                  className="p-1.5 rounded-full hover:bg-gray-500/10 text-gray-400 hover:text-white transition"
+                  title={isAr ? 'رجوع للخصوصية والأمان' : 'Back to Privacy & Security'}
+                >
+                  <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
+                </button>
+                <h2 className="font-bold text-lg">{isAr ? 'التحقق بخطوتين (2FA)' : 'Two-Step Verification'}</h2>
+              </div>
+              <button
+                type="button"
+                onClick={fetchCloud2FA}
+                disabled={twoStepLoading}
+                className="p-1.5 rounded-full hover:bg-gray-500/10 text-gray-400 hover:text-white transition"
+                title={isAr ? 'فحص الحالة الآن عبر Api.account.GetPassword' : 'Check Status Now via Api.account.GetPassword'}
+              >
+                <RefreshCw className={`w-4 h-4 ${twoStepLoading ? 'animate-spin text-[#3390ec]' : ''}`} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Primary Status Banner */}
+              <div className={`p-4 rounded-2xl border transition ${
+                twoStepEnabled
+                  ? themeConfig.isDark
+                    ? 'bg-green-500/10 border-green-500/30 text-white'
+                    : 'bg-green-50 border-green-200 text-gray-900'
+                  : themeConfig.isDark
+                    ? 'bg-amber-500/10 border-amber-500/30 text-white'
+                    : 'bg-amber-50 border-amber-200 text-gray-900'
+              }`}>
+                <div className="flex items-start gap-3.5">
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
+                    twoStepEnabled ? 'bg-green-500 text-white shadow-lg shadow-green-500/20' : 'bg-amber-500 text-white shadow-lg shadow-amber-500/20'
+                  }`}>
+                    {twoStepEnabled ? <ShieldCheck className="w-6 h-6" /> : <Lock className="w-6 h-6" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-base">
+                        {twoStepEnabled
+                          ? (isAr ? 'التحقق بخطوتين مفعل ومحمي' : 'Two-Step Verification is Active')
+                          : (isAr ? 'التحقق بخطوتين غير مفعل' : 'Two-Step Verification is Off')}
+                      </span>
+                      {twoStepLoading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#3390ec]" />
+                      ) : (
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${
+                          twoStepEnabled
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                        }`}>
+                          {twoStepEnabled ? (isAr ? 'آمن ومحمي' : 'Protected') : (isAr ? 'يوصى بالتفعيل' : 'Recommended')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                      {twoStepEnabled
+                        ? (isAr
+                            ? 'حسابك محمي بكلمة مرور إضافية يتم التحقق منها عبر خوادم تيليجرام السحابية عند تسجيل الدخول من أي جلسة جديدة.'
+                            : 'Your account is secured with a cloud password checked by Telegram MTProto servers upon new logins.')
+                        : (isAr
+                            ? 'أضف كلمة مرور سحابية لحماية حسابك من الاختراق أو الوصول غير المصرح به حتى إذا تم اعتراض رمز SMS.'
+                            : 'Add a cloud password to protect your account from unauthorized access even if SMS code is intercepted.')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Password Hint Display (Calling Api.account.GetPassword and showing hint if active) */}
+              {twoStepEnabled && (
+                <div className={`p-4 rounded-2xl border space-y-2.5 ${
+                  themeConfig.isDark ? 'bg-[#17212b] border-gray-800' : 'bg-white border-gray-200 shadow-sm'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Key className="w-4 h-4 text-[#3390ec]" />
+                      <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">
+                        {isAr ? 'تلميح كلمة المرور السحابية' : 'Cloud Password Hint'}
+                      </span>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-[#3390ec]/20 text-[#3390ec] font-semibold">
+                      {isAr ? 'Api.account.GetPassword' : 'Api.account.GetPassword'}
+                    </span>
+                  </div>
+
+                  {twoStepHint ? (
+                    <div className="p-3.5 rounded-xl bg-gray-500/10 border border-[#3390ec]/30 flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="text-xs text-gray-400">{isAr ? 'التلميح الحالي المحفوظ بالسحابة:' : 'Current Saved Cloud Hint:'}</div>
+                        <div className="text-base font-bold text-[#3390ec] font-mono select-all tracking-wide">{twoStepHint}</div>
+                      </div>
+                      <div className="w-9 h-9 rounded-full bg-[#3390ec]/15 flex items-center justify-center text-[#3390ec]">
+                        <CheckCircle2 className="w-5 h-5" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-xl bg-gray-500/10 text-xs text-gray-400 italic">
+                      {isAr ? 'لا يوجد تلميح محفوظ لكلمة المرور الحالية.' : 'No hint is set for the current password.'}
+                    </div>
+                  )}
+
+                  {/* Recovery Email details if available */}
+                  {twoStepDetails.loginEmailPattern && (
+                    <div className="pt-2 border-t border-gray-700/30 flex items-center justify-between text-xs">
+                      <span className="text-gray-400">{isAr ? 'بريد الاسترداد المرتبط:' : 'Linked Recovery Email:'}</span>
+                      <span className="font-mono text-gray-300 bg-gray-800/60 px-2 py-0.5 rounded border border-gray-700/50">
+                        {twoStepDetails.loginEmailPattern}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Password Management & Hint Setting */}
+              <div className={`p-4 rounded-2xl border space-y-3 ${
+                themeConfig.isDark ? 'bg-[#17212b] border-gray-800' : 'bg-white border-gray-200 shadow-sm'
+              }`}>
+                <div className="text-sm font-bold flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-[#3390ec]" />
+                  <span>{twoStepEnabled ? (isAr ? 'تحديث إعدادات كلمة المرور السحابية' : 'Update Cloud Password Settings') : (isAr ? 'تعيين كلمة مرور سحابية جديدة' : 'Set New Cloud Password')}</span>
+                </div>
+
+                {twoStepSuccessMsg && (
+                  <div className="p-2.5 rounded-xl bg-green-500/15 border border-green-500/30 text-xs text-green-400 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>{twoStepSuccessMsg}</span>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-400">{isAr ? 'كلمة المرور' : 'Password'}</label>
+                  <div className="relative">
+                    <input
+                      type={show2faPassword ? 'text' : 'password'}
+                      value={twoStepPassword}
+                      onChange={(e) => setTwoStepPassword(e.target.value)}
+                      placeholder={twoStepEnabled ? '••••••••' : (isAr ? 'أدخل كلمة مرور قوية' : 'Enter strong password')}
+                      className={`w-full px-3.5 py-2.5 text-sm rounded-xl border pe-10 transition ${
+                        themeConfig.isDark ? 'bg-[#0e1621] border-gray-700 text-white focus:border-[#3390ec]' : 'bg-white border-gray-300 text-gray-900 focus:border-[#3390ec]'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShow2faPassword(!show2faPassword)}
+                      className="absolute end-3 top-3 text-gray-400 hover:text-white"
+                    >
+                      {show2faPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-gray-400">{isAr ? 'تلميح كلمة المرور (Hint)' : 'Password Hint'}</label>
+                  <input
+                    type="text"
+                    value={newTwoStepHint}
+                    onChange={(e) => setNewTwoStepHint(e.target.value)}
+                    placeholder={isAr ? 'مثال: تاريخ مهم أو كلمة مميزة' : 'e.g., childhood pet, memorable city'}
+                    className={`w-full px-3.5 py-2.5 text-sm rounded-xl border transition ${
+                      themeConfig.isDark ? 'bg-[#0e1621] border-gray-700 text-white focus:border-[#3390ec]' : 'bg-white border-gray-300 text-gray-900 focus:border-[#3390ec]'
+                    }`}
+                  />
+                  <p className="text-[11px] text-gray-500">
+                    {isAr ? 'سيظهر هذا التلميح في حالة نسيت كلمة المرور لمساعدتك على تذكرها.' : 'This hint will be displayed if you forget your password.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsSaving2FA(true);
+                      setTwoStepSuccessMsg(null);
+                      try {
+                        await api.mtproto.invoke('account.updatePasswordSettings', {
+                          password: twoStepPassword || undefined,
+                          newSettings: {
+                            hint: newTwoStepHint || undefined,
+                          },
+                        });
+                        setTwoStepHint(newTwoStepHint);
+                        setTwoStepEnabled(true);
+                        setTwoStepSuccessMsg(isAr ? 'تم تحديث إعدادات التحقق بخطوتين وتعيين التلميح بنجاح!' : 'Two-step verification and hint updated successfully!');
+                        await fetchCloud2FA();
+                      } catch (err: any) {
+                        console.warn('Failed to update 2FA:', err);
+                      } finally {
+                        setIsSaving2FA(false);
+                      }
+                    }}
+                    disabled={isSaving2FA}
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-[#3390ec] hover:bg-[#2b7ac9] text-white font-semibold text-xs transition flex items-center justify-center gap-2 shadow-md shadow-[#3390ec]/20 disabled:opacity-50"
+                  >
+                    {isSaving2FA ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{isAr ? 'جارٍ الحفظ...' : 'Saving...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5" />
+                        <span>{isAr ? 'حفظ إعدادات التحقق بخطوتين' : 'Save 2FA Settings'}</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={fetchCloud2FA}
+                    disabled={twoStepLoading}
+                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center transition ${
+                      themeConfig.isDark ? 'border-gray-700 hover:bg-gray-800 text-gray-300' : 'border-gray-300 hover:bg-gray-100 text-gray-700'
+                    }`}
+                    title={isAr ? 'إعادة فحص الحالة من خوادم تيليجرام' : 'Re-check status from Telegram servers'}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${twoStepLoading ? 'animate-spin text-[#3390ec]' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Security Recommendations Card */}
+              <div className={`p-4 rounded-2xl border space-y-2.5 ${
+                themeConfig.isDark ? 'bg-gray-800/30 border-gray-800 text-gray-300' : 'bg-gray-50 border-gray-200 text-gray-700'
+              }`}>
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-[#3390ec]" />
+                  <span>{isAr ? 'إرشادات أمان تيليجرام' : 'Telegram Security Guidelines'}</span>
+                </div>
+                <ul className="text-xs space-y-1.5 list-disc list-inside text-gray-400 leading-relaxed">
+                  <li>{isAr ? 'اختر كلمة مرور مميزة لا تستخدمها في حسابات أخرى.' : 'Choose a unique password not used on other services.'}</li>
+                  <li>{isAr ? 'تأكد من أن التلميح يذكرك أنت فقط ولا يكشف كلمة المرور للآخرين.' : 'Ensure the hint reminds you without giving the password away.'}</li>
+                  <li>{isAr ? 'قم بربط بريد إلكتروني صالح لاستعادة الحساب إذا نسيت كلمة المرور.' : 'Link a valid recovery email in case you forget the password.'}</li>
+                </ul>
+              </div>
             </div>
           </div>
         )}

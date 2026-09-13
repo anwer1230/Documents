@@ -357,6 +357,31 @@ export const Api = {
     },
   },
 
+  updates: {
+    GetState: async () => {
+      try {
+        const res = await mtprotoApi.invoke('updates.getState', {});
+        return res?.result || res;
+      } catch {
+        return await request('/api/telegram/updates/state');
+      }
+    },
+
+    GetDifference: async (params: { pts?: number; date?: number; qts?: number; ptsTotalLimit?: number }) => {
+      try {
+        const res = await mtprotoApi.invoke('updates.getDifference', params);
+        return res?.result || res;
+      } catch {
+        const query = new URLSearchParams();
+        if (params.pts !== undefined) query.set('pts', String(params.pts));
+        if (params.date !== undefined) query.set('date', String(params.date));
+        if (params.qts !== undefined) query.set('qts', String(params.qts));
+        if (params.ptsTotalLimit !== undefined) query.set('limit', String(params.ptsTotalLimit));
+        return await request(`/api/telegram/updates/difference?${query.toString()}`);
+      }
+    },
+  },
+
   InputPrivacyKeyPhoneNumber: () => ({ _: 'inputPrivacyKeyPhoneNumber' }),
   InputPrivacyKeyStatusTimestamp: () => ({ _: 'inputPrivacyKeyStatusTimestamp' }),
   InputPrivacyKeyForwards: () => ({ _: 'inputPrivacyKeyForwards' }),

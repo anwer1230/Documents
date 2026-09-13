@@ -559,6 +559,42 @@ export class TelegramRPCRegistry {
           };
         }
 
+        // ==========================================
+        // 7. UPDATES & GAP RECOVERY (updates.*)
+        // ==========================================
+        case 'updates.getState': {
+          const state: any = await client.invoke(new Api.updates.GetState());
+          return {
+            success: true,
+            rpc: method,
+            serverTime,
+            result: {
+              pts: state.pts,
+              qts: state.qts,
+              date: state.date,
+              seq: state.seq,
+              unreadCount: state.unreadCount || 0,
+            },
+          };
+        }
+
+        case 'updates.getDifference': {
+          const { pts, date, qts = 0, ptsTotalLimit = 100 } = params;
+          const diff = await TelegramService.getDifference(
+            sessionToken,
+            Number(pts) || 0,
+            date ? Number(date) : undefined,
+            Number(qts) || 0,
+            Number(ptsTotalLimit) || 100
+          );
+          return {
+            success: true,
+            rpc: method,
+            serverTime,
+            result: diff,
+          };
+        }
+
         default:
           return this.handleFallbackRPC(method, params, serverTime);
       }
