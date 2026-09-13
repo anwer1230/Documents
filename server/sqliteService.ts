@@ -276,6 +276,15 @@ export class SQLiteDatabaseService {
 
         CREATE INDEX IF NOT EXISTS idx_cached_messages_chat_date ON cached_messages(chat_id, date);
         CREATE INDEX IF NOT EXISTS idx_cached_messages_chat_rawdate ON cached_messages(chat_id, raw_date);
+
+        CREATE TABLE IF NOT EXISTS user_statuses (
+          user_id TEXT PRIMARY KEY,
+          status_type TEXT NOT NULL,
+          was_online INTEGER DEFAULT 0,
+          expires INTEGER DEFAULT 0,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_statuses_updated ON user_statuses(updated_at);
       `);
 
       this.migrateInitialData();
@@ -981,6 +990,76 @@ export class SQLiteDatabaseService {
       }));
     } catch (e) {
       console.warn(`[SQLite] getCachedMessages(${chatId}) warning:`, e);
+      return [];
+    }
+  }
+
+  // =========================================================================
+  // USER STATUS & PRESENCE CACHING (MTProto UserStatusOnline / UserStatusOffline)
+  // =========================================================================
+
+  public saveUserStatus(
+    userId: string,
+    statusType: string,
+    wasOnline: number = 0,
+    expires: number = 0
+  ): void {
+    if (!this.db || !userId) return;
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      this.db.run(
+        `INSERT OR REPLACE INTO user_statuses (
+          user_id, status_type, was_online, expires, updated_at
+        ) VALUES (?, ?, ?, ?, ?)`,
+        [String(userId), statusType, wasOnline, expires, now]
+      );
+    } catch (err) {
+      console.warn('[SQLite] saveUserStatus error:', err);
+    }
+  }
+
+  public getUserStatus(
+    userId: string
+  ): { userId: string; statusType: string; wasOnline: number; expires: number; updatedAt: number } | null {
+    if (!this.db || !userId) return null;
+    try {
+      const row = this.db.get<any>(
+        `SELECT user_id, status_type, was_online, expires, updated_at FROM user_statuses WHERE user_id = ?`,
+        [String(userId)]
+      );
+      if (!row) return null;
+      return {
+        userId: row.user_id,
+        statusType: row.status_type,
+        wasOnline: Number(row.was_online || 0),
+        expires: Number(row.expires || 0),
+        updatedAt: Number(row.updated_at || 0),
+      };
+    } catch (err) {
+      console.warn('[SQLite] getUserStatus error:', err);
+      return null;
+    }
+  }
+
+  public getAllUserStatuses(): Array<{
+    userId: string;
+    statusType: string;
+    wasOnline: number;
+    expires: number;
+    updatedAt: number;
+  }> {
+    if (!this.db) return [];
+    try {
+      const rows = this.db.all<any>(`SELECT * FROM user_statuses ORDER BY updated_at DESC LIMIT 100`);
+      return (rows || []).map((r: any) => ({
+        userId: r.user_id,
+        statusType: r.status_type,
+        wasOnline: Number(r.was_online || 0),
+        expires: Number(r.expires || 0),
+        updatedAt: Number(r.updated_at || 0),
+      }));
+    } catch (err) {
+      console.warn('[SQLite] getAllUserStatuses error:', err);
       return [];
     }
   }

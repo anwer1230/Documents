@@ -4,9 +4,51 @@ import { LogLevel } from 'telegram/extensions/Logger.js';
 import fs from 'fs';
 import path from 'path';
 import { ensureTelegramPatch } from './patchTelegram.js';
+import { sqliteDatabase } from './sqliteService.js';
 
 // Ensure 256-bit DH key padding patch is present
 ensureTelegramPatch();
+
+/**
+ * FloodWaitQueue: Resilient rate-limiter and exponential backoff queue for MTProto FLOOD_WAIT
+ */
+export class FloodWaitQueue {
+  public static async executeWithFloodRetry<T>(
+    key: string,
+    operation: () => Promise<T>,
+    maxRetries = 3
+  ): Promise<T> {
+    let attempt = 0;
+    while (attempt < maxRetries) {
+      try {
+        return await operation();
+      } catch (err: any) {
+        attempt++;
+        let waitSeconds = 0;
+        if (typeof err?.seconds === 'number' && err.seconds > 0) {
+          waitSeconds = err.seconds;
+        } else if (typeof err?.errorMessage === 'string' && err.errorMessage.startsWith('FLOOD_WAIT_')) {
+          waitSeconds = parseInt(err.errorMessage.replace('FLOOD_WAIT_', ''), 10) || 2;
+        } else if (typeof err?.message === 'string' && err.message.includes('FLOOD_WAIT_')) {
+          const match = err.message.match(/FLOOD_WAIT_(\d+)/);
+          if (match) waitSeconds = parseInt(match[1], 10);
+        }
+
+        if (waitSeconds > 0 && attempt < maxRetries) {
+          const jitterMs = Math.floor(Math.random() * 500) + 150;
+          const totalWaitMs = waitSeconds * 1000 + jitterMs;
+          console.warn(
+            `[FloodWaitQueue] FLOOD_WAIT caught (${waitSeconds}s) for [${key}]. Auto-pausing for ${totalWaitMs}ms (attempt ${attempt}/${maxRetries})...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, totalWaitMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(`[FloodWaitQueue] Max retries (${maxRetries}) exceeded for ${key}`);
+  }
+}
 
 // System configuration constants
 export const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 22043994);
@@ -413,6 +455,32 @@ export class TelegramService {
         });
         return;
       }
+
+      // 9. User Presence & Last Seen Updates (UpdateUserStatus)
+      if (className === 'UpdateUserStatus') {
+        const userId = update.userId?.toString();
+        const status = update.status;
+        const statusClass = status?.className || '';
+        const isOnline = statusClass === 'UserStatusOnline';
+        const wasOnline = Number(status?.wasOnline || 0);
+        const expires = Number(status?.expires || 0);
+
+        if (userId) {
+          try {
+            sqliteDatabase.saveUserStatus(userId, statusClass, wasOnline, expires);
+          } catch (_) {}
+
+          TelegramService.onUpdateCallback(sessionToken, {
+            type: 'user_status',
+            userId,
+            isOnline,
+            statusClass,
+            wasOnline,
+            expires,
+          });
+        }
+        return;
+      }
     } catch (err) {
       console.warn('[MTProto Updates Engine] Error processing update:', err);
     }
@@ -756,7 +824,12 @@ export class TelegramService {
           session.isLoggedIn = true;
           session.user = me;
           this.saveAccount(sessionToken, me);
-          return { isLoggedIn: true, user: sanitizeData(me) };
+          const sanitized = sanitizeData(me);
+          if (sanitized && (me as any).photo) {
+            sanitized.photoUrl = `/api/telegram/avatar/me`;
+            sanitized.avatarUrl = `/api/telegram/avatar/me`;
+          }
+          return { isLoggedIn: true, user: sanitized };
         }
       } catch {
         // Fall through
@@ -775,7 +848,12 @@ export class TelegramService {
             s.user = me;
           }
           this.saveAccount(sessionToken, me);
-          return { isLoggedIn: true, user: sanitizeData(me) };
+          const sanitized = sanitizeData(me);
+          if (sanitized && (me as any).photo) {
+            sanitized.photoUrl = `/api/telegram/avatar/me`;
+            sanitized.avatarUrl = `/api/telegram/avatar/me`;
+          }
+          return { isLoggedIn: true, user: sanitized };
         }
       } catch (err) {
         console.warn('Session expired or could not be restored, cleaning up stale session token.');
@@ -913,11 +991,16 @@ export class TelegramService {
         text = '[وسائط / ميديا]';
       }
 
+      const peerId = d.id?.toString() || d.entity?.id?.toString();
+      const hasPhoto = Boolean(d.entity?.photo || d.photo);
+      const avatarUrl = hasPhoto ? `/api/telegram/avatar/${encodeURIComponent(peerId)}` : undefined;
+
       return {
-        id: d.id?.toString() || d.entity?.id?.toString(),
+        id: peerId,
         title: d.title || d.name || 'محادثة',
         username: d.entity?.username || undefined,
         type,
+        avatarUrl,
         unreadCount: d.unreadCount || 0,
         isPinned: !!d.isPinned,
         isMuted: !!d.isMuted,
@@ -1830,6 +1913,78 @@ export class TelegramService {
     const client = await this.getOrCreateClient(sessionToken);
     const res: any = await client.invoke(new Api.contacts.GetBlocked({ offset: 0, limit: 100 }));
     return sanitizeData(res);
+  }
+
+  /**
+   * 8. Profile Photo & Avatar Binary Downloader (photos.getUserPhotos / downloadProfilePhoto)
+   */
+  public static async downloadProfilePhoto(sessionToken: string, peerId: string, isBig: boolean = false) {
+    return FloodWaitQueue.executeWithFloodRetry(`download_photo_${peerId}`, async () => {
+      try {
+        const client = await this.getOrCreateClient(sessionToken);
+        let entity: any;
+        if (peerId === 'me' || peerId === 'self') {
+          entity = await client.getMe();
+        } else {
+          entity = await resolvePeer(client, peerId);
+        }
+        if (!entity) return null;
+
+        const buffer = await client.downloadProfilePhoto(entity, { isBig });
+        if (!buffer || !(buffer instanceof Buffer) || buffer.length === 0) {
+          return null;
+        }
+        return {
+          buffer,
+          mimeType: 'image/jpeg',
+          fileName: `avatar_${peerId}.jpg`,
+        };
+      } catch (err: any) {
+        console.warn(`[TelegramService] Warning downloading profile photo for ${peerId}:`, err?.message || err);
+        return null;
+      }
+    });
+  }
+
+  /**
+   * 9. Active Authorizations & Devices Management (account.getAuthorizations, account.resetAuthorization, auth.resetAuthorizations)
+   */
+  public static async getAuthorizations(sessionToken: string) {
+    return FloodWaitQueue.executeWithFloodRetry('account.getAuthorizations', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(new Api.account.GetAuthorizations());
+      return sanitizeData(res);
+    });
+  }
+
+  public static async resetAuthorization(sessionToken: string, hash: string | number | bigint) {
+    return FloodWaitQueue.executeWithFloodRetry(`account.resetAuthorization_${hash}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.account.ResetAuthorization({ hash: BigInt(String(hash)) as any })
+      );
+      return { success: Boolean(res) };
+    });
+  }
+
+  public static async resetAllOtherAuthorizations(sessionToken: string) {
+    return FloodWaitQueue.executeWithFloodRetry('auth.resetAuthorizations', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(new Api.auth.ResetAuthorizations());
+      return { success: Boolean(res) };
+    });
+  }
+
+  public static async setAuthorizationTTL(sessionToken: string, days: number) {
+    return FloodWaitQueue.executeWithFloodRetry('account.setAuthorizationTTL', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.account.SetAuthorizationTTL({
+          authorizationTtlDays: Number(days) || 180,
+        })
+      );
+      return { success: Boolean(res) };
+    });
   }
 
 }

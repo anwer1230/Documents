@@ -29,6 +29,7 @@ import {
   HardDrive,
   Folder,
   Smartphone,
+  Laptop,
   Sparkles,
   HelpCircle,
   Download,
@@ -192,6 +193,15 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [updatingPrivacyKey, setUpdatingPrivacyKey] = useState<string | null>(null);
   const [passcodeLock, setPasscodeLock] = useState(false);
 
+  // Devices & Authorizations State (MTProto account.getAuthorizations)
+  const [authorizations, setAuthorizations] = useState<any[]>([]);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [terminatingHash, setTerminatingHash] = useState<string | null>(null);
+  const [isTerminatingAll, setIsTerminatingAll] = useState(false);
+  const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
+  const [authErrorMsg, setAuthErrorMsg] = useState<string | null>(null);
+  const [authTtlDays, setAuthTtlDays] = useState<number>(180);
+
   // Storage state
   const [cacheSize, setCacheSize] = useState('67.9 MB');
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -284,6 +294,115 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     }
   };
 
+  const fetchAuthorizations = async () => {
+    setAuthLoading(true);
+    setAuthErrorMsg(null);
+    try {
+      const res = await fetch('/api/telegram/account/authorizations', {
+        headers: { 'x-session-token': activeAccountId || 'guest' },
+      });
+      const data = await res.json();
+      let list: any[] = [];
+      if (Array.isArray(data?.authorizations)) {
+        list = data.authorizations;
+      } else if (Array.isArray(data)) {
+        list = data;
+      } else if (data?.authorizations && Array.isArray(data.authorizations.authorizations)) {
+        list = data.authorizations.authorizations;
+      }
+      setAuthorizations(list);
+      if (data?.authorizationTtlDays) {
+        setAuthTtlDays(data.authorizationTtlDays);
+      }
+    } catch (err: any) {
+      console.warn('[SettingsDrawer] Failed to fetch authorizations:', err);
+      setAuthErrorMsg(isAr ? 'فشل جلب قائمة الجلسات من السحابة' : 'Failed to fetch sessions from cloud');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleTerminateSession = async (hash: string | number) => {
+    const hashStr = String(hash);
+    setTerminatingHash(hashStr);
+    setAuthErrorMsg(null);
+    setAuthSuccessMsg(null);
+    try {
+      const res = await fetch('/api/telegram/account/terminate-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': activeAccountId || 'guest',
+        },
+        body: JSON.stringify({ hash: hashStr }),
+      });
+      const data = await res.json();
+      if (data?.success || data?.status === 'ok') {
+        setAuthSuccessMsg(isAr ? 'تم إنهاء الجلسة بنجاح' : 'Session terminated successfully');
+        setAuthorizations((prev) => prev.filter((a) => String(a.hash) !== hashStr));
+        setTimeout(() => setAuthSuccessMsg(null), 3500);
+      } else {
+        throw new Error(data?.error || 'Failed to terminate');
+      }
+    } catch (err: any) {
+      setAuthErrorMsg(err?.message || (isAr ? 'فشل إنهاء الجلسة' : 'Failed to terminate session'));
+      setTimeout(() => setAuthErrorMsg(null), 4000);
+    } finally {
+      setTerminatingHash(null);
+    }
+  };
+
+  const handleTerminateAllOtherSessions = async () => {
+    setIsTerminatingAll(true);
+    setAuthErrorMsg(null);
+    setAuthSuccessMsg(null);
+    try {
+      const res = await fetch('/api/telegram/account/terminate-all-other-sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': activeAccountId || 'guest',
+        },
+      });
+      const data = await res.json();
+      if (data?.success || data?.status === 'ok') {
+        setAuthSuccessMsg(
+          isAr
+            ? 'تم إنهاء كافة الجلسات الأخرى بنجاح عبر MTProto'
+            : 'All other sessions terminated successfully via MTProto'
+        );
+        // Retain current session only
+        setAuthorizations((prev) => prev.filter((a) => a.current));
+        setTimeout(() => setAuthSuccessMsg(null), 3500);
+      } else {
+        throw new Error(data?.error || 'Failed to terminate sessions');
+      }
+    } catch (err: any) {
+      setAuthErrorMsg(err?.message || (isAr ? 'فشل إنهاء الجلسات الأخرى' : 'Failed to terminate other sessions'));
+      setTimeout(() => setAuthErrorMsg(null), 4000);
+    } finally {
+      setIsTerminatingAll(false);
+    }
+  };
+
+  const handleUpdateTTL = async (days: number) => {
+    setAuthTtlDays(days);
+    try {
+      await fetch('/api/telegram/account/ttl', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': activeAccountId || 'guest',
+        },
+        body: JSON.stringify({ days }),
+      });
+      setAuthSuccessMsg(isAr ? 'تم حفظ مهلة الحساب بنجاح' : 'Session TTL saved successfully');
+      setTimeout(() => setAuthSuccessMsg(null), 3000);
+    } catch (err) {
+      console.warn('Error saving TTL:', err);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       if (activeSection === 'privacy-security' || activeSection === 'two-step-verification' || activeSection === 'settings-root') {
@@ -291,6 +410,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       }
       if (activeSection === 'privacy-security') {
         fetchCloudPrivacy();
+      }
+      if (activeSection === 'devices') {
+        fetchAuthorizations();
       }
     }
   }, [isOpen, activeSection]);
@@ -2063,11 +2185,34 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 >
                   <ArrowLeft className="w-5 h-5 rtl:rotate-180" />
                 </button>
-                <h2 className="font-bold text-lg">{isAr ? 'الأجهزة والجلسات' : 'Devices'}</h2>
+                <h2 className="font-bold text-lg">{isAr ? 'الأجهزة والجلسات' : 'Devices & Sessions'}</h2>
               </div>
+              <button
+                onClick={fetchAuthorizations}
+                disabled={authLoading}
+                className="p-2 rounded-xl hover:bg-gray-500/10 text-gray-400 hover:text-[#3390ec] transition disabled:opacity-50"
+                title={isAr ? 'تحديث الجلسات' : 'Refresh sessions'}
+              >
+                <RefreshCw className={`w-4 h-4 ${authLoading ? 'animate-spin text-[#3390ec]' : ''}`} />
+              </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 space-y-5">
+              {/* Notification Banners */}
+              {authSuccessMsg && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{authSuccessMsg}</span>
+                </div>
+              )}
+              {authErrorMsg && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{authErrorMsg}</span>
+                </div>
+              )}
+
+              {/* QR Code link hero */}
               <div className="flex flex-col items-center text-center p-3">
                 <div className="w-16 h-16 rounded-full bg-[#3390ec]/20 flex items-center justify-center text-[#3390ec] mb-3">
                   <Smartphone className="w-8 h-8" />
@@ -2086,27 +2231,177 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </div>
 
               {/* Current Active Session */}
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  {isAr ? 'هذا الجهاز' : 'This Device'}
-                </div>
-                <div className={`p-3 rounded-xl border ${
-                  themeConfig.isDark ? 'bg-[#0e1621] border-gray-700' : 'bg-gray-50 border-gray-200'
-                }`}>
-                  <div className="font-semibold text-sm">Telegram Web K (Chrome / Linux)</div>
-                  <div className="text-xs text-emerald-400 mt-0.5">{isAr ? 'نشط الآن • 127.0.0.1' : 'Active now • 127.0.0.1'}</div>
-                  <div className="text-[11px] text-gray-400 mt-1">MTProto 2.0 Layer 198 (Cloud Verified)</div>
-                </div>
-              </div>
+              {(() => {
+                const currentSession = authorizations.find((a) => a.current) || authorizations[0];
+                const otherSessions = authorizations.filter((a) => a !== currentSession);
 
-              <button
-                onClick={() => {
-                  alert(isAr ? 'تم إنهاء كافة الجلسات الأخرى بنجاح!' : 'All other sessions terminated successfully!');
-                }}
-                className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl text-xs font-semibold transition"
-              >
-                {isAr ? 'إنهاء كافة الجلسات الأخرى' : 'Terminate All Other Sessions'}
-              </button>
+                return (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                        {isAr ? 'هذا الجهاز (الجلسة الحالية)' : 'This Device (Current Session)'}
+                      </div>
+                      <div className={`p-3.5 rounded-xl border ${
+                        themeConfig.isDark ? 'bg-[#0e1621] border-gray-800' : 'bg-gray-50 border-gray-200'
+                      }`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-[#3390ec]/15 text-[#3390ec] flex items-center justify-center">
+                              <Laptop className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="font-semibold text-sm">
+                                {currentSession?.deviceModel || 'Telegram Web Client'}
+                              </div>
+                              <div className="text-xs text-emerald-400 mt-0.5 flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                                {isAr ? 'نشط الآن' : 'Active now'}
+                                {currentSession?.ip ? ` • ${currentSession.ip}` : ''}
+                                {currentSession?.country ? ` (${currentSession.country})` : ''}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-gray-400 mt-2.5 pt-2 border-t border-gray-700/40 flex flex-wrap gap-x-3 gap-y-1">
+                          <span>{currentSession?.appName || 'Telegram Web'} {currentSession?.appVersion || 'v1.0'}</span>
+                          <span>•</span>
+                          <span>{currentSession?.platform || 'Web/Browser'}</span>
+                          <span>•</span>
+                          <span className="text-emerald-500">MTProto 2.0 Cloud Connected</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Terminate All Other Sessions Button */}
+                    <button
+                      onClick={handleTerminateAllOtherSessions}
+                      disabled={isTerminatingAll || otherSessions.length === 0}
+                      className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {isTerminatingAll ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>{isAr ? 'جارٍ إنهاء الجلسات...' : 'Terminating sessions...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <LogOut className="w-4 h-4" />
+                          <span>
+                            {isAr
+                              ? `إنهاء كافة الجلسات الأخرى (${otherSessions.length})`
+                              : `Terminate All Other Sessions (${otherSessions.length})`}
+                          </span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Other Active Sessions List */}
+                    <div className="space-y-2">
+                      <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                        {isAr ? 'الجلسات النشطة الأخرى' : 'Other Active Sessions'}
+                      </div>
+
+                      {authLoading && (
+                        <div className="py-6 flex flex-col items-center justify-center text-gray-400 gap-2">
+                          <Loader2 className="w-6 h-6 animate-spin text-[#3390ec]" />
+                          <span className="text-xs">{isAr ? 'جارٍ جلب الجلسات من تيليجرام...' : 'Fetching active sessions...'}</span>
+                        </div>
+                      )}
+
+                      {!authLoading && otherSessions.length === 0 && (
+                        <div className={`p-4 rounded-xl text-center text-xs text-gray-400 border ${
+                          themeConfig.isDark ? 'bg-[#0e1621] border-gray-800' : 'bg-gray-50 border-gray-200'
+                        }`}>
+                          {isAr ? 'لا توجد أجهزة أو جلسات أخرى مسجلة حالياً.' : 'No other active sessions found.'}
+                        </div>
+                      )}
+
+                      {!authLoading && otherSessions.map((session) => {
+                        const hash = String(session.hash || '');
+                        const isTerminating = terminatingHash === hash;
+                        const isPhone = (session.platform || '').toLowerCase().includes('android') || (session.platform || '').toLowerCase().includes('ios');
+
+                        return (
+                          <div
+                            key={hash || Math.random()}
+                            className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 ${
+                              themeConfig.isDark ? 'bg-[#0e1621] border-gray-800' : 'bg-gray-50 border-gray-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-gray-500/10 text-gray-400 flex items-center justify-center shrink-0">
+                                {isPhone ? <Smartphone className="w-5 h-5" /> : <Laptop className="w-5 h-5" />}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-sm truncate">
+                                  {session.deviceModel || session.appName || 'Telegram Client'}
+                                </div>
+                                <div className="text-xs text-gray-400 mt-0.5 truncate">
+                                  {session.appName} {session.appVersion} • {session.platform || 'Client'}
+                                </div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">
+                                  {session.ip} {session.country ? `• ${session.country}` : ''}
+                                  {session.dateActive
+                                    ? ` • ${new Date(session.dateActive * 1000).toLocaleDateString()}`
+                                    : ''}
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => handleTerminateSession(hash)}
+                              disabled={isTerminating}
+                              className="px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 text-xs font-semibold shrink-0 transition flex items-center gap-1.5 disabled:opacity-50"
+                              title={isAr ? 'إنهاء هذه الجلسة' : 'Terminate this session'}
+                            >
+                              {isTerminating ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-3.5 h-3.5" />
+                              )}
+                              <span>{isAr ? 'إنهاء' : 'Terminate'}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Automatic Termination TTL Setting */}
+                    <div className="space-y-2 pt-3 border-t border-gray-800">
+                      <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                        {isAr ? 'الإنهاء التلقائي للجلسات غير النشطة' : 'Automatically Terminate Old Sessions'}
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        {[
+                          { label: isAr ? 'شهر' : '1 Mo', days: 30 },
+                          { label: isAr ? '3 أشهر' : '3 Mo', days: 90 },
+                          { label: isAr ? '6 أشهر' : '6 Mo', days: 180 },
+                          { label: isAr ? 'سنة' : '1 Yr', days: 365 },
+                        ].map((opt) => (
+                          <button
+                            key={opt.days}
+                            onClick={() => handleUpdateTTL(opt.days)}
+                            className={`py-2 px-1 text-xs font-medium rounded-xl border transition ${
+                              authTtlDays === opt.days
+                                ? 'bg-[#3390ec]/15 border-[#3390ec] text-[#3390ec]'
+                                : themeConfig.isDark
+                                ? 'bg-[#0e1621] border-gray-800 text-gray-400 hover:border-gray-700'
+                                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-gray-500">
+                        {isAr
+                          ? 'يتم إغلاق وتسجيل الخروج تلقائياً من أي جهاز لم يكن نشطاً خلال هذه المدة.'
+                          : 'Automatically log out and terminate any sessions inactive for this period.'}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

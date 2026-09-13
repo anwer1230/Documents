@@ -587,6 +587,36 @@ async function startServer() {
     }
   });
 
+  // Avatar / Profile Photo Binary Endpoint (with In-Memory LRU Cache)
+  app.get('/api/telegram/avatar/:peerId', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId } = req.params;
+    const cacheKey = `avatar_${peerId}`;
+
+    try {
+      let cached = mediaCache.get(cacheKey);
+      if (!cached) {
+        const photo = await TelegramService.downloadProfilePhoto(token, peerId, false);
+        if (!photo) {
+          return res.status(404).json({ error: 'الصورة الرمزية غير موجودة' });
+        }
+        cacheMediaItem(cacheKey, photo);
+        cached = mediaCache.get(cacheKey);
+      }
+
+      if (!cached) {
+        return res.status(404).json({ error: 'فشل تحميل الصورة' });
+      }
+
+      res.setHeader('Content-Type', cached.mimeType || 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.setHeader('Content-Length', cached.buffer.length);
+      return res.end(cached.buffer);
+    } catch (err: any) {
+      res.status(404).json({ error: 'تعذر جلب الصورة الرمزية' });
+    }
+  });
+
   // Updates State: updates.getState
   app.get('/api/telegram/updates/state', async (req, res) => {
     const token = (req as any).sessionToken;
@@ -740,6 +770,64 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error fetching blocked users:', err);
       res.status(500).json({ error: err.message || 'فشل جلب المستخدمين المحظورين' });
+    }
+  });
+
+  // Active Authorizations & Devices (account.getAuthorizations, resetAuthorization, auth.resetAuthorizations, account.setAuthorizationTTL)
+  app.get('/api/telegram/account/authorizations', async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const data = await TelegramService.getAuthorizations(token);
+      res.json(data);
+    } catch (err: any) {
+      console.error('Error fetching authorizations:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب قائمة الجلسات والأجهزة' });
+    }
+  });
+
+  app.post('/api/telegram/account/terminate-session', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { hash } = req.body;
+    if (!hash) return res.status(400).json({ error: 'hash مطلوب' });
+    try {
+      const result = await TelegramService.resetAuthorization(token, hash);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error resetting authorization:', err);
+      res.status(500).json({ error: err.message || 'فشل إنهاء الجلسة' });
+    }
+  });
+
+  app.post('/api/telegram/account/terminate-all-other-sessions', async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const result = await TelegramService.resetAllOtherAuthorizations(token);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error resetting all authorizations:', err);
+      res.status(500).json({ error: err.message || 'فشل إنهاء كافة الجلسات الأخرى' });
+    }
+  });
+
+  app.post('/api/telegram/account/ttl', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { days } = req.body;
+    try {
+      const result = await TelegramService.setAuthorizationTTL(token, Number(days) || 180);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error setting authorization TTL:', err);
+      res.status(500).json({ error: err.message || 'فشل ضبط مهلة انتهاء الجلسات' });
+    }
+  });
+
+  // User Presences & Statuses
+  app.get('/api/telegram/user-statuses', async (_req, res) => {
+    try {
+      const statuses = sqliteDatabase.getAllUserStatuses();
+      res.json({ success: true, statuses });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'فشل جلب حالات المستخدمين' });
     }
   });
 

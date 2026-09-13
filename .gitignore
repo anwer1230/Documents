@@ -6,5 +6,8 @@ coverage/
 .DS_Store
 *.log
 .telegram_sessions.json
+data/
+*.db
+*.db-journal
 .env*
 !.env.example
