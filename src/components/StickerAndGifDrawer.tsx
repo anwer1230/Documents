@@ -1,11 +1,26 @@
 import React, { useState } from 'react';
-import { Smile, Sticker, Film, Search, X } from 'lucide-react';
+import { Smile, Sticker, Film, Search, X, Sparkles } from 'lucide-react';
+import { TgsPlayer } from './TgsPlayer';
+import {
+  STAR_LOTTIE,
+  HEART_LOTTIE,
+  FIRE_LOTTIE,
+  THUMBS_UP_LOTTIE,
+  PARTY_LOTTIE,
+} from '../utils/tgsAnimations';
 
 interface StickerAndGifDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectEmoji: (emoji: string) => void;
-  onSelectSticker: (sticker: { id: string; emoji: string; name: string; img: string }) => void;
+  onSelectSticker: (sticker: {
+    id: string;
+    emoji: string;
+    name: string;
+    img: string;
+    isTgs?: boolean;
+    lottieData?: any;
+  }) => void;
   onSelectGif: (gif: { id: string; title: string; url: string }) => void;
   isDark: boolean;
   lang: 'ar' | 'en';
@@ -81,6 +96,49 @@ const TELEGRAM_STICKER_SETS = [
       { id: 'rabbit_jump', emoji: '🐰', name: 'Joyful Rabbit', img: 'https://images.unsplash.com/photo-1585110396000-c9ffd4e4b308?w=240&auto=format&fit=crop&q=80' },
     ]
   }
+];
+
+const ANIMATED_TGS_STICKERS = [
+  {
+    id: 'tgs_star',
+    emoji: '⭐️',
+    name: 'Telegram 3D Star',
+    isTgs: true,
+    lottieData: STAR_LOTTIE,
+    img: '',
+  },
+  {
+    id: 'tgs_heart',
+    emoji: '❤️',
+    name: 'Animated Heart',
+    isTgs: true,
+    lottieData: HEART_LOTTIE,
+    img: '',
+  },
+  {
+    id: 'tgs_fire',
+    emoji: '🔥',
+    name: 'Blazing Fire',
+    isTgs: true,
+    lottieData: FIRE_LOTTIE,
+    img: '',
+  },
+  {
+    id: 'tgs_thumbs',
+    emoji: '👍',
+    name: 'Vector Thumbs',
+    isTgs: true,
+    lottieData: THUMBS_UP_LOTTIE,
+    img: '',
+  },
+  {
+    id: 'tgs_party',
+    emoji: '🎉',
+    name: 'Party Burst',
+    isTgs: true,
+    lottieData: PARTY_LOTTIE,
+    img: '',
+  },
 ];
 
 const CURATED_GIFS = [
@@ -236,6 +294,37 @@ export const StickerAndGifDrawer: React.FC<StickerAndGifDrawerProps> = ({
         {/* STICKERS TAB */}
         {activeTab === 'stickers' && (
           <div className="space-y-4">
+            {/* Animated Telegram TGS Stickers Pack */}
+            <div className="space-y-2 p-2 rounded-2xl bg-amber-500/5 border border-amber-500/20">
+              <div className="text-xs font-bold text-amber-400 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{isAr ? 'ملصقات متحركة ثلاثية الأبعاد (TGS)' : '3D Animated Stickers (.TGS)'}</span>
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 font-semibold">
+                  RLottie WASM
+                </span>
+              </div>
+              <div className="grid grid-cols-5 gap-2">
+                {ANIMATED_TGS_STICKERS.map((stk) => (
+                  <button
+                    key={stk.id}
+                    type="button"
+                    onClick={() => onSelectSticker(stk)}
+                    className="group p-1.5 rounded-xl hover:bg-amber-400/10 dark:hover:bg-white/10 flex flex-col items-center justify-center gap-1 transition-all active:scale-95 border border-transparent hover:border-amber-400/30"
+                    title={stk.name}
+                  >
+                    <div className="w-12 h-12 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <TgsPlayer animationData={stk.lottieData} width={48} height={48} loop={true} />
+                    </div>
+                    <span className="text-[10px] text-gray-400 truncate max-w-full font-medium">
+                      {stk.name.split(' ')[0]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {TELEGRAM_STICKER_SETS.map((set, sIdx) => (
               <div key={sIdx} className="space-y-2">
                 <div className="text-xs font-semibold text-gray-400 flex items-center justify-between">

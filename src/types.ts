@@ -71,6 +71,7 @@ export interface TelegramUser {
   isBot?: boolean;
   isVerified?: boolean;
   isPremium?: boolean;
+  starsBalance?: number;
   status?: 'online' | 'offline' | 'recently';
   botInfo?: {
     description?: string;
@@ -89,14 +90,40 @@ export interface TelegramReaction {
   userReacted?: boolean;
 }
 
+export interface TelegramMessageEntity {
+  type: 'MessageEntitySpoiler' | 'MessageEntityBlockquote' | 'MessageEntityCustomEmoji' | 'MessageEntityBold' | 'MessageEntityItalic' | 'MessageEntityCode' | 'MessageEntityUrl';
+  offset: number;
+  length: number;
+  documentId?: string; // For Custom Emojis
+  collapsed?: boolean; // For collapsible blockquotes
+}
+
+export interface TelegramForumTopic {
+  id: number;
+  title: string;
+  iconColor?: string;
+  iconEmoji?: string;
+  unreadCount?: number;
+  isClosed?: boolean;
+  isPinned?: boolean;
+  lastMessage?: {
+    text: string;
+    timestamp: number;
+    senderName?: string;
+  };
+}
+
 export interface TelegramMedia {
-  type: 'photo' | 'video' | 'audio' | 'voice' | 'document';
+  type: 'photo' | 'video' | 'audio' | 'voice' | 'document' | 'tgs_sticker';
   url?: string;
   title?: string;
   fileName?: string;
   fileSize?: string;
   duration?: number; // for audio/voice in seconds
   thumbnailUrl?: string;
+  isTgs?: boolean;
+  tgsUrl?: string;
+  lottieData?: any;
 }
 
 export interface TelegramMessage {
@@ -120,6 +147,15 @@ export interface TelegramMessage {
   isForwarded?: boolean;
   forwardedFrom?: string;
   replyMarkup?: TelegramReplyMarkup;
+  replyToTopId?: number; // Forum topic identifier (reply_to_top_id)
+  topicId?: number;
+  entities?: TelegramMessageEntity[];
+  scheduledTime?: number;
+  starsGift?: {
+    amount: number;
+    message?: string;
+    from: string;
+  };
 }
 
 export interface TelegramChat {
@@ -130,6 +166,9 @@ export interface TelegramChat {
   avatarUrl?: string;
   avatarColor?: string;
   isBot?: boolean;
+  isForum?: boolean;
+  topics?: TelegramForumTopic[];
+  starsEarned?: number;
   botInfo?: {
     description?: string;
     about?: string;
@@ -221,4 +260,29 @@ export interface OcrResult {
   words: OcrWordBox[];
   imageWidth: number;
   imageHeight: number;
+}
+
+export interface ScheduledMessage {
+  id: string;
+  chatId: string;
+  text: string;
+  scheduledTime: number; // Unix timestamp in ms
+  replyTo?: {
+    id: string;
+    senderName: string;
+    text: string;
+  };
+  media?: TelegramMedia;
+  topicId?: number;
+  entities?: TelegramMessageEntity[];
+}
+
+export interface TelegramStarGift {
+  id: string;
+  targetChatId: string;
+  targetTitle: string;
+  starsAmount: number;
+  message?: string;
+  senderName: string;
+  timestamp: number;
 }

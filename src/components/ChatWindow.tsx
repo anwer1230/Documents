@@ -35,8 +35,19 @@ import {
   BellOff,
   UserPlus,
   Bot,
+  MessagesSquare,
+  Clock,
+  Gift,
 } from 'lucide-react';
-import { TelegramChat, TelegramMessage, TelegramUser, TypingStatus } from '../types';
+import {
+  TelegramChat,
+  TelegramMessage,
+  TelegramUser,
+  TypingStatus,
+  TelegramForumTopic,
+  ScheduledMessage,
+  TelegramStarGift,
+} from '../types';
 import { MessageInput } from './MessageInput';
 import { VoiceWaveformPlayer } from './VoiceWaveformPlayer';
 import { getSenderColor, formatTelegramDate } from '../utils/telegramColors';
@@ -45,6 +56,13 @@ import { LeaveGroupModal } from './modals/LeaveGroupModal';
 import { ShareLinkModal } from './modals/ShareLinkModal';
 import { ReportChatModal } from './modals/ReportChatModal';
 import { DeleteMessageModal } from './modals/DeleteMessageModal';
+import { ForumTopicsBar } from './ForumTopicsBar';
+import { TelegramMessageContent } from './TelegramMessageContent';
+import { TgsPlayer } from './TgsPlayer';
+import { AnimatedReactionBurst } from './AnimatedReactionBurst';
+import { ScheduledMessagesModal } from './ScheduledMessagesModal';
+import { TelegramStarsModal } from './TelegramStarsModal';
+import { STAR_LOTTIE } from '../utils/tgsAnimations';
 
 interface ChatWindowProps {
   chat: TelegramChat | null;
@@ -128,8 +146,65 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [deleteModalMsgId, setDeleteModalMsgId] = useState<string | null>(null);
 
+  // Forum topics state (for Supergroups)
+  const [activeTopicId, setActiveTopicId] = useState<number | null>(null);
+  const [forumTopics, setForumTopics] = useState<TelegramForumTopic[]>([]);
+
+  // Scheduled messages state
+  const [isScheduledModalOpen, setIsScheduledModalOpen] = useState(false);
+  const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
+
+  // Telegram Stars state
+  const [isStarsModalOpen, setIsStarsModalOpen] = useState(false);
+  const [userStarsBalance, setUserStarsBalance] = useState(350);
+
+  // Animated Reaction Burst state (vector 3D burst effect)
+  const [activeReactionAnimation, setActiveReactionAnimation] = useState<{
+    emoji: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Initialize forum topics if group/supergroup
+  useEffect(() => {
+    if (chat?.topics && chat.topics.length > 0) {
+      setForumTopics(chat.topics);
+    } else if (chat?.type === 'supergroup' || chat?.isForum) {
+      setForumTopics([
+        { id: 1, title: isAr ? 'المنتدى العام والنقاشات' : 'General & Discussions', iconEmoji: '💬', iconColor: '#3390ec' },
+        { id: 2, title: isAr ? 'الإعلانات والأخبار' : 'Announcements & News', iconEmoji: '📢', iconColor: '#ffa800' },
+        { id: 3, title: isAr ? 'الدعم والاستفسارات' : 'Support & Help', iconEmoji: '💡', iconColor: '#28a745' },
+      ]);
+    } else {
+      setForumTopics([]);
+      setActiveTopicId(null);
+    }
+  }, [chat?.id, chat?.type, chat?.isForum, isAr]);
+
+  // Interval worker for executing scheduled messages on time
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setScheduledMessages((prev) => {
+        const ready = prev.filter((m) => m.scheduledTime <= now);
+        if (ready.length > 0) {
+          ready.forEach((item) => {
+            onSendMessage(item.text, item.replyTo, item.media);
+            onToast(
+              isAr ? 'تم إرسال الرسالة المجدولة تلقائياً! ⏰' : 'Scheduled message sent! ⏰',
+              'success'
+            );
+          });
+          return prev.filter((m) => m.scheduledTime > now);
+        }
+        return prev;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [onSendMessage, onToast, isAr]);
 
   // Auto-scroll on new message
   useEffect(() => {
@@ -164,6 +239,94 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     return () => window.removeEventListener('click', handleOutside);
   }, [contextMenu.visible, showMoreMenu]);
 
+  // Handle triggering an animated vector reaction burst
+  const handleTriggerReaction = (
+    msgId: string,
+    emoji: string,
+    event?: React.MouseEvent
+  ) => {
+    if (event) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setActiveReactionAnimation({
+        emoji,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+    } else {
+      setActiveReactionAnimation({
+        emoji,
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      });
+    }
+    onReactMessage(msgId, emoji);
+  };
+
+  // Create new Forum Topic
+  const handleCreateTopic = (title: string, iconEmoji: string) => {
+    const newTopic: TelegramForumTopic = {
+      id: Date.now(),
+      title,
+      iconEmoji,
+      iconColor: '#3390ec',
+      isClosed: false,
+    };
+    setForumTopics((prev) => [...prev, newTopic]);
+    setActiveTopicId(newTopic.id);
+    onToast(
+      isAr ? `تم إنشاء موضوع "${title}" في المجموعة بنجاح!` : `Topic "${title}" created!`,
+      'success'
+    );
+  };
+
+  // Handle sending Telegram Stars gift
+  const handleSendStarsGift = (gift: {
+    amount: number;
+    message?: string;
+    targetChatId: string;
+  }) => {
+    setUserStarsBalance((prev) => Math.max(0, prev - gift.amount));
+    // Send a message with starGift property
+    onSendMessage(
+      gift.message ? `⭐️ أهدى ${gift.amount} نجمة: ${gift.message}` : `⭐️ أهدى ${gift.amount} نجمة تليجرام`,
+      undefined,
+      {
+        type: 'photo',
+        starGift: {
+          amount: gift.amount,
+          message: gift.message,
+          senderName: currentUser?.firstName || 'أنا',
+          timestamp: Date.now(),
+        },
+      }
+    );
+    onToast(
+      isAr ? `تم إرسال ${gift.amount} نجمة بنجاح! ⭐️` : `Sent ${gift.amount} Telegram Stars! ⭐️`,
+      'success'
+    );
+  };
+
+  // Handle adding scheduled message
+  const handleAddScheduledMessage = (item: Omit<ScheduledMessage, 'id'>) => {
+    const newScheduled: ScheduledMessage = {
+      ...item,
+      id: `sched_${Date.now()}`,
+    };
+    setScheduledMessages((prev) => [...prev, newScheduled]);
+    onToast(
+      isAr ? 'تمت جدولة الرسالة بنجاح! ⏰' : 'Message scheduled successfully! ⏰',
+      'success'
+    );
+  };
+
+  // Send message wrapped with topic ID if active
+  const handleSendMessageWithTopic = (text: string, replyTo?: TelegramMessage, media?: any) => {
+    const enhancedMedia = activeTopicId
+      ? { ...media, reply_to_top_id: activeTopicId }
+      : media;
+    onSendMessage(text, replyTo, enhancedMedia);
+  };
+
   if (!chat) {
     return (
       <div
@@ -186,10 +349,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     );
   }
 
-  // Filter messages if searching in chat
-  const displayedMessages = searchWord.trim()
-    ? messages.filter((m) => m.text.toLowerCase().includes(searchWord.toLowerCase()))
-    : messages;
+  // Filter messages by Forum Topic (reply_to_top_id) and in-chat Search
+  const displayedMessages = messages.filter((m) => {
+    if (activeTopicId !== null && forumTopics.length > 0) {
+      const topicId = m.reply_to_top_id || 1;
+      if (topicId !== activeTopicId) return false;
+    }
+    if (searchWord.trim()) {
+      if (!m.text.toLowerCase().includes(searchWord.toLowerCase())) return false;
+    }
+    return true;
+  });
 
   // Pinned message
   const pinnedMessage = messages.find((m) => m.isPinned);
@@ -626,6 +796,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         )}
       </header>
 
+      {/* Supergroup Forum Topics Bar */}
+      {forumTopics.length > 0 && (
+        <ForumTopicsBar
+          topics={forumTopics}
+          activeTopicId={activeTopicId}
+          onSelectTopic={(id) => setActiveTopicId(id)}
+          onCreateTopic={handleCreateTopic}
+          isDark={isDark}
+          lang={lang}
+        />
+      )}
+
       {/* Pinned Message Banner */}
       {pinnedMessage && (
         <div
@@ -945,10 +1127,45 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     </div>
                   )}
 
-                  {/* Message Text with responsive wrapping */}
-                  <p className="text-[14px] sm:text-[15px] whitespace-pre-wrap break-words leading-relaxed select-text">
-                    {msg.text}
-                  </p>
+                  {/* Telegram Stars Gift Special Card */}
+                  {msg.starGift && (
+                    <div className="mb-2 p-3 rounded-2xl bg-gradient-to-r from-amber-500/20 via-amber-400/10 to-yellow-500/20 border border-amber-400/40 text-center flex flex-col items-center justify-center select-none shadow-xs">
+                      <TgsPlayer animationData={STAR_LOTTIE} width={64} height={64} loop={true} />
+                      <span className="text-xs font-black text-amber-400 mt-1">
+                        {isAr ? 'هدية نجوم تيليجرام ⭐️' : 'Telegram Stars Gift ⭐️'}
+                      </span>
+                      <span className="text-base font-extrabold text-amber-300">
+                        +{msg.starGift.amount} ⭐️
+                      </span>
+                      {msg.starGift.message && (
+                        <p className="text-xs text-gray-300 mt-1 italic">"{msg.starGift.message}"</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Telegram Animated TGS Vector Sticker (RLottie WASM / Vector Engine) */}
+                  {(msg.media?.type === 'tgs_sticker' || msg.media?.isTgs) && (
+                    <div className="my-1.5 flex justify-center select-none">
+                      <TgsPlayer
+                        animationData={msg.media.lottieData}
+                        url={msg.media.url}
+                        width={140}
+                        height={140}
+                        loop={true}
+                      />
+                    </div>
+                  )}
+
+                  {/* Message Text with Telegram Message Entities & WYSIWYG Formats */}
+                  {msg.text && (
+                    <TelegramMessageContent
+                      text={msg.text}
+                      entities={msg.entities}
+                      isDark={isDark}
+                      isOut={isOut}
+                      lang={lang}
+                    />
+                  )}
 
                   {/* Inline Footer Time + Status checkmarks */}
                   <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-gray-400 select-none float-end ms-2">
@@ -971,7 +1188,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       {msg.reactions.map((r, rIdx) => (
                         <button
                           key={rIdx}
-                          onClick={() => onReactMessage(msg.id, r.emoji)}
+                          onClick={(e) => handleTriggerReaction(msg.id, r.emoji, e)}
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs transition border ${
                             r.userReacted
                               ? 'bg-[#3390ec]/20 border-[#3390ec] text-[#3390ec] font-bold'
@@ -1045,7 +1262,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       {['❤️', '👍', '🔥', '😂', '🎉', '👏'].map((em) => (
                         <button
                           key={em}
-                          onClick={() => onReactMessage(msg.id, em)}
+                          onClick={(e) => handleTriggerReaction(msg.id, em, e)}
                           className="hover:scale-130 transition-transform p-0.5 text-sm"
                         >
                           {em}
@@ -1287,10 +1504,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       ) : (
         /* Bottom Message Input Bar */
         <MessageInput
-          onSendMessage={onSendMessage}
+          onSendMessage={handleSendMessageWithTopic}
           replyToMessage={replyingMessage}
           onCancelReply={() => setReplyingMessage(null)}
           onOpenMiniApp={onOpenMiniApp}
+          onOpenScheduledMessages={() => setIsScheduledModalOpen(true)}
+          onOpenStarsModal={() => setIsStarsModalOpen(true)}
           chat={chat}
           activeReplyKeyboard={
             [...messages].reverse().find((m) => m.replyMarkup?.keyboard)?.replyMarkup || null
@@ -1366,6 +1585,61 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         lang={lang}
         isDark={isDark}
       />
+
+      {/* 6. Scheduled Messages Modal */}
+      <ScheduledMessagesModal
+        isOpen={isScheduledModalOpen}
+        onClose={() => setIsScheduledModalOpen(false)}
+        chatId={chat.id}
+        chatTitle={chat.name}
+        scheduledMessages={scheduledMessages}
+        onScheduleMessage={handleAddScheduledMessage}
+        onDeleteScheduledMessage={(id) => {
+          setScheduledMessages((prev) => prev.filter((m) => m.id !== id));
+          onToast(isAr ? 'تم حذف الرسالة المجدولة' : 'Scheduled message deleted', 'info');
+        }}
+        onSendNow={(id) => {
+          const item = scheduledMessages.find((m) => m.id === id);
+          if (item) {
+            onSendMessage(item.text, item.replyTo, item.media);
+            setScheduledMessages((prev) => prev.filter((m) => m.id !== id));
+            onToast(isAr ? 'تم إرسال الرسالة الآن' : 'Message sent now', 'success');
+          }
+        }}
+        isDark={isDark}
+        lang={lang}
+      />
+
+      {/* 7. Telegram Stars (نجوم تيليجرام) Modal */}
+      <TelegramStarsModal
+        isOpen={isStarsModalOpen}
+        onClose={() => setIsStarsModalOpen(false)}
+        userStarsBalance={userStarsBalance}
+        chatId={chat.id}
+        chatTitle={chat.name}
+        onBuyStars={(amount) => {
+          setUserStarsBalance((prev) => prev + amount);
+          onToast(
+            isAr
+              ? `تم شحن ${amount} نجمة تيليجرام بنجاح! ⭐️`
+              : `Purchased ${amount} Telegram Stars! ⭐️`,
+            'success'
+          );
+        }}
+        onSendGift={handleSendStarsGift}
+        isDark={isDark}
+        lang={lang}
+      />
+
+      {/* 8. 3D Vector Animated Reaction Burst Effect */}
+      {activeReactionAnimation && (
+        <AnimatedReactionBurst
+          emoji={activeReactionAnimation.emoji}
+          x={activeReactionAnimation.x}
+          y={activeReactionAnimation.y}
+          onComplete={() => setActiveReactionAnimation(null)}
+        />
+      )}
     </div>
   );
 };

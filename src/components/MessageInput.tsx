@@ -15,6 +15,13 @@ import {
   Terminal,
   Search,
   ExternalLink,
+  Clock,
+  Gift,
+  Bold,
+  Italic,
+  EyeOff,
+  Quote,
+  SmilePlus,
 } from 'lucide-react';
 import { TelegramMessage, TelegramChat, TelegramBotCommand, TelegramReplyMarkup, TelegramInlineQueryResult } from '../types';
 import { StickerAndGifDrawer } from './StickerAndGifDrawer';
@@ -24,6 +31,8 @@ interface MessageInputProps {
   replyToMessage?: TelegramMessage | null;
   onCancelReply: () => void;
   onOpenMiniApp?: () => void;
+  onOpenScheduledMessages?: () => void;
+  onOpenStarsModal?: () => void;
   chat?: TelegramChat | null;
   activeReplyKeyboard?: TelegramReplyMarkup | null;
   lang: 'ar' | 'en';
@@ -35,6 +44,8 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   replyToMessage,
   onCancelReply,
   onOpenMiniApp,
+  onOpenScheduledMessages,
+  onOpenStarsModal,
   chat,
   activeReplyKeyboard,
   lang,
@@ -46,6 +57,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showCommandsMenu, setShowCommandsMenu] = useState(false);
   const [showReplyKeyboard, setShowReplyKeyboard] = useState(true);
+  const [showFormattingBar, setShowFormattingBar] = useState(false);
 
   // Real Voice recording with MediaRecorder
   const [isRecording, setIsRecording] = useState(false);
@@ -198,13 +210,68 @@ export const MessageInput: React.FC<MessageInputProps> = ({
     }
   };
 
-  const handleSelectSticker = (sticker: { id: string; emoji: string; name: string; img: string }) => {
-    onSendMessage(`[ملصق تليجرام ${sticker.emoji}]`, replyToMessage || undefined, {
-      type: 'photo',
-      url: sticker.img,
-      title: sticker.name,
-    });
+  const handleSelectSticker = (sticker: {
+    id: string;
+    emoji: string;
+    name: string;
+    img: string;
+    isTgs?: boolean;
+    lottieData?: any;
+  }) => {
+    if (sticker.isTgs || sticker.lottieData) {
+      onSendMessage(`[ملصق تليجرام متحرك ${sticker.emoji}]`, replyToMessage || undefined, {
+        type: 'tgs_sticker',
+        isTgs: true,
+        lottieData: sticker.lottieData,
+        url: sticker.img,
+        title: sticker.name,
+      });
+    } else {
+      onSendMessage(`[ملصق تليجرام ${sticker.emoji}]`, replyToMessage || undefined, {
+        type: 'photo',
+        url: sticker.img,
+        title: sticker.name,
+      });
+    }
     setShowPicker(false);
+  };
+
+  const applyFormatting = (formatType: 'spoiler' | 'quote' | 'bold' | 'italic' | 'custom_emoji', extra?: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selected = text.slice(start, end);
+
+    let replacement = '';
+    let cursorOffset = 0;
+
+    switch (formatType) {
+      case 'spoiler':
+        replacement = `||${selected || (isAr ? 'نص تنبيهي مخفي' : 'Spoiler text')}||`;
+        break;
+      case 'quote':
+        replacement = selected ? `> ${selected}\n` : (isAr ? '> نص اقتباس قابل للطي\n' : '> Collapsible quote text\n');
+        break;
+      case 'bold':
+        replacement = `**${selected || (isAr ? 'نص عريض' : 'Bold text')}**`;
+        break;
+      case 'italic':
+        replacement = `*${selected || (isAr ? 'نص مائل' : 'Italic text')}*`;
+        break;
+      case 'custom_emoji':
+        replacement = `[emoji:${extra || 'star'}] `;
+        break;
+    }
+
+    const nextText = text.slice(0, start) + replacement + text.slice(end);
+    setText(nextText);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + replacement.length, start + replacement.length);
+    }, 0);
   };
 
   const handleSelectGif = (gif: { id: string; title: string; url: string }) => {
@@ -412,8 +479,119 @@ export const MessageInput: React.FC<MessageInputProps> = ({
               <span>{isAr ? 'تطبيقات الويب المصغرة' : 'Telegram Mini Apps'}</span>
             </button>
           )}
+
+          {onOpenScheduledMessages && (
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                onOpenScheduledMessages();
+              }}
+              className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium hover:bg-[#3390ec]/10 hover:text-[#3390ec] transition"
+            >
+              <div className="w-8 h-8 rounded-full bg-cyan-500/20 text-cyan-500 flex items-center justify-center">
+                <Clock className="w-4 h-4" />
+              </div>
+              <span>{isAr ? 'الرسائل المجدولة' : 'Scheduled Messages'}</span>
+            </button>
+          )}
+
+          {onOpenStarsModal && (
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                onOpenStarsModal();
+              }}
+              className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium hover:bg-amber-400/10 hover:text-amber-400 transition"
+            >
+              <div className="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                <Gift className="w-4 h-4" />
+              </div>
+              <span>{isAr ? 'إرسال نجوم تليجرام ⭐️' : 'Send Telegram Stars ⭐️'}</span>
+            </button>
+          )}
         </div>
       )}
+
+      {/* WYSIWYG Formatting Bar (Spoiler, Blockquote, Bold, Italic, Custom Emojis) */}
+      <div
+        className={`flex items-center gap-1 px-3 py-1 mb-1 rounded-xl text-xs overflow-x-auto select-none ${
+          isDark ? 'bg-[#1e2a38]/60 text-gray-300' : 'bg-gray-100/80 text-gray-700'
+        }`}
+      >
+        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider me-1">
+          {isAr ? 'تنسيق:' : 'Format:'}
+        </span>
+
+        {/* Spoiler Button */}
+        <button
+          type="button"
+          onClick={() => applyFormatting('spoiler')}
+          className="px-2 py-0.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 flex items-center gap-1 font-semibold text-xs transition"
+          title={isAr ? 'نص تنبيهي مخفي (Spoiler)' : 'Spoiler (hidden text)'}
+        >
+          <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+          <span>Spoiler</span>
+        </button>
+
+        {/* Blockquote Button */}
+        <button
+          type="button"
+          onClick={() => applyFormatting('quote')}
+          className="px-2 py-0.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 flex items-center gap-1 font-semibold text-xs transition"
+          title={isAr ? 'اقتباس قابل للطي (Collapsible Blockquote)' : 'Blockquote'}
+        >
+          <Quote className="w-3.5 h-3.5 text-[#3390ec]" />
+          <span>Quote</span>
+        </button>
+
+        {/* Bold Button */}
+        <button
+          type="button"
+          onClick={() => applyFormatting('bold')}
+          className="px-2 py-0.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 font-bold text-xs transition"
+          title="Bold"
+        >
+          <Bold className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Italic Button */}
+        <button
+          type="button"
+          onClick={() => applyFormatting('italic')}
+          className="px-2 py-0.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 italic text-xs transition"
+          title="Italic"
+        >
+          <Italic className="w-3.5 h-3.5" />
+        </button>
+
+        <span className="text-gray-400 mx-1">|</span>
+
+        {/* Custom Emojis Insertion Chips */}
+        {(['star', 'gem', 'fire', 'crown', 'rocket'] as const).map((em) => (
+          <button
+            key={em}
+            type="button"
+            onClick={() => applyFormatting('custom_emoji', em)}
+            className="px-1.5 py-0.5 rounded-md hover:bg-black/10 dark:hover:bg-white/10 text-[11px] font-medium flex items-center gap-0.5 transition"
+            title={`Insert Custom Emoji: ${em}`}
+          >
+            <span>{em === 'star' ? '⭐' : em === 'gem' ? '💎' : em === 'fire' ? '🔥' : em === 'crown' ? '👑' : '🚀'}</span>
+            <span className="capitalize hidden sm:inline">{em}</span>
+          </button>
+        ))}
+
+        {onOpenScheduledMessages && (
+          <button
+            type="button"
+            onClick={onOpenScheduledMessages}
+            className="ms-auto px-2 py-0.5 rounded-md hover:bg-[#3390ec]/20 text-[#3390ec] flex items-center gap-1 text-[11px] font-semibold"
+            title={isAr ? 'جدولة الرسالة' : 'Schedule'}
+          >
+            <Clock className="w-3 h-3" />
+            <span className="hidden sm:inline">{isAr ? 'جدولة' : 'Schedule'}</span>
+          </button>
+        )}
+      </div>
 
       {/* Tabbed Sticker, GIF & Emoji Drawer */}
       <StickerAndGifDrawer
