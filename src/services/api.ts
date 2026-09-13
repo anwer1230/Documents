@@ -282,6 +282,90 @@ export const cacheApi = {
 };
 
 // ============================================================================
+// GramJS / MTProto Api Namespace Compatibility Layer
+// ============================================================================
+
+export const Api = {
+  account: {
+    GetPrivacy: async (params: { key: any } | any) => {
+      const rawKey = params?.key !== undefined ? params.key : params;
+      const keyStr =
+        typeof rawKey === 'object' && rawKey?._
+          ? rawKey._.replace('inputPrivacyKey', '').toLowerCase()
+          : String(rawKey || '');
+
+      const normalizedKey = keyStr.includes('phone')
+        ? 'phoneNumber'
+        : keyStr.includes('status') || keyStr.includes('timestamp')
+        ? 'statusTimestamp'
+        : keyStr.includes('forward')
+        ? 'forwards'
+        : String(rawKey || 'phoneNumber');
+
+      try {
+        const res = await mtprotoApi.invoke('account.getPrivacy', { key: normalizedKey });
+        return res;
+      } catch {
+        return await privacyApi.getPrivacy(normalizedKey);
+      }
+    },
+
+    SetPrivacy: async (params: { key: any; rules: any } | any) => {
+      const rawKey = params?.key;
+      const keyStr =
+        typeof rawKey === 'object' && rawKey?._
+          ? rawKey._.replace('inputPrivacyKey', '').toLowerCase()
+          : String(rawKey || '');
+
+      const normalizedKey = keyStr.includes('phone')
+        ? 'phoneNumber'
+        : keyStr.includes('status') || keyStr.includes('timestamp')
+        ? 'statusTimestamp'
+        : keyStr.includes('forward')
+        ? 'forwards'
+        : String(rawKey || 'phoneNumber');
+
+      let ruleOption: 'everybody' | 'contacts' | 'nobody' = 'everybody';
+      const rawRules = params?.rules ?? params?.rule;
+      if (Array.isArray(rawRules)) {
+        const firstRule = rawRules[0];
+        const ruleName = typeof firstRule === 'object' ? firstRule?._ || '' : String(firstRule);
+        if (ruleName.toLowerCase().includes('disallow') || ruleName.toLowerCase().includes('nobody')) {
+          ruleOption = 'nobody';
+        } else if (ruleName.toLowerCase().includes('contact')) {
+          ruleOption = 'contacts';
+        } else {
+          ruleOption = 'everybody';
+        }
+      } else if (typeof rawRules === 'string') {
+        ruleOption = rawRules as any;
+      }
+
+      try {
+        return await mtprotoApi.invoke('account.setPrivacy', { key: normalizedKey, rule: ruleOption });
+      } catch {
+        return await privacyApi.setPrivacy(normalizedKey, ruleOption);
+      }
+    },
+
+    GetPassword: async () => {
+      try {
+        return await mtprotoApi.invoke('account.getPassword', {});
+      } catch {
+        return await privacyApi.getPassword();
+      }
+    },
+  },
+
+  InputPrivacyKeyPhoneNumber: () => ({ _: 'inputPrivacyKeyPhoneNumber' }),
+  InputPrivacyKeyStatusTimestamp: () => ({ _: 'inputPrivacyKeyStatusTimestamp' }),
+  InputPrivacyKeyForwards: () => ({ _: 'inputPrivacyKeyForwards' }),
+  InputPrivacyValueAllowAll: () => ({ _: 'inputPrivacyValueAllowAll' }),
+  InputPrivacyValueAllowContacts: () => ({ _: 'inputPrivacyValueAllowContacts' }),
+  InputPrivacyValueDisallowAll: () => ({ _: 'inputPrivacyValueDisallowAll' }),
+};
+
+// ============================================================================
 // Unified API Surface Export
 // ============================================================================
 
@@ -291,6 +375,7 @@ export const api = {
   privacy: privacyApi,
   automation: automationApi,
   cache: cacheApi,
+  Api,
 };
 
 export default api;

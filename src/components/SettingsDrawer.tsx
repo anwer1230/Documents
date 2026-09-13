@@ -52,6 +52,7 @@ import {
   getPushSubscription,
 } from '../utils/pushNotifications';
 import api from '../services/api';
+import { PrivacySettings } from './PrivacySettings';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -1366,85 +1367,13 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 )}
               </div>
 
-              {/* Phone Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">{isAr ? 'رقم الهاتف' : 'Phone Number'}</div>
-                  <div className="text-xs text-gray-400">{isAr ? 'من يمكنه رؤية رقمي' : 'Who can see my number'}</div>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      disabled={updatingPrivacyKey === 'phoneNumber'}
-                      onClick={() => handleUpdatePrivacy('phoneNumber', opt)}
-                      className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
-                        phonePrivacy === opt
-                          ? 'bg-[#3390ec] text-white border-[#3390ec]'
-                          : themeConfig.isDark
-                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
-                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Last Seen Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">{isAr ? 'آخر ظهور ومتصل الآن' : 'Last Seen & Online'}</div>
-                  <div className="text-xs text-gray-400">{isAr ? 'من يمكنه رؤية حالتي' : 'Who can see my status'}</div>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      disabled={updatingPrivacyKey === 'statusTimestamp'}
-                      onClick={() => handleUpdatePrivacy('statusTimestamp', opt)}
-                      className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
-                        lastSeenPrivacy === opt
-                          ? 'bg-[#3390ec] text-white border-[#3390ec]'
-                          : themeConfig.isDark
-                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
-                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Forwarded Messages Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold">{isAr ? 'الرسائل المحولة' : 'Forwarded Messages'}</div>
-                  <div className="text-xs text-gray-400">{isAr ? 'رابط لحسابي عند التحويل' : 'Link to my account when forwarding'}</div>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      disabled={updatingPrivacyKey === 'forwards'}
-                      onClick={() => handleUpdatePrivacy('forwards', opt)}
-                      className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
-                        forwardsPrivacy === opt
-                          ? 'bg-[#3390ec] text-white border-[#3390ec]'
-                          : themeConfig.isDark
-                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
-                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
-                      }`}
-                    >
-                      {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}
-                    </button>
-                  ))}
-                </div>
+              {/* PrivacySettings Component (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
+              <div className="pt-2">
+                <PrivacySettings
+                  isAr={isAr}
+                  themeConfig={themeConfig}
+                  className="rounded-2xl border border-gray-700/40"
+                />
               </div>
 
               {/* Devices Link */}
@@ -2235,3 +2164,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     </div>
   );
 };
+
+export { PrivacySettings } from './PrivacySettings';
+export default SettingsDrawer;
