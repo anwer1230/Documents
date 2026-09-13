@@ -1506,9 +1506,18 @@ export class TelegramService {
     ptsTotalLimit: number = 100
   ) {
     const client = await this.getOrCreateClient(sessionToken);
+    let targetPts = Number(pts) || 0;
+    if (targetPts <= 0) {
+      try {
+        const state: any = await client.invoke(new Api.updates.GetState());
+        targetPts = state?.pts || 1;
+      } catch {
+        targetPts = 1;
+      }
+    }
     const diff: any = await client.invoke(
       new Api.updates.GetDifference({
-        pts: Number(pts) || 0,
+        pts: targetPts,
         date: Number(date) || Math.floor(Date.now() / 1000) - 86400,
         qts: Number(qts) || 0,
         ptsTotalLimit: Number(ptsTotalLimit) || 100,
@@ -1665,28 +1674,104 @@ export class TelegramService {
     let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
     if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
     else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
-    else if (key === 'forwards') inputKey = new Api.InputPrivacyKeyForwards();
+    else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
     else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
     else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
     else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
 
     const res: any = await client.invoke(new Api.account.GetPrivacy({ key: inputKey }));
-    return sanitizeData(res);
+    const sanitized = sanitizeData(res);
+    
+    // Parse the effective privacy option ('everybody' | 'contacts' | 'nobody')
+    let option: 'everybody' | 'contacts' | 'nobody' = 'contacts';
+    const rulesList = Array.isArray(res.rules) ? res.rules : [];
+    for (const r of rulesList) {
+      const cls = r?.className || r?.constructor?.name || '';
+      if (cls.includes('AllowAll') || cls === 'PrivacyValueAllowAll') {
+        option = 'everybody';
+        break;
+      }
+      if (cls.includes('AllowContacts') || cls === 'PrivacyValueAllowContacts') {
+        option = 'contacts';
+        break;
+      }
+      if (cls.includes('DisallowAll') || cls === 'PrivacyValueDisallowAll') {
+        option = 'nobody';
+        break;
+      }
+    }
+
+    return {
+      ...sanitized,
+      key,
+      option,
+    };
   }
 
-  public static async setPrivacy(sessionToken: string, key: string, rules?: any[]) {
+  public static async setPrivacy(sessionToken: string, key: string, rules?: any) {
     const client = await this.getOrCreateClient(sessionToken);
     let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
     if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
     else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
-    else if (key === 'forwards') inputKey = new Api.InputPrivacyKeyForwards();
+    else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
     else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
     else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
     else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
 
-    const finalRules = rules && rules.length > 0 ? rules : [new Api.InputPrivacyValueAllowAll()];
+    let finalRules: any[] = [];
+    let chosenOption: 'everybody' | 'contacts' | 'nobody' = 'everybody';
+
+    if (typeof rules === 'string') {
+      if (rules === 'contacts' || rules === 'allow_contacts') {
+        finalRules = [new Api.InputPrivacyValueAllowContacts()];
+        chosenOption = 'contacts';
+      } else if (rules === 'nobody' || rules === 'disallow_all') {
+        finalRules = [new Api.InputPrivacyValueDisallowAll()];
+        chosenOption = 'nobody';
+      } else {
+        finalRules = [new Api.InputPrivacyValueAllowAll()];
+        chosenOption = 'everybody';
+      }
+    } else if (Array.isArray(rules) && rules.length > 0) {
+      finalRules = rules.map((r: any) => {
+        if (typeof r === 'string') {
+          if (r === 'contacts' || r === 'allow_contacts') { chosenOption = 'contacts'; return new Api.InputPrivacyValueAllowContacts(); }
+          if (r === 'nobody' || r === 'disallow_all') { chosenOption = 'nobody'; return new Api.InputPrivacyValueDisallowAll(); }
+          chosenOption = 'everybody';
+          return new Api.InputPrivacyValueAllowAll();
+        }
+        if (r?.className === 'InputPrivacyValueAllowContacts') { chosenOption = 'contacts'; return new Api.InputPrivacyValueAllowContacts(); }
+        if (r?.className === 'InputPrivacyValueDisallowAll') { chosenOption = 'nobody'; return new Api.InputPrivacyValueDisallowAll(); }
+        if (r?.className === 'InputPrivacyValueAllowAll') { chosenOption = 'everybody'; return new Api.InputPrivacyValueAllowAll(); }
+        return r;
+      });
+    } else {
+      finalRules = [new Api.InputPrivacyValueAllowAll()];
+    }
+
     const res: any = await client.invoke(new Api.account.SetPrivacy({ key: inputKey, rules: finalRules }));
-    return sanitizeData(res);
+    const sanitized = sanitizeData(res);
+    return {
+      ...sanitized,
+      key,
+      option: chosenOption,
+    };
+  }
+
+  /**
+   * 5b. Two-Factor Authentication Subsystem (account.getPassword)
+   */
+  public static async getPassword(sessionToken: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const pwd: any = await client.invoke(new Api.account.GetPassword());
+    return {
+      hasPassword: Boolean(pwd.hasPassword),
+      hasRecovery: Boolean(pwd.hasRecovery),
+      hint: pwd.hint || '',
+      loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
+      emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
+      pendingResetDate: pwd.pendingResetDate || undefined,
+    };
   }
 
   /**

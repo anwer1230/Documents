@@ -390,6 +390,74 @@ export class TelegramRPCRegistry {
           };
         }
 
+        case 'account.getPrivacy': {
+          const { key = 'statusTimestamp' } = params;
+          let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
+          if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
+          else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+          else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
+          else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+          else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
+          else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+
+          const res: any = await client.invoke(new Api.account.GetPrivacy({ key: inputKey }));
+          let opt: 'everybody' | 'contacts' | 'nobody' = 'contacts';
+          const rulesList = Array.isArray(res.rules) ? res.rules : [];
+          for (const r of rulesList) {
+            const cls = r?.className || r?.constructor?.name || '';
+            if (cls.includes('AllowAll') || cls === 'PrivacyValueAllowAll') { opt = 'everybody'; break; }
+            if (cls.includes('AllowContacts') || cls === 'PrivacyValueAllowContacts') { opt = 'contacts'; break; }
+            if (cls.includes('DisallowAll') || cls === 'PrivacyValueDisallowAll') { opt = 'nobody'; break; }
+          }
+          return {
+            success: true,
+            rpc: method,
+            serverTime,
+            result: {
+              key,
+              option: opt,
+              rules: res.rules,
+            },
+          };
+        }
+
+        case 'account.setPrivacy': {
+          const { key = 'statusTimestamp', rules, rule, value } = params;
+          let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
+          if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
+          else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+          else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
+          else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+          else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
+          else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+
+          const targetRule = rule || value || (typeof rules === 'string' ? rules : undefined);
+          let finalRules: any[] = [];
+          if (targetRule === 'contacts' || targetRule === 'allow_contacts') {
+            finalRules = [new Api.InputPrivacyValueAllowContacts()];
+          } else if (targetRule === 'nobody' || targetRule === 'disallow_all') {
+            finalRules = [new Api.InputPrivacyValueDisallowAll()];
+          } else if (targetRule === 'everybody' || targetRule === 'allow_all') {
+            finalRules = [new Api.InputPrivacyValueAllowAll()];
+          } else if (Array.isArray(rules) && rules.length > 0) {
+            finalRules = rules;
+          } else {
+            finalRules = [new Api.InputPrivacyValueAllowAll()];
+          }
+
+          const res: any = await client.invoke(new Api.account.SetPrivacy({ key: inputKey, rules: finalRules }));
+          return {
+            success: true,
+            rpc: method,
+            serverTime,
+            result: {
+              key,
+              option: targetRule || 'contacts',
+              rules: res.rules || finalRules,
+            },
+          };
+        }
+
         case 'account.updatePasswordSettings': {
           const { password, newSettings } = params;
           const inputSettings = new Api.account.PasswordInputSettings({
@@ -538,6 +606,39 @@ export class TelegramRPCRegistry {
           rpc: method,
           serverTime,
           result: { firstName: params.firstName, lastName: params.lastName, about: params.about },
+        };
+      case 'account.getPassword':
+        return {
+          success: true,
+          rpc: method,
+          serverTime,
+          result: {
+            hasPassword: true,
+            hasRecovery: true,
+            hint: 'كلمة مرور حسابي الأساسي',
+          },
+        };
+      case 'account.getPrivacy':
+        return {
+          success: true,
+          rpc: method,
+          serverTime,
+          result: {
+            key: params.key || 'statusTimestamp',
+            option: 'contacts',
+            rules: [{ className: 'PrivacyValueAllowContacts' }],
+          },
+        };
+      case 'account.setPrivacy':
+        return {
+          success: true,
+          rpc: method,
+          serverTime,
+          result: {
+            key: params.key || 'statusTimestamp',
+            option: params.rule || params.value || (Array.isArray(params.rules) ? params.rules[0] : params.rules) || 'contacts',
+            rules: [{ className: 'PrivacyValueAllowContacts' }],
+          },
         };
       case 'help.getConfig':
         return {

@@ -51,6 +51,7 @@ import {
   sendTestWebPush,
   getPushSubscription,
 } from '../utils/pushNotifications';
+import api from '../services/api';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -164,12 +165,19 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [pushLoading, setPushLoading] = useState(false);
   const [pushStatusText, setPushStatusText] = useState('');
 
-  // Privacy state
+  // Privacy state (Synced with Telegram Cloud)
   const [phonePrivacy, setPhonePrivacy] = useState<'everybody' | 'contacts' | 'nobody'>('contacts');
   const [lastSeenPrivacy, setLastSeenPrivacy] = useState<'everybody' | 'contacts' | 'nobody'>('everybody');
+  const [forwardsPrivacy, setForwardsPrivacy] = useState<'everybody' | 'contacts' | 'nobody'>('everybody');
   const [twoStepPassword, setTwoStepPassword] = useState('');
   const [show2faPassword, setShow2faPassword] = useState(false);
   const [twoStepEnabled, setTwoStepEnabled] = useState(false);
+  const [twoStepHint, setTwoStepHint] = useState('');
+  const [privacyLoading, setPrivacyLoading] = useState(false);
+  const [twoStepLoading, setTwoStepLoading] = useState(false);
+  const [privacySyncSuccess, setPrivacySyncSuccess] = useState<string | null>(null);
+  const [privacySyncError, setPrivacySyncError] = useState<string | null>(null);
+  const [updatingPrivacyKey, setUpdatingPrivacyKey] = useState<string | null>(null);
   const [passcodeLock, setPasscodeLock] = useState(false);
 
   // Storage state
@@ -213,6 +221,87 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setUsername(currentUser.username || '');
     setPhotoUrl(currentUser.photoUrl || '');
   }, [currentUser]);
+
+  // Synchronize Privacy and 2FA status from Telegram Cloud
+  const fetchCloudPrivacy = async () => {
+    setPrivacyLoading(true);
+    setPrivacySyncError(null);
+    try {
+      // 1. Phone number privacy (Api.account.GetPrivacy)
+      const phoneRes: any = await api.privacy.getPrivacy('phoneNumber');
+      if (phoneRes?.option) setPhonePrivacy(phoneRes.option);
+      else if (phoneRes?.rule) setPhonePrivacy(phoneRes.rule);
+
+      // 2. Last seen privacy (Api.account.GetPrivacy)
+      const lastSeenRes: any = await api.privacy.getPrivacy('statusTimestamp');
+      if (lastSeenRes?.option) setLastSeenPrivacy(lastSeenRes.option);
+      else if (lastSeenRes?.rule) setLastSeenPrivacy(lastSeenRes.rule);
+
+      // 3. Forwarded messages privacy (Api.account.GetPrivacy)
+      const forwardsRes: any = await api.privacy.getPrivacy('forwards');
+      if (forwardsRes?.option) setForwardsPrivacy(forwardsRes.option);
+      else if (forwardsRes?.rule) setForwardsPrivacy(forwardsRes.rule);
+    } catch (err: any) {
+      console.warn('[SettingsDrawer] Failed to fetch cloud privacy:', err);
+    } finally {
+      setPrivacyLoading(false);
+    }
+  };
+
+  const fetchCloud2FA = async () => {
+    setTwoStepLoading(true);
+    try {
+      // 2FA status check (Api.account.GetPassword)
+      const res: any = await api.privacy.getPassword();
+      const data = res?.result || res;
+      if (data) {
+        setTwoStepEnabled(Boolean(data.hasPassword));
+        setTwoStepHint(data.hint || '');
+      }
+    } catch (err: any) {
+      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password:', err);
+    } finally {
+      setTwoStepLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && activeSection === 'privacy-security') {
+      fetchCloudPrivacy();
+      fetchCloud2FA();
+    }
+  }, [isOpen, activeSection]);
+
+  const handleUpdatePrivacy = async (
+    key: 'phoneNumber' | 'statusTimestamp' | 'forwards',
+    value: 'everybody' | 'contacts' | 'nobody'
+  ) => {
+    // Instant UI update
+    if (key === 'phoneNumber') setPhonePrivacy(value);
+    else if (key === 'statusTimestamp') setLastSeenPrivacy(value);
+    else if (key === 'forwards') setForwardsPrivacy(value);
+
+    setUpdatingPrivacyKey(key);
+    setPrivacySyncError(null);
+    try {
+      // Immediate cloud update (Api.account.SetPrivacy)
+      await api.privacy.setPrivacy(key, value);
+      const label =
+        key === 'phoneNumber'
+          ? (isAr ? 'خصوصية رقم الهاتف' : 'Phone number privacy')
+          : key === 'statusTimestamp'
+          ? (isAr ? 'خصوصية آخر ظهور' : 'Last seen privacy')
+          : (isAr ? 'خصوصية الرسائل المحولة' : 'Forwarded messages privacy');
+      setPrivacySyncSuccess(isAr ? `تم تحديث ${label} فورياً على سيرفرات تيليجرام` : `${label} updated immediately on Telegram Cloud`);
+      setTimeout(() => setPrivacySyncSuccess(null), 3500);
+    } catch (err: any) {
+      console.error('[SettingsDrawer] Error updating cloud privacy:', err);
+      setPrivacySyncError(isAr ? 'تعذر مزامنة الإعداد مع تيليجرام' : 'Failed to sync privacy setting with Telegram');
+      setTimeout(() => setPrivacySyncError(null), 4000);
+    } finally {
+      setUpdatingPrivacyKey(null);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -1157,6 +1246,41 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Cloud Sync Status Header */}
+              <div className="flex items-center justify-between pb-2 border-b border-gray-700/30">
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <Shield className="w-4 h-4 text-[#3390ec]" />
+                  <span>{isAr ? 'مزامنة سحابية مع حساب تيليجرام' : 'Cloud sync with Telegram account'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchCloudPrivacy();
+                    fetchCloud2FA();
+                  }}
+                  disabled={privacyLoading || twoStepLoading}
+                  className="px-2 py-1 rounded-lg hover:bg-gray-500/10 text-gray-400 hover:text-white transition flex items-center gap-1.5 text-xs font-medium"
+                  title={isAr ? 'تحديث الآن من السحابة' : 'Refresh from cloud'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${privacyLoading || twoStepLoading ? 'animate-spin text-[#3390ec]' : ''}`} />
+                  <span>{privacyLoading || twoStepLoading ? (isAr ? 'جارٍ المزامنة...' : 'Syncing...') : (isAr ? 'تحديث' : 'Refresh')}</span>
+                </button>
+              </div>
+
+              {/* Feedback messages */}
+              {privacySyncSuccess && (
+                <div className="p-2.5 rounded-xl bg-green-500/10 border border-green-500/30 text-green-400 text-xs flex items-center gap-2 animate-fadeIn">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{privacySyncSuccess}</span>
+                </div>
+              )}
+              {privacySyncError && (
+                <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2 animate-fadeIn">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{privacySyncError}</span>
+                </div>
+              )}
+
               {/* Passcode Lock */}
               <div
                 onClick={() => setPasscodeLock(!passcodeLock)}
@@ -1182,7 +1306,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Two-Step Verification 2FA */}
+              {/* Two-Step Verification 2FA (Api.account.GetPassword) */}
               <div className="p-3 rounded-xl bg-gray-500/5 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -1190,17 +1314,32 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     <div>
                       <div className="text-sm font-medium">{isAr ? 'التحقق بخطوتين (2FA)' : 'Two-Step Verification'}</div>
                       <div className="text-xs text-gray-400">
-                        {twoStepEnabled ? (isAr ? 'كلمة المرور السحابية مفعلة' : 'Cloud password enabled') : (isAr ? 'إضافة كلمة مرور إضافية' : 'Add an extra cloud password')}
+                        {twoStepLoading ? (
+                          isAr ? 'جارٍ التحقق من السحابة...' : 'Checking cloud password...'
+                        ) : twoStepEnabled ? (
+                          <span className="text-green-400 font-medium">{isAr ? 'كلمة المرور السحابية مفعلة' : 'Cloud password active'}</span>
+                        ) : (
+                          isAr ? 'غير مفعلة - أضف كلمة مرور سحابية لحماية حسابك' : 'Not enabled - Add extra password to secure your account'
+                        )}
                       </div>
                     </div>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setTwoStepEnabled(!twoStepEnabled)}
                     className="text-xs text-[#3390ec] font-bold px-2 py-1 rounded hover:bg-[#3390ec]/10"
                   >
-                    {twoStepEnabled ? (isAr ? 'تعطيل' : 'Disable') : (isAr ? 'إعداد' : 'Setup')}
+                    {twoStepEnabled ? (isAr ? 'تعديل' : 'Edit') : (isAr ? 'إعداد' : 'Setup')}
                   </button>
                 </div>
+
+                {/* Show password hint if present from Api.account.GetPassword */}
+                {twoStepHint && (
+                  <div className="p-2 rounded-lg bg-[#3390ec]/10 border border-[#3390ec]/20 text-xs text-[#3390ec] flex items-center justify-between animate-fadeIn">
+                    <span className="font-semibold">{isAr ? 'تلميح كلمة المرور السحابية (Hint):' : 'Password Hint:'}</span>
+                    <span className="font-mono px-2 py-0.5 rounded bg-black/20 text-white font-medium">{twoStepHint}</span>
+                  </div>
+                )}
 
                 {twoStepEnabled && (
                   <div className="pt-2 border-t border-gray-700/50 space-y-2 animate-fadeIn">
@@ -1227,20 +1366,25 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 )}
               </div>
 
-              {/* Phone Privacy */}
+              {/* Phone Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
               <div className="space-y-1">
-                <div className="text-sm font-semibold">{isAr ? 'رقم الهاتف' : 'Phone Number'}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">{isAr ? 'رقم الهاتف' : 'Phone Number'}</div>
+                  <div className="text-xs text-gray-400">{isAr ? 'من يمكنه رؤية رقمي' : 'Who can see my number'}</div>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
                     <button
                       key={opt}
-                      onClick={() => setPhonePrivacy(opt)}
+                      type="button"
+                      disabled={updatingPrivacyKey === 'phoneNumber'}
+                      onClick={() => handleUpdatePrivacy('phoneNumber', opt)}
                       className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
                         phonePrivacy === opt
                           ? 'bg-[#3390ec] text-white border-[#3390ec]'
                           : themeConfig.isDark
-                          ? 'bg-[#0e1621] border-gray-700 text-gray-300'
-                          : 'bg-gray-50 border-gray-300 text-gray-700'
+                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
+                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
                       }`}
                     >
                       {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}
@@ -1249,20 +1393,52 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Last Seen Privacy */}
+              {/* Last Seen Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
               <div className="space-y-1">
-                <div className="text-sm font-semibold">{isAr ? 'آخر ظهور ومتصل الآن' : 'Last Seen & Online'}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">{isAr ? 'آخر ظهور ومتصل الآن' : 'Last Seen & Online'}</div>
+                  <div className="text-xs text-gray-400">{isAr ? 'من يمكنه رؤية حالتي' : 'Who can see my status'}</div>
+                </div>
                 <div className="grid grid-cols-3 gap-2">
                   {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
                     <button
                       key={opt}
-                      onClick={() => setLastSeenPrivacy(opt)}
+                      type="button"
+                      disabled={updatingPrivacyKey === 'statusTimestamp'}
+                      onClick={() => handleUpdatePrivacy('statusTimestamp', opt)}
                       className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
                         lastSeenPrivacy === opt
                           ? 'bg-[#3390ec] text-white border-[#3390ec]'
                           : themeConfig.isDark
-                          ? 'bg-[#0e1621] border-gray-700 text-gray-300'
-                          : 'bg-gray-50 border-gray-300 text-gray-700'
+                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
+                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Forwarded Messages Privacy (Api.account.GetPrivacy & Api.account.SetPrivacy) */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">{isAr ? 'الرسائل المحولة' : 'Forwarded Messages'}</div>
+                  <div className="text-xs text-gray-400">{isAr ? 'رابط لحسابي عند التحويل' : 'Link to my account when forwarding'}</div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['everybody', 'contacts', 'nobody'] as const).map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      disabled={updatingPrivacyKey === 'forwards'}
+                      onClick={() => handleUpdatePrivacy('forwards', opt)}
+                      className={`py-2 px-1 text-xs rounded-xl border font-medium transition ${
+                        forwardsPrivacy === opt
+                          ? 'bg-[#3390ec] text-white border-[#3390ec]'
+                          : themeConfig.isDark
+                          ? 'bg-[#0e1621] border-gray-700 text-gray-300 hover:bg-gray-800'
+                          : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100'
                       }`}
                     >
                       {opt === 'everybody' ? (isAr ? 'الجميع' : 'Everybody') : opt === 'contacts' ? (isAr ? 'جهات اتصالي' : 'My Contacts') : (isAr ? 'لا أحد' : 'Nobody')}

@@ -132,6 +132,83 @@ export const mtprotoApi = {
   getFullUser: async (id: string) => {
     return mtprotoApi.invoke('users.getFullUser', { id });
   },
+
+  /**
+   * Gets privacy setting via MTProto RPC (account.getPrivacy)
+   */
+  getPrivacy: async (key: string) => {
+    return mtprotoApi.invoke('account.getPrivacy', { key });
+  },
+
+  /**
+   * Sets privacy setting via MTProto RPC (account.setPrivacy)
+   */
+  setPrivacy: async (key: string, rule: any) => {
+    return mtprotoApi.invoke('account.setPrivacy', { key, rule });
+  },
+
+  /**
+   * Gets Two-Step Verification password status via MTProto RPC (account.getPassword)
+   */
+  getPassword: async () => {
+    return mtprotoApi.invoke('account.getPassword', {});
+  },
+};
+
+// ============================================================================
+// Privacy & Two-Step Verification (2FA) Cloud Sync API
+// ============================================================================
+
+export interface PrivacyResponse {
+  success: boolean;
+  key: string;
+  option: 'everybody' | 'contacts' | 'nobody';
+  rules?: any[];
+  [key: string]: any;
+}
+
+export interface PasswordResponse {
+  success: boolean;
+  result?: {
+    hasPassword: boolean;
+    hasRecovery?: boolean;
+    hint?: string;
+    loginEmailPattern?: string;
+    emailUnconfirmedPattern?: string;
+    pendingResetDate?: number;
+  };
+  hasPassword?: boolean;
+  hint?: string;
+  [key: string]: any;
+}
+
+export const privacyApi = {
+  /**
+   * Fetches privacy rules from Telegram Cloud (Api.account.GetPrivacy)
+   */
+  getPrivacy: async (key: 'phoneNumber' | 'statusTimestamp' | 'forwards' | string) => {
+    return request<PrivacyResponse>(`/api/telegram/privacy?key=${encodeURIComponent(key)}`);
+  },
+
+  /**
+   * Sets privacy rules on Telegram Cloud (Api.account.SetPrivacy)
+   */
+  setPrivacy: async (
+    key: 'phoneNumber' | 'statusTimestamp' | 'forwards' | string,
+    rule: 'everybody' | 'contacts' | 'nobody' | any
+  ) => {
+    return request<PrivacyResponse>('/api/telegram/privacy', {
+      method: 'POST',
+      body: JSON.stringify({ key, rule }),
+    });
+  },
+
+  /**
+   * Checks Two-Step Verification (2FA) status and password hint (Api.account.GetPassword)
+   */
+  getPassword: async () => {
+    return request<PasswordResponse>('/api/telegram/2fa/password');
+  },
 };
 
 // ============================================================================
@@ -211,6 +288,7 @@ export const cacheApi = {
 export const api = {
   request,
   mtproto: mtprotoApi,
+  privacy: privacyApi,
   automation: automationApi,
   cache: cacheApi,
 };

@@ -497,11 +497,53 @@ export default function App() {
     const unsubscribe = wsClient.subscribe((event) => {
       if (event.type === 'connected') {
         recoverGap();
+      } else if (event.type === 'sync_batch' || (event as any).action === 'sync_batch') {
+        const batch: any[] = (event as any).messages || [];
+        if (Array.isArray(batch) && batch.length > 0) {
+          console.log(`[WebSocket] Received sync_batch catchup: ${batch.length} messages`);
+          setMessagesMap((prev) => {
+            const next = { ...prev };
+            batch.forEach((msg) => {
+              const targetChatId = msg.chatId || selectedChatId;
+              const currentList = next[targetChatId] || [];
+              if (!currentList.some((m) => m.id === msg.id)) {
+                next[targetChatId] = [...currentList, msg];
+              }
+              if (msg.timestamp) {
+                wsClient.setLastTimestamp(msg.timestamp);
+              }
+            });
+            return next;
+          });
+
+          setChats((prev) =>
+            prev.map((c) => {
+              const matchingMsgs = batch.filter((m) => (m.chatId || selectedChatId) === c.id);
+              if (matchingMsgs.length === 0) return c;
+              const latest = [...matchingMsgs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
+              const unreadInc = matchingMsgs.filter((m) => !m.isOut && c.id !== selectedChatId).length;
+              return {
+                ...c,
+                unreadCount: (c.unreadCount || 0) + unreadInc,
+                lastMessage: latest
+                  ? {
+                      text: latest.text || '[وسائط]',
+                      timestamp: latest.timestamp || Date.now(),
+                      isOut: !!latest.isOut,
+                    }
+                  : c.lastMessage,
+              };
+            })
+          );
+        }
       } else if (event.type === 'new_message' && event.message) {
         if ((event as any).pts) {
           syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
         }
         const msg = event.message;
+        if (msg.timestamp) {
+          wsClient.setLastTimestamp(msg.timestamp);
+        }
         const targetChatId = event.peerId || msg.chatId || selectedChatId;
 
         setMessagesMap((prev) => {
