@@ -4,11 +4,13 @@ services:
     runtime: node
     plan: free
     region: frankfurt # or oregon / ohio / singapore
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm ci --prefer-offline --no-audit && npm run build
+    startCommand: node dist/server.cjs
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
+      - key: PORT
+        value: "3000"
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION

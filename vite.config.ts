@@ -9,6 +9,33 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss(), settingsSearchPlugin(__dirname)],
     build: {
       sourcemap: true,
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('scheduler') || id.includes('motion')) {
+                return 'vendor-ui';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor-icons';
+              }
+              if (id.includes('lottie-web')) {
+                return 'vendor-lottie';
+              }
+              if (id.includes('tesseract.js')) {
+                return 'vendor-ocr';
+              }
+            }
+          },
+        },
+        onwarn(warning, warn) {
+          if (warning.code === 'EVAL' && warning.id?.includes('lottie-web')) {
+            return;
+          }
+          warn(warning);
+        },
+      },
     },
     resolve: {
       alias: {
