@@ -129,6 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginForm = document.getElementById('loginForm');
   const verifyForm = document.getElementById('verifyForm');
   const passwordForm = document.getElementById('passwordForm');
+  let loginWaitTimer = null;
 
   if (loginForm) {
     loginForm.addEventListener('submit', async (e) => {
@@ -143,7 +144,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (r.pending) {
           // الاتصال يعمل في الخلفية — سنستقبل النتيجة عبر socket.io
           showAlert('🔄 جارِ الاتصال بتيليجرام...', 'info');
-          // نبقي زر التحميل نشطاً — سيُعاد تفعيله عند وصول login_result
+          // لا نترك الزر معلقاً إذا انقطع Socket.IO أو لم تصل نتيجة الخلفية.
+          clearTimeout(loginWaitTimer);
+          loginWaitTimer = setTimeout(() => {
+            setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
+            showAlert('⏱️ انتهت مهلة الاتصال بتيليجرام. تحقق من الشبكة وحاول مرة أخرى.', 'danger');
+          }, 70000);
         } else {
           showAlert(r.message || '', r.success ? 'success' : 'danger');
           setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
@@ -712,6 +718,7 @@ function initSocket() {
 
   // ── نتيجة تسجيل الدخول (تصل بعد اكتمال الاتصال في الخلفية) ──
   socket.on('login_result', d => {
+    clearTimeout(loginWaitTimer);
     const btn = document.getElementById('loginBtn');
     const verifyForm = document.getElementById('verifyForm');
     setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
