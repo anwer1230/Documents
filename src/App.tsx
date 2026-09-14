@@ -75,15 +75,92 @@ export default function App() {
     return {};
   });
 
-  // Active User Auth State
-  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
+  // Active User Auth State (Initialized from persistent local cache)
+  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(() => {
+    try {
+      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
+      const activeId = localStorage.getItem('tg_active_account_id');
+      if (savedAccountsStr) {
+        const accs = JSON.parse(savedAccountsStr);
+        const active = accs.find((a: any) => a.id === activeId) || accs[0];
+        if (active?.user) return active.user;
+      }
+      const savedUser = localStorage.getItem('tg_active_user');
+      if (savedUser) return JSON.parse(savedUser);
+    } catch {}
+    return null;
+  });
+
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
+    try {
+      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
+      const activeId = localStorage.getItem('tg_active_account_id');
+      if (savedAccountsStr) {
+        const accs = JSON.parse(savedAccountsStr);
+        const active = accs.find((a: any) => a.id === activeId) || accs[0];
+        if (active) return !!active.isDemo;
+      }
+    } catch {}
+    return false;
+  });
+
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
-  // Chat Data State (for currently active user)
-  const [chats, setChats] = useState<TelegramChat[]>(INITIAL_CHATS);
+  // Chat Data State (Instantly restores real account chats without demo mock data)
+  const [chats, setChats] = useState<TelegramChat[]>(() => {
+    try {
+      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
+      const activeId = localStorage.getItem('tg_active_account_id');
+      if (savedAccountsStr) {
+        const accs = JSON.parse(savedAccountsStr);
+        const active = accs.find((a: any) => a.id === activeId) || accs[0];
+        if (active && !active.isDemo) {
+          const cached = localStorage.getItem('tg_real_chats_' + active.id);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+          const accountsData = localStorage.getItem('tg_accounts_data_map');
+          if (accountsData) {
+            const parsedData = JSON.parse(accountsData);
+            if (parsedData[active.id]?.chats?.length > 0) return parsedData[active.id].chats;
+          }
+          return [{
+            id: 'saved_messages',
+            title: 'الرسائل المحفوظة',
+            type: 'saved',
+            unreadCount: 0,
+            avatarColor: '#3390ec',
+            isPinned: true,
+            description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
+          }];
+        }
+      }
+    } catch {}
+    return [];
+  });
+
   const [selectedChatId, setSelectedChatId] = useState<string>('saved_messages');
-  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(INITIAL_MESSAGES);
+
+  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(() => {
+    try {
+      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
+      const activeId = localStorage.getItem('tg_active_account_id');
+      if (savedAccountsStr) {
+        const accs = JSON.parse(savedAccountsStr);
+        const active = accs.find((a: any) => a.id === activeId) || accs[0];
+        if (active && !active.isDemo) {
+          const accountsData = localStorage.getItem('tg_accounts_data_map');
+          if (accountsData) {
+            const parsedData = JSON.parse(accountsData);
+            if (parsedData[active.id]?.messagesMap) return parsedData[active.id].messagesMap;
+          }
+          return { saved_messages: [] };
+        }
+      }
+    } catch {}
+    return {};
+  });
   
   // UI & Navigation State
   const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
@@ -409,8 +486,20 @@ export default function App() {
           // Use locally saved accounts
           const currentAcc = accounts.find(a => a.id === activeAccountId) || accounts[0];
           setActiveAccountId(currentAcc.id);
+          localStorage.setItem('tg_active_account_id', currentAcc.id);
           setCurrentUser(currentAcc.user);
           setIsDemoMode(!!currentAcc.isDemo);
+          if (!currentAcc.isDemo) {
+            const cachedReal = localStorage.getItem('tg_real_chats_' + currentAcc.id);
+            if (cachedReal) {
+              try {
+                const parsed = JSON.parse(cachedReal);
+                if (Array.isArray(parsed) && parsed.length > 0) setChats(parsed);
+              } catch {}
+            }
+            loadMtprotoDialogs(currentAcc.sessionToken);
+            syncAccountAndSessionProfiles(currentAcc.sessionToken, currentAcc.id);
+          }
         } else {
           // Check single stored session fallback
           const savedSession = localStorage.getItem('tg_active_user');
@@ -848,6 +937,25 @@ export default function App() {
     };
   }, [activeAccountId, accounts, selectedChatId]);
 
+  // Automatically persist real account chats and messages to local storage
+  useEffect(() => {
+    if (activeAccountId && !isDemoMode && chats.length > 0) {
+      localStorage.setItem('tg_real_chats_' + activeAccountId, JSON.stringify(chats));
+      setAccountsDataMap((prev) => {
+        const updated = {
+          ...prev,
+          [activeAccountId]: {
+            chats,
+            messagesMap,
+            selectedChatId,
+          },
+        };
+        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
+        return updated;
+      });
+    }
+  }, [chats, messagesMap, selectedChatId, activeAccountId, isDemoMode]);
+
   // Auto-sync gap recovery when switching back to tab
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -860,7 +968,7 @@ export default function App() {
   }, [recoverGap]);
 
 
-  const loadMtprotoDialogs = async (token?: string) => {
+  const loadMtprotoDialogs = async (token?: string, retryCount = 0) => {
     try {
       const activeToken = token || localStorage.getItem('tg_active_session_token');
       const headers: Record<string, string> = {};
@@ -871,14 +979,29 @@ export default function App() {
       const res = await fetch(url, { headers });
       if (res.ok) {
         const data = await res.json();
-        if (data.dialogs && data.dialogs.length > 0) {
+        if (data.dialogs && Array.isArray(data.dialogs) && data.dialogs.length > 0) {
+          const realDialogs: TelegramChat[] = data.dialogs;
           setChats((prev) => {
-            const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
-            return [savedChat, ...data.dialogs.filter((d: any) => d.id !== 'saved_messages')];
+            const savedChat: TelegramChat = prev.find((p) => p.id === 'saved_messages') || {
+              id: 'saved_messages',
+              title: 'الرسائل المحفوظة',
+              type: 'saved',
+              unreadCount: 0,
+              avatarColor: '#3390ec',
+              isPinned: true,
+              description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
+            };
+            const finalChatList = [savedChat, ...realDialogs.filter((d) => d.id !== 'saved_messages')];
+            const currentAccId = activeAccountId || localStorage.getItem('tg_active_account_id');
+            if (currentAccId) {
+              localStorage.setItem('tg_real_chats_' + currentAccId, JSON.stringify(finalChatList));
+            }
+            return finalChatList;
           });
+
           setSelectedChatId((curr) => {
             if (!curr || curr === 'saved_messages') {
-              return data.dialogs[0]?.id || curr;
+              return realDialogs[0]?.id || curr || 'saved_messages';
             }
             return curr;
           });
@@ -886,9 +1009,14 @@ export default function App() {
         if (activeToken) {
           syncAccountAndSessionProfiles(activeToken);
         }
+      } else if (retryCount < 4) {
+        setTimeout(() => loadMtprotoDialogs(token, retryCount + 1), 1500 * (retryCount + 1));
       }
     } catch (err) {
       console.error('Error loading MTProto dialogs:', err);
+      if (retryCount < 4) {
+        setTimeout(() => loadMtprotoDialogs(token, retryCount + 1), 2000 * (retryCount + 1));
+      }
     }
   };
 
@@ -926,6 +1054,17 @@ export default function App() {
     setIsDemoMode(isDemo);
     localStorage.setItem('tg_active_user', JSON.stringify(user));
     if (!isDemo) {
+      const initialSaved: TelegramChat[] = [{
+        id: 'saved_messages',
+        title: 'الرسائل المحفوظة',
+        type: 'saved',
+        unreadCount: 0,
+        avatarColor: '#3390ec',
+        isPinned: true,
+        description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
+      }];
+      setChats(initialSaved);
+      setMessagesMap({});
       loadMtprotoDialogs(finalSessionToken);
       syncAccountAndSessionProfiles(finalSessionToken, newAcc.id);
     }
@@ -970,10 +1109,22 @@ export default function App() {
 
     // 4. Restore target account's isolated chats and messages
     const restored = accountsDataMap[target.id];
-    if (restored && restored.chats && restored.chats.length > 0) {
-      setChats(restored.chats);
-      setMessagesMap(restored.messagesMap);
-      setSelectedChatId(restored.selectedChatId || restored.chats[0]?.id || 'saved_messages');
+    let targetChats: TelegramChat[] = [];
+    const cachedReal = localStorage.getItem('tg_real_chats_' + target.id);
+    if (cachedReal) {
+      try {
+        const parsed = JSON.parse(cachedReal);
+        if (Array.isArray(parsed) && parsed.length > 0) targetChats = parsed;
+      } catch {}
+    }
+    if (targetChats.length === 0 && restored?.chats?.length) {
+      targetChats = restored.chats;
+    }
+
+    if (targetChats.length > 0) {
+      setChats(targetChats);
+      setMessagesMap(restored?.messagesMap || {});
+      setSelectedChatId(restored?.selectedChatId || targetChats[0]?.id || 'saved_messages');
     } else {
       // Clean isolated initial chat list for new user
       if (target.isDemo) {
@@ -981,7 +1132,16 @@ export default function App() {
         setMessagesMap(INITIAL_MESSAGES);
         setSelectedChatId('saved_messages');
       } else {
-        setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
+        const initialSaved: TelegramChat[] = [{
+          id: 'saved_messages',
+          title: 'الرسائل المحفوظة',
+          type: 'saved',
+          unreadCount: 0,
+          avatarColor: '#3390ec',
+          isPinned: true,
+          description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
+        }];
+        setChats(initialSaved);
         setSelectedChatId('saved_messages');
       }
     }
@@ -1031,7 +1191,16 @@ export default function App() {
       setMessagesMap(INITIAL_MESSAGES);
       setSelectedChatId('saved_messages');
     } else {
-      setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
+      const initialSaved: TelegramChat[] = [{
+        id: 'saved_messages',
+        title: 'الرسائل المحفوظة',
+        type: 'saved',
+        unreadCount: 0,
+        avatarColor: '#3390ec',
+        isPinned: true,
+        description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
+      }];
+      setChats(initialSaved);
       setSelectedChatId('saved_messages');
       loadMtprotoDialogs(newAccount.sessionToken);
       syncAccountAndSessionProfiles(newAccount.sessionToken, newAccount.id);
