@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { LogLevel } from 'telegram/extensions/Logger.js';
+import { NewMessage } from 'telegram/events/index.js';
 import fs from 'fs';
 import path from 'path';
 import { ensureTelegramPatch } from './patchTelegram.js';
@@ -413,21 +414,209 @@ export class TelegramService {
     }
   }
 
+  private static recentHandledMessageIds = new Map<string, number>();
+
+  /**
+   * Instantaneous NewMessage Event Handler (GramJS NewMessage)
+   * High-priority message processor with immediate entity resolution
+   */
+  public static async handleNewMessageEvent(sessionToken: string, event: any, client: TelegramClient) {
+    if (!TelegramService.onUpdateCallback || !event) return;
+
+    const m = event.message;
+    if (!m) return;
+
+    const msgIdStr = m.id ? String(m.id) : '';
+    const rawPeer = m.peerId || event.chatId;
+    const peerId =
+      (rawPeer?.channelId ? `-100${rawPeer.channelId}` : undefined) ||
+      (rawPeer?.chatId ? `-${rawPeer.chatId}` : undefined) ||
+      (rawPeer?.userId ? rawPeer.userId.toString() : undefined) ||
+      (event.chatId ? String(event.chatId) : undefined) ||
+      extractPeerId(rawPeer || 'user');
+
+    const dedupKey = `${sessionToken}_${msgIdStr}_${peerId}`;
+    const now = Date.now();
+    if (this.recentHandledMessageIds.has(dedupKey)) {
+      const ts = this.recentHandledMessageIds.get(dedupKey)!;
+      if (now - ts < 15000) return;
+    }
+    this.recentHandledMessageIds.set(dedupKey, now);
+
+    // Prune cache periodically
+    if (this.recentHandledMessageIds.size > 2000) {
+      for (const [k, v] of this.recentHandledMessageIds.entries()) {
+        if (now - v > 30000) this.recentHandledMessageIds.delete(k);
+      }
+    }
+
+    const isOut = Boolean(m.out);
+    const s = activeSessions.get(sessionToken);
+
+    // Resolve sender entity directly from message or event
+    let senderEntity: any = m.sender || m._sender;
+    if (!senderEntity && typeof m.getSender === 'function') {
+      try {
+        senderEntity = await m.getSender();
+      } catch (_) {}
+    }
+
+    const senderIdRaw = m.senderId
+      ? extractPeerId(m.senderId)
+      : m.fromId
+      ? extractPeerId(m.fromId)
+      : isOut
+      ? 'me'
+      : peerId;
+
+    if (!senderEntity && senderIdRaw && s && senderIdRaw !== 'me') {
+      senderEntity = s.fullEntityCache?.get(senderIdRaw) || s.entityCache?.get(senderIdRaw);
+    }
+
+    if (!senderEntity && client && senderIdRaw && senderIdRaw !== 'me' && senderIdRaw !== 'user') {
+      try {
+        senderEntity = await client.getEntity(senderIdRaw);
+      } catch (_) {}
+    }
+
+    if (senderEntity && s && senderIdRaw) {
+      s.fullEntityCache?.set(senderIdRaw, senderEntity);
+      s.entityCache?.set(senderIdRaw, senderEntity);
+    }
+
+    let senderName = '';
+    if (isOut) {
+      senderName = 'أنا';
+    } else if (senderEntity) {
+      const parts = [senderEntity.firstName, senderEntity.lastName].filter(Boolean);
+      if (parts.length > 0) {
+        senderName = parts.join(' ').trim();
+      } else if (senderEntity.title) {
+        senderName = senderEntity.title;
+      } else if (senderEntity.username) {
+        senderName = '@' + senderEntity.username;
+      }
+    }
+
+    if (!senderName && m.postAuthor) {
+      senderName = m.postAuthor;
+    }
+
+    // In a 1-to-1 private chat, incoming sender is the chat contact
+    if (!senderName && !isOut && (!peerId.startsWith('-') || event.isPrivate)) {
+      try {
+        const chatEntity = typeof event.getChat === 'function' ? await event.getChat() : null;
+        if (chatEntity) {
+          const parts = [chatEntity.firstName, chatEntity.lastName].filter(Boolean);
+          if (parts.length > 0) senderName = parts.join(' ').trim();
+          else if (chatEntity.title) senderName = chatEntity.title;
+          else if (chatEntity.username) senderName = '@' + chatEntity.username;
+        }
+      } catch (_) {}
+    }
+
+    if (!senderName) {
+      senderName = isOut ? 'أنا' : 'مستخدم';
+    }
+
+    let senderAvatar: string | undefined = undefined;
+    const finalSenderId = isOut ? 'me' : (senderIdRaw || peerId);
+    const photoObj = senderEntity?.photo || m.sender?.photo;
+    const hasPhoto = Boolean(
+      photoObj &&
+      photoObj.className !== 'UserProfilePhotoEmpty' &&
+      photoObj.className !== 'ChatPhotoEmpty'
+    );
+    if (hasPhoto && finalSenderId && finalSenderId !== 'me') {
+      senderAvatar = `/api/telegram/avatar/${encodeURIComponent(finalSenderId)}?token=${encodeURIComponent(sessionToken)}`;
+    }
+
+    const text = m.message || m.text || '';
+    TelegramService.onUpdateCallback(sessionToken, {
+      type: 'new_message',
+      className: 'UpdateNewMessage',
+      peerId,
+      message: {
+        id: m.id?.toString() || 'msg_' + Date.now(),
+        chatId: peerId,
+        senderId: finalSenderId,
+        senderName,
+        senderAvatar,
+        text,
+        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+        isOut,
+        status: isOut ? 'sent' : 'received',
+        replyTo: m.replyTo?.replyToMsgId ? { id: m.replyTo.replyToMsgId.toString() } : undefined,
+        media: m.media ? sanitizeData(m.media) : undefined,
+      },
+    });
+  }
+
   /**
    * Continuous UpdatesHandler matching Telegram Web K specification
    * Unpacks recursive Updates containers, new messages, reads, edits, deletes, typing indicators, and reactions
    */
-  public static handleMtprotoUpdate(sessionToken: string, update: any, client: TelegramClient) {
+  public static handleMtprotoUpdate(
+    sessionToken: string,
+    update: any,
+    client: TelegramClient,
+    inheritedUsers?: any[],
+    inheritedChats?: any[]
+  ) {
     if (!TelegramService.onUpdateCallback || !update) return;
 
     try {
       const className = update.className || update.constructor?.name || '';
+      const s = activeSessions.get(sessionToken);
+
+      // Seed entity cache from top-level updates
+      if (s) {
+        if (!s.fullEntityCache) s.fullEntityCache = new Map();
+        if (!s.entityCache) s.entityCache = new Map();
+
+        const allUsers = [
+          ...(Array.isArray(update.users) ? update.users : []),
+          ...(Array.isArray(inheritedUsers) ? inheritedUsers : []),
+        ];
+        for (const u of allUsers) {
+          if (!u) continue;
+          const uid = extractPeerId(u.id || u);
+          if (uid) {
+            s.fullEntityCache.set(uid, u);
+            s.entityCache.set(uid, u);
+            if (u.username) s.fullEntityCache.set(u.username.toLowerCase(), u);
+          }
+        }
+
+        const allChats = [
+          ...(Array.isArray(update.chats) ? update.chats : []),
+          ...(Array.isArray(inheritedChats) ? inheritedChats : []),
+        ];
+        for (const c of allChats) {
+          if (!c) continue;
+          const cid = extractPeerId(c.id || c);
+          if (cid) {
+            s.fullEntityCache.set(cid, c);
+            s.fullEntityCache.set(`-${cid}`, c);
+            s.fullEntityCache.set(`-100${cid}`, c);
+            s.entityCache.set(cid, c);
+            if (c.username) s.fullEntityCache.set(c.username.toLowerCase(), c);
+          }
+        }
+
+        if (update._entities instanceof Map) {
+          for (const [key, ent] of update._entities.entries()) {
+            s.fullEntityCache.set(String(key), ent);
+            s.entityCache.set(String(key), ent);
+          }
+        }
+      }
 
       // 1. Unpack bulk updates (Updates or UpdatesCombined container)
       if (className === 'Updates' || className === 'UpdatesCombined') {
         if (Array.isArray(update.updates)) {
           for (const subUpdate of update.updates) {
-            this.handleMtprotoUpdate(sessionToken, subUpdate, client);
+            this.handleMtprotoUpdate(sessionToken, subUpdate, client, update.users, update.chats);
           }
         }
         return;
@@ -435,7 +624,7 @@ export class TelegramService {
 
       // 2. Unpack UpdateShort
       if (className === 'UpdateShort' && update.update) {
-        this.handleMtprotoUpdate(sessionToken, update.update, client);
+        this.handleMtprotoUpdate(sessionToken, update.update, client, inheritedUsers, inheritedChats);
         return;
       }
 
@@ -447,7 +636,7 @@ export class TelegramService {
         className === 'UpdateShortChatMessage'
       ) {
         const msg = update.message || update;
-        const text = msg.message || msg.text || '';
+        const msgIdStr = msg.id ? String(msg.id) : '';
         const rawPeer = msg.peerId;
         const peerId =
           (rawPeer?.channelId ? `-100${rawPeer.channelId}` : undefined) ||
@@ -457,12 +646,22 @@ export class TelegramService {
           (msg.userId ? msg.userId.toString() : undefined) ||
           extractPeerId(rawPeer || msg.fromId || 'user');
 
+        const dedupKey = `${sessionToken}_${msgIdStr}_${peerId}`;
+        const now = Date.now();
+        if (this.recentHandledMessageIds.has(dedupKey)) {
+          const ts = this.recentHandledMessageIds.get(dedupKey)!;
+          if (now - ts < 15000) return;
+        }
+        this.recentHandledMessageIds.set(dedupKey, now);
+
+        const text = msg.message || msg.text || '';
         const senderInfo = TelegramService.resolveSenderInfo(
           msg,
           sessionToken,
           client,
-          (update as any).users,
-          (update as any).chats
+          update.users || inheritedUsers,
+          update.chats || inheritedChats,
+          peerId
         );
 
         TelegramService.onUpdateCallback(sessionToken, {
@@ -717,6 +916,18 @@ export class TelegramService {
         throw connErr;
       }
 
+      // Register high-priority NewMessage event handler for instantaneous message receipt
+      try {
+        client.addEventHandler(async (event: any) => {
+          TelegramService.handleNewMessageEvent(sessionToken, event, client).catch((err) => {
+            console.warn('[TelegramService] NewMessage handler error:', err?.message || err);
+          });
+        }, new NewMessage({}));
+      } catch (handlerErr) {
+        console.warn('Could not attach NewMessage handler:', handlerErr);
+      }
+
+      // Register raw update handler for read receipts, deletes, typing, edits
       try {
         client.addEventHandler(async (update: any) => {
           TelegramService.handleMtprotoUpdate(sessionToken, update, client);
@@ -1408,7 +1619,8 @@ export class TelegramService {
           sessionToken,
           client,
           (messages as any)?.users,
-          (messages as any)?.chats
+          (messages as any)?.chats,
+          peerId
         );
 
         return {
@@ -2583,7 +2795,9 @@ export class TelegramService {
     sessionToken: string,
     client?: any,
     users?: any[],
-    chats?: any[]
+    chats?: any[],
+    peerId?: string,
+    chatTitle?: string
   ): { senderId: string; senderName: string; senderAvatar?: string } {
     const isOut = Boolean(m.out);
     let senderId = '';
@@ -2596,6 +2810,8 @@ export class TelegramService {
       senderId = extractPeerId(m.fromId);
     } else if (m.peerId) {
       senderId = extractPeerId(m.peerId);
+    } else if (peerId) {
+      senderId = extractPeerId(peerId);
     } else {
       senderId = 'user';
     }
@@ -2613,7 +2829,7 @@ export class TelegramService {
       if (Array.isArray(users)) {
         for (const u of users) {
           if (!u) continue;
-          const uid = extractPeerId(u.id);
+          const uid = extractPeerId(u.id || u);
           if (uid) {
             s.fullEntityCache.set(uid, u);
             s.entityCache.set(uid, u);
@@ -2626,9 +2842,11 @@ export class TelegramService {
       if (Array.isArray(chats)) {
         for (const c of chats) {
           if (!c) continue;
-          const cid = extractPeerId(c.id);
+          const cid = extractPeerId(c.id || c);
           if (cid) {
             s.fullEntityCache.set(cid, c);
+            s.fullEntityCache.set(`-${cid}`, c);
+            s.fullEntityCache.set(`-100${cid}`, c);
             s.entityCache.set(cid, c);
             if (c.username) {
               s.fullEntityCache.set(c.username.toLowerCase(), c);
@@ -2642,6 +2860,10 @@ export class TelegramService {
     let entity: any = m.sender || m._sender;
     const cleanId = senderId.replace(/^-100/, '').replace(/^-/, '');
 
+    if (!entity && m._entities instanceof Map && senderId) {
+      entity = m._entities.get(senderId) || m._entities.get(cleanId);
+    }
+
     if (!entity && s && senderId) {
       entity =
         s.fullEntityCache?.get(senderId) ||
@@ -2652,14 +2874,14 @@ export class TelegramService {
 
     if (!entity && Array.isArray(users) && senderId) {
       entity = users.find((u: any) => {
-        const uid = extractPeerId(u.id);
+        const uid = extractPeerId(u.id || u);
         return uid === senderId || uid === cleanId;
       });
     }
 
     if (!entity && Array.isArray(chats) && senderId) {
       entity = chats.find((c: any) => {
-        const cid = extractPeerId(c.id);
+        const cid = extractPeerId(c.id || c);
         return cid === senderId || cid === cleanId || cid === '-100' + cleanId;
       });
     }
@@ -2668,6 +2890,12 @@ export class TelegramService {
       try {
         entity = (client as any)._entityCache.get(senderId) || (client as any)._entityCache.get(cleanId);
       } catch (_) {}
+    }
+
+    // In a 1-to-1 private chat, incoming messages are from the peer
+    if (!entity && peerId && !peerId.startsWith('-') && s) {
+      const cleanPeer = peerId.replace(/^-100/, '').replace(/^-/, '');
+      entity = s.fullEntityCache?.get(peerId) || s.fullEntityCache?.get(cleanPeer);
     }
 
     if (entity && s && senderId) {
@@ -2690,14 +2918,18 @@ export class TelegramService {
       }
     }
 
+    if (!senderName && m.postAuthor) {
+      senderName = m.postAuthor;
+    } else if (!senderName && m.sender?.title) {
+      senderName = m.sender.title;
+    }
+
+    if (!senderName && chatTitle && (!peerId || !peerId.startsWith('-'))) {
+      senderName = chatTitle;
+    }
+
     if (!senderName) {
-      if (m.postAuthor) {
-        senderName = m.postAuthor;
-      } else if (m.sender?.title) {
-        senderName = m.sender.title;
-      } else {
-        senderName = 'مستخدم';
-      }
+      senderName = 'مستخدم';
     }
 
     let senderAvatar: string | undefined = undefined;

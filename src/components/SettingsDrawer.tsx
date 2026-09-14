@@ -161,11 +161,43 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [animationsEnabled, setAnimationsEnabled] = useState(themeConfig.animations ?? true);
   const [autoplayMedia, setAutoplayMedia] = useState(true);
 
-  // Notifications state
-  const [notifyPrivate, setNotifyPrivate] = useState(true);
-  const [notifyGroups, setNotifyGroups] = useState(true);
-  const [notifyChannels, setNotifyChannels] = useState(true);
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  // Notifications state (Persisted in localStorage)
+  const [notifyPrivate, setNotifyPrivate] = useState(() => localStorage.getItem('tg_notify_private') !== 'false');
+  const [notifyGroups, setNotifyGroups] = useState(() => localStorage.getItem('tg_notify_groups') !== 'false');
+  const [notifyChannels, setNotifyChannels] = useState(() => localStorage.getItem('tg_notify_channels') !== 'false');
+  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('tg_sound_enabled') !== 'false');
+
+  const toggleNotifyPrivate = () => {
+    setNotifyPrivate((prev) => {
+      const next = !prev;
+      localStorage.setItem('tg_notify_private', String(next));
+      return next;
+    });
+  };
+
+  const toggleNotifyGroups = () => {
+    setNotifyGroups((prev) => {
+      const next = !prev;
+      localStorage.setItem('tg_notify_groups', String(next));
+      return next;
+    });
+  };
+
+  const toggleNotifyChannels = () => {
+    setNotifyChannels((prev) => {
+      const next = !prev;
+      localStorage.setItem('tg_notify_channels', String(next));
+      return next;
+    });
+  };
+
+  const toggleSoundEnabled = () => {
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem('tg_sound_enabled', String(next));
+      return next;
+    });
+  };
 
   // Web Push state
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -1910,7 +1942,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               {/* Chats notifications */}
               <div className="space-y-3">
                 <div
-                  onClick={() => setNotifyPrivate(!notifyPrivate)}
+                  onClick={toggleNotifyPrivate}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'المحادثات الخاصة' : 'Private Chats'}</span>
@@ -1920,7 +1952,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={() => setNotifyGroups(!notifyGroups)}
+                  onClick={toggleNotifyGroups}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'المجموعات' : 'Groups'}</span>
@@ -1930,7 +1962,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={() => setNotifyChannels(!notifyChannels)}
+                  onClick={toggleNotifyChannels}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'القنوات' : 'Channels'}</span>
@@ -1940,7 +1972,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={() => setSoundEnabled(!soundEnabled)}
+                  onClick={toggleSoundEnabled}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'أصوات التنبيه' : 'Sound Effects'}</span>

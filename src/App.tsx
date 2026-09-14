@@ -14,6 +14,9 @@ import { TelegramPeerStories } from './types';
 import { AddAccountModal } from './components/AddAccountModal';
 import { MiniAppModal } from './components/MiniAppModal';
 import { Toast, ToastData } from './components/Toast';
+import { playTelegramChime } from './utils/notificationSound';
+import { requestNotificationPermission, showDesktopNotification } from './utils/desktopNotifications';
+import { NotificationBanner, InAppNotification } from './components/NotificationBanner';
 import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
 import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
 import { ShareLinkModal } from './components/modals/ShareLinkModal';
@@ -290,6 +293,31 @@ export default function App() {
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     setToast({ id: String(Date.now()), message, type });
   };
+
+  // In-app Notification Banner state
+  const [inAppNotification, setInAppNotification] = useState<InAppNotification | null>(null);
+
+  // Dynamic Unread Counter in Document Title
+  useEffect(() => {
+    const totalUnread = chats.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
+    if (totalUnread > 0) {
+      document.title = `(${totalUnread}) Telegram Web`;
+    } else {
+      document.title = 'Telegram Web';
+    }
+  }, [chats]);
+
+  // Request desktop notification permission smoothly upon login
+  useEffect(() => {
+    if (currentUser && typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        const timer = setTimeout(() => {
+          requestNotificationPermission().catch(() => {});
+        }, 2500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [currentUser]);
 
   // Bot Mini App opener
   const handleOpenMiniApp = (url?: string, appName?: string) => {
@@ -838,6 +866,52 @@ export default function App() {
         }
         const targetChatId = String(event.peerId || msg.chatId || selectedChatId);
 
+        // Immediate Sound & Real-time Notification Dispatch for Incoming Messages
+        if (!msg.isOut) {
+          // 1. Play signature Telegram notification chime
+          playTelegramChime();
+
+          // Find chat details if available
+          const currentChat = chats.find((c) => c.id === targetChatId);
+          const senderDisplayName =
+            msg.senderName || currentChat?.title || (themeConfig.language === 'ar' ? 'مستخدم' : 'User');
+          const previewText =
+            msg.text ||
+            (msg.media?.type
+              ? `[${msg.media.type}]`
+              : themeConfig.language === 'ar'
+              ? 'رسالة جديدة'
+              : 'New message');
+
+          // 2. Desktop notification if page is hidden or different chat
+          if (document.hidden || targetChatId !== selectedChatId) {
+            showDesktopNotification({
+              title:
+                currentChat && currentChat.title !== senderDisplayName
+                  ? `${senderDisplayName} (${currentChat.title})`
+                  : senderDisplayName,
+              body: previewText,
+              icon: msg.senderAvatar || currentChat?.avatarUrl,
+              tag: `tg_msg_${targetChatId}`,
+              onClick: () => {
+                setSelectedChatId(targetChatId);
+                setIsMobileChatOpen(true);
+              },
+            });
+
+            // 3. In-app floating notification banner
+            setInAppNotification({
+              id: msg.id || 'notif_' + Date.now(),
+              chatId: targetChatId,
+              senderName: senderDisplayName,
+              senderAvatar: msg.senderAvatar || currentChat?.avatarUrl,
+              chatTitle: currentChat?.title,
+              text: previewText,
+              timestamp: msg.timestamp || Date.now(),
+            });
+          }
+        }
+
         setMessagesMap((prev) => {
           const currentList = prev[targetChatId] || [];
           if (currentList.some((m) => m.id === msg.id)) {
@@ -855,9 +929,16 @@ export default function App() {
             const listCopy = [...prev];
             const chatToUpdate = {
               ...listCopy[existingIdx],
-              unreadCount: listCopy[existingIdx].id === selectedChatId ? 0 : (listCopy[existingIdx].unreadCount || 0) + 1,
+              unreadCount:
+                listCopy[existingIdx].id === selectedChatId ? 0 : (listCopy[existingIdx].unreadCount || 0) + 1,
               lastMessage: {
-                text: msg.text || '[وسائط]',
+                text:
+                  msg.text ||
+                  (msg.media?.type
+                    ? `[${msg.media.type}]`
+                    : themeConfig.language === 'ar'
+                    ? '[وسائط]'
+                    : '[Media]'),
                 timestamp: msg.timestamp || Date.now(),
                 isOut: !!msg.isOut,
                 senderName: msg.senderName,
@@ -866,8 +947,34 @@ export default function App() {
             };
             listCopy.splice(existingIdx, 1);
             return [chatToUpdate, ...listCopy];
+          } else {
+            // New incoming chat not previously in list: dynamically prepend
+            const newChat: TelegramChat = {
+              id: targetChatId,
+              title: msg.senderName || (themeConfig.language === 'ar' ? 'محادثة جديدة' : 'New Chat'),
+              type: targetChatId.startsWith('-100')
+                ? 'supergroup'
+                : targetChatId.startsWith('-')
+                ? 'group'
+                : 'private',
+              avatarUrl: msg.senderAvatar,
+              unreadCount: targetChatId === selectedChatId ? 0 : 1,
+              lastMessage: {
+                text:
+                  msg.text ||
+                  (msg.media?.type
+                    ? `[${msg.media.type}]`
+                    : themeConfig.language === 'ar'
+                    ? '[وسائط]'
+                    : '[Media]'),
+                timestamp: msg.timestamp || Date.now(),
+                isOut: !!msg.isOut,
+                senderName: msg.senderName,
+                senderAvatar: msg.senderAvatar,
+              },
+            };
+            return [newChat, ...prev];
           }
-          return prev;
         });
       } else if (event.type === 'message_read' && event.peerId) {
         const targetChatId = event.peerId;
@@ -2153,6 +2260,18 @@ export default function App() {
 
       {/* Toast Notification */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+
+      {/* In-App Floating Notification Banner */}
+      <NotificationBanner
+        notification={inAppNotification}
+        onDismiss={() => setInAppNotification(null)}
+        onOpenChat={(chatId) => {
+          setSelectedChatId(chatId);
+          setIsMobileChatOpen(true);
+        }}
+        isDark={themeConfig.isDark}
+        isAr={themeConfig.language === 'ar'}
+      />
 
       {/* Settings & Main Menu Drawer */}
       <SettingsDrawer

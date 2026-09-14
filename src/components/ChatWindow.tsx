@@ -1071,12 +1071,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           // Consecutive grouping logic (Web K algorithm)
           const isSameSenderPrev =
             prevMsg &&
-            prevMsg.senderId === msg.senderId &&
+            prevMsg.isOut === msg.isOut &&
+            (msg.senderId && prevMsg.senderId && msg.senderId !== 'user'
+              ? prevMsg.senderId === msg.senderId
+              : Boolean(msg.senderName && prevMsg.senderName && msg.senderName === prevMsg.senderName)) &&
             Math.abs(msg.timestamp - prevMsg.timestamp) < 5 * 60 * 1000;
 
           const isSameSenderNext =
             nextMsg &&
-            nextMsg.senderId === msg.senderId &&
+            nextMsg.isOut === msg.isOut &&
+            (msg.senderId && nextMsg.senderId && msg.senderId !== 'user'
+              ? nextMsg.senderId === msg.senderId
+              : Boolean(msg.senderName && nextMsg.senderName && msg.senderName === nextMsg.senderName)) &&
             Math.abs(nextMsg.timestamp - msg.timestamp) < 5 * 60 * 1000;
 
           const isFirstInGroup = !isSameSenderPrev;
@@ -1145,13 +1151,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 )}
 
                 {/* Left Avatar for Incoming Group/Supergroup/Channel Messages */}
-                {!isOut && chat.type !== 'private' && (
+                {!isOut && (chat.id.startsWith('-') || chat.type === 'group' || chat.type === 'supergroup' || chat.type === 'channel') && (
                   <div className="w-8 shrink-0 select-none">
                     {isLastInGroup ? (
                       msg.senderAvatar ? (
                         <img
                           src={msg.senderAvatar}
-                          alt={msg.senderName}
+                          alt={msg.senderName || chat.title}
                           referrerPolicy="no-referrer"
                           className="w-8 h-8 rounded-full object-cover shadow-sm"
                         />
@@ -1160,7 +1166,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                           className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold shadow-sm"
                           style={{ backgroundColor: senderColor }}
                         >
-                          {msg.senderName.slice(0, 1)}
+                          {(msg.senderName || chat.title || '؟').slice(0, 1)}
                         </div>
                       )
                     ) : (
@@ -1192,12 +1198,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   } px-3 pt-2 pb-1.5`}
                 >
                   {/* Sender Name in Groups (with official Telegram Color) */}
-                  {!isOut && isFirstInGroup && chat.type !== 'private' && (
+                  {!isOut && isFirstInGroup && (chat.id.startsWith('-') || chat.type === 'group' || chat.type === 'supergroup' || chat.type === 'channel') && (
                     <span
                       className="text-xs font-bold block mb-1 hover:underline cursor-pointer select-none"
                       style={{ color: senderColor }}
                     >
-                      {msg.senderName}
+                      {msg.senderName || chat.title}
                     </span>
                   )}
 
