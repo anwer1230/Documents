@@ -56,6 +56,7 @@ import {
 import api, { Api } from '../services/api';
 import { csrfFetch } from '../services/csrfFetch';
 import { PrivacySettings } from './PrivacySettings';
+import { VAPID_SUBJECT } from '../config';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -1979,7 +1980,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </p>
 
                 <div className="text-[11px] font-mono text-gray-500 bg-gray-500/10 p-2 rounded-lg truncate">
-                  mailto:anwrfwad178@gmail.com
+                  {VAPID_SUBJECT}
                 </div>
 
                 {pushStatusText && (
@@ -2491,7 +2492,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <div className={`p-3 rounded-xl border ${themeConfig.isDark ? 'bg-[#0e1621] border-gray-700' : 'bg-gray-50 border-gray-300'}`}>
                   <div className="text-gray-400 text-[10px] uppercase">{isAr ? 'بريد VAPID المعتمد' : 'VAPID SUBJECT'}</div>
                   <div className="font-bold text-white text-xs mt-0.5 select-all">
-                    mailto:anwrfwad178@gmail.com
+                    {VAPID_SUBJECT}
                   </div>
                 </div>
 
