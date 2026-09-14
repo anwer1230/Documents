@@ -137,6 +137,7 @@ export interface TelegramMessage {
   timestamp: number;
   isOut: boolean;
   status: 'sending' | 'sent' | 'read' | 'error';
+  seenBy?: string[];
   replyTo?: {
     id: string;
     senderName: string;
@@ -153,6 +154,11 @@ export interface TelegramMessage {
   topicId?: number;
   entities?: TelegramMessageEntity[];
   scheduledTime?: number;
+  starGift?: {
+    amount: number;
+    message?: string;
+    from: string;
+  };
   starsGift?: {
     amount: number;
     message?: string;

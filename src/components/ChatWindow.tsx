@@ -1319,9 +1319,30 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-gray-400 select-none float-end ms-2">
                     <span>{formatMessageTime(msg.timestamp)}</span>
                     {isOut && (
-                      <span className="inline-flex">
-                        {msg.status === 'read' ? (
+                      <span
+                        className="inline-flex items-center"
+                        title={
+                          msg.status === 'read' || (msg.seenBy && msg.seenBy.length > 0)
+                            ? msg.seenBy && msg.seenBy.length > 0
+                              ? isAr
+                                ? `تمت المشاهدة بواسطة: ${msg.seenBy.join(', ')}`
+                                : `Seen by: ${msg.seenBy.join(', ')}`
+                              : isAr
+                              ? 'تمت المشاهدة'
+                              : 'Seen'
+                            : msg.status === 'sending'
+                            ? isAr
+                              ? 'جاري الإرسال...'
+                              : 'Sending...'
+                            : isAr
+                            ? 'تم الإرسال'
+                            : 'Sent'
+                        }
+                      >
+                        {msg.status === 'read' || (msg.seenBy && msg.seenBy.length > 0) ? (
                           <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : msg.status === 'sending' ? (
+                          <Clock className="w-3.5 h-3.5 text-gray-400 animate-pulse" />
                         ) : (
                           <Check className="w-3.5 h-3.5 text-gray-400" />
                         )}
@@ -1560,6 +1581,35 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           </button>
 
           <div className="my-1 border-t border-gray-700/20" />
+
+          {contextMenu.message.isOut && (
+            <div
+              className={`px-3.5 py-1.5 text-[11px] flex items-center gap-2 select-none border-b ${
+                isDark ? 'border-gray-700/30 text-gray-400' : 'border-gray-200 text-gray-500'
+              }`}
+            >
+              {contextMenu.message.status === 'read' ||
+              (contextMenu.message.seenBy && contextMenu.message.seenBy.length > 0) ? (
+                <>
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate font-medium">
+                    {contextMenu.message.seenBy && contextMenu.message.seenBy.length > 0
+                      ? isAr
+                        ? `شوهدت بواسطة (${contextMenu.message.seenBy.length})`
+                        : `Seen by (${contextMenu.message.seenBy.length})`
+                      : isAr
+                      ? 'تمت مشاهدة الرسالة'
+                      : 'Message seen'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span>{isAr ? 'تم تسليم الرسالة' : 'Message delivered'}</span>
+                </>
+              )}
+            </div>
+          )}
 
           {contextMenu.message.isOut && (
             <button

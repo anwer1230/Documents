@@ -543,6 +543,7 @@ export class TelegramService {
           peerId,
           messageId: update.maxId?.toString(),
           isOutbox: true,
+          readerId: peerId,
         });
         return;
       }
@@ -1420,6 +1421,7 @@ export class TelegramService {
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
           status: m.out ? 'read' : 'sent',
+          seenBy: m.out ? [peerId] : [],
           media: mediaType
             ? {
                 type: mediaType,
@@ -2031,6 +2033,7 @@ export class TelegramService {
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
           status: m.out ? 'read' : 'sent',
+          seenBy: m.out ? [peerId] : [],
           media,
         };
       });

@@ -871,13 +871,20 @@ export default function App() {
         });
       } else if (event.type === 'message_read' && event.peerId) {
         const targetChatId = event.peerId;
+        const readerId = (event as any).readerId || (event as any).userId || targetChatId;
         setMessagesMap((prev) => {
           const list = prev[targetChatId];
           if (!list) return prev;
           return {
             ...prev,
             [targetChatId]: list.map((m) =>
-              m.isOut ? { ...m, status: 'read' as const } : m
+              m.isOut
+                ? {
+                    ...m,
+                    status: 'read' as const,
+                    seenBy: Array.from(new Set([...(m.seenBy || []), readerId])),
+                  }
+                : m
             ),
           };
         });
@@ -1319,9 +1326,18 @@ export default function App() {
     // Mark unread as read in UI
     setMessagesMap((prev) => {
       if (prev[chat.id] && prev[chat.id].length > 0) {
+        const myId = currentUser?.id || 'me';
         return {
           ...prev,
-          [chat.id]: prev[chat.id].map((m) => (!m.isOut ? { ...m, status: 'read' as const } : m)),
+          [chat.id]: prev[chat.id].map((m) =>
+            !m.isOut
+              ? {
+                  ...m,
+                  status: 'read' as const,
+                  seenBy: Array.from(new Set([...(m.seenBy || []), myId])),
+                }
+              : m
+          ),
         };
       }
       return prev;
@@ -1480,6 +1496,7 @@ export default function App() {
       timestamp: Date.now(),
       isOut: true,
       status: 'sent',
+      seenBy: [],
       replyTo: replyTo
         ? {
             id: replyTo.id,
@@ -1704,10 +1721,22 @@ export default function App() {
           reactions: [{ emoji: emojiReaction, count: 1, userReacted: false }],
         };
 
-        setMessagesMap((prev) => ({
-          ...prev,
-          [selectedChatId]: [...(prev[selectedChatId] || []), autoReply],
-        }));
+        setMessagesMap((prev) => {
+          const currentList = prev[selectedChatId] || [];
+          const updatedList = currentList.map((m) =>
+            m.isOut
+              ? {
+                  ...m,
+                  status: 'read' as const,
+                  seenBy: Array.from(new Set([...(m.seenBy || []), senderId])),
+                }
+              : m
+          );
+          return {
+            ...prev,
+            [selectedChatId]: [...updatedList, autoReply],
+          };
+        });
 
         setChats((prev) =>
           prev.map((c) => {
