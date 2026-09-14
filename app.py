@@ -2150,6 +2150,7 @@ class TelegramLogin:
         self.user_id = user_id
         self.client = None
         self.loop = None
+        self._connect_future = None
         self.thread = None
         self.is_ready = threading.Event()
         self.phone_code_hash = None
@@ -2165,8 +2166,11 @@ class TelegramLogin:
 
     async def _connect(self):
         """الاتصال بخوادم تيليجرام مع إعادة المحاولة — يعمل على الحلقة المشتركة"""
-        max_attempts = 5
-        timeout = 40
+        # لا نترك طلب الدخول معلقاً لعدة دقائق.  كان مجموع مهلات المحاولات
+        # أكبر من مهلة start()، فتعود الخلفية بالفشل بينما تبقى مهمة الاتصال
+        # القديمة حية ولا يصل التنفيذ أبداً إلى send_code().
+        max_attempts = 3
+        timeout = 15
         for attempt in range(1, max_attempts + 1):
             try:
                 if attempt > 1:
@@ -2174,7 +2178,7 @@ class TelegramLogin:
                     socketio.emit('log_update', {
                         "message": f"🔄 إعادة المحاولة {attempt}/{max_attempts}..."
                     }, to=self.user_id)
-                    await asyncio.sleep(4)
+                    await asyncio.sleep(2)
 
                 await asyncio.wait_for(self.client.connect(), timeout=timeout)
                 try:
@@ -2187,7 +2191,8 @@ class TelegramLogin:
 
                 if self.connected:
                     logger.info(f"[{self.user_id}] ✅ اتصل بنجاح في المحاولة {attempt}")
-                    break
+                    self.is_ready.set()
+                    return
 
                 logger.warning(f"[{self.user_id}] المحاولة {attempt}: الاتصال غير مستقر")
 
@@ -2213,6 +2218,14 @@ class TelegramLogin:
                     socketio.emit('log_update', {
                         "message": f"❌ فشل الاتصال: {err_str[:120]}"
                     }, to=self.user_id)
+            finally:
+                # أعد ضبط اتصال Telethon قبل المحاولة التالية حتى لا تبقى
+                # coroutine قديمة أو socket عالقاً يمنع الاتصال الجديد.
+                if not self.connected and self.client:
+                    try:
+                        await asyncio.wait_for(self.client.disconnect(), timeout=3)
+                    except Exception:
+                        pass
 
         if not self.is_ready.is_set():
             self.is_ready.set()
@@ -2234,9 +2247,9 @@ class TelegramLogin:
                     _ConnType = None
 
             client_kwargs = dict(
-                connection_retries=5,
-                retry_delay=2,
-                timeout=40,
+                connection_retries=1,
+                retry_delay=1,
+                timeout=15,
             )
             if _ConnType is not None:
                 client_kwargs['connection'] = _ConnType
@@ -2253,13 +2266,27 @@ class TelegramLogin:
             except Exception as _dc_err:
                 logger.warning(f"[{self.user_id}] تعذّر تعيين DC2: {_dc_err}")
 
-            # الانتظار: 5 محاولات × 40 ثانية + 4 × 4 ثوانٍ بين المحاولات = ~216 ثانية
+            # الانتظار: 3 محاولات × 15 ثانية + فواصل قصيرة؛ لا تتجاوز
+            # المهلة الكلية كي لا نترك مهمة اتصال قديمة تعمل بعد الفشل.
             future = asyncio.run_coroutine_threadsafe(self._connect(), self.loop)
+            self._connect_future = future
             try:
-                future.result(timeout=150)
+                future.result(timeout=60)
+            except TimeoutError:
+                logger.error(f"[{self.user_id}] انتهت مهلة بدء الاتصال")
+                future.cancel()
+                self.connected = False
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.client.disconnect(), self.loop
+                    ).result(timeout=5)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"[{self.user_id}] فشل start(): {e}")
                 self.connected = False
+            finally:
+                self._connect_future = None
 
             return self.connected
 
@@ -2271,6 +2298,8 @@ class TelegramLogin:
 
     def stop(self):
         """قطع اتصال العميل — لا نوقف الحلقة المشتركة لأنها مشتركة بين المستخدمين"""
+        if self._connect_future and not self._connect_future.done():
+            self._connect_future.cancel()
         if self.client and self.loop and self.loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -2289,7 +2318,7 @@ class TelegramLogin:
                 self.client.send_code_request(phone_number),
                 self.loop
             )
-            result = future.result(timeout=30)
+            result = future.result(timeout=45)
             self.phone_number = phone_number
             self.phone_code_hash = result.phone_code_hash
             self.awaiting_code = True
@@ -2571,7 +2600,7 @@ class TelegramManager:
             # ── تشغيل الاتصال في خيط OS حقيقي لتجنب توقف الخادم ──
             def _bg_connect():
                 try:
-                    connected = login.start()  # ينتظر حتى 30 ثانية
+                    connected = login.start()  # ينتظر حتى 60 ثانية كحد أقصى
                     if not connected:
                         logger.error(f"Login connection failed for {user_id}")
                         socketio.emit('login_result', {
