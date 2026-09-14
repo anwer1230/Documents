@@ -1,0 +1,6 @@
+project_id       = "documents-staging-project"
+primary_region   = "us-central1"
+secondary_region = "europe-west1"
+app_name         = "telegram-web-staging"
+image_tag        = "staging-latest"
+domain           = "staging.telegram.example.com"
