@@ -1595,7 +1595,7 @@ async function startServer() {
   // 3.4: Clear Cache
   app.post(['/api/account/clear-cache', '/api/system/clear-cache'], async (req, res) => {
     try {
-      redisCache.clear();
+      await redisCache.clearAll();
       res.json({ success: true, freedBytes: 1024 * 1024 * 5, message: 'تم مسح ذاكرة التخزين المؤقت بنجاح' });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'فشل مسح الذاكرة المؤقتة' });

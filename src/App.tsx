@@ -22,6 +22,7 @@ import { Loader2 } from 'lucide-react';
 import { wsClient } from './utils/websocket';
 import { Api } from './services/api';
 import { csrfFetch } from './services/csrfFetch';
+import { initTelegramWeb } from './index';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -42,6 +43,10 @@ export default function App() {
     };
   });
 
+  // Official Telegram Web RootScope lifecycle initialization
+  useEffect(() => {
+    initTelegramWeb().catch((e) => console.warn('[TelegramWeb] RootScope init:', e));
+  }, []);
   // Multi-Accounts State (Support up to 6 isolated users)
   const [accounts, setAccounts] = useState<TelegramAccount[]>(() => {
     const saved = localStorage.getItem('tg_multi_accounts');

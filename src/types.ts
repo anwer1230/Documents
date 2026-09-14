@@ -106,6 +106,7 @@ export interface TelegramForumTopic {
   unreadCount?: number;
   isClosed?: boolean;
   isPinned?: boolean;
+  isEdited?: boolean;
   lastMessage?: {
     text: string;
     timestamp: number;
@@ -144,6 +145,7 @@ export interface TelegramMessage {
   media?: TelegramMedia;
   reactions?: TelegramReaction[];
   isPinned?: boolean;
+  isEdited?: boolean;
   isForwarded?: boolean;
   forwardedFrom?: string;
   replyMarkup?: TelegramReplyMarkup;
