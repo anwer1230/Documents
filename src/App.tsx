@@ -28,6 +28,9 @@ import { wsClient } from './utils/websocket';
 import { Api } from './services/api';
 import { csrfFetch } from './services/csrfFetch';
 import { initTelegramWeb } from './index';
+import { updatesBatchScheduler } from './services/UpdatesBatchScheduler';
+import { channelDifferenceService } from './services/ChannelDifferenceService';
+import { draftSyncService } from './services/DraftSyncService';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -848,6 +851,113 @@ export default function App() {
     }
   }, [activeAccountId, isDemoMode, applySyncBatchMessages, accounts, syncAccountAndSessionProfiles]);
 
+  // UpdatesBatchScheduler subscription for silky-smooth 60fps message updates
+  useEffect(() => {
+    const unsubscribe = updatesBatchScheduler.subscribe((batchUpdates) => {
+      setMessagesMap((prev) => {
+        let updated = { ...prev };
+        let hasChanges = false;
+
+        for (const update of batchUpdates) {
+          const targetChatId = update.chatId;
+          if (update.type === 'message') {
+            const currentList = updated[targetChatId] || [];
+            const msg = update.data;
+            if (msg && msg.id && !currentList.some((m) => m.id === msg.id)) {
+              updated[targetChatId] = [...currentList, msg];
+              hasChanges = true;
+            }
+          } else if (update.type === 'message_edit') {
+            const currentList = updated[targetChatId];
+            if (currentList) {
+              const editData = update.data;
+              const idx = currentList.findIndex((m) => m.id === String(editData.id));
+              if (idx >= 0) {
+                const copy = [...currentList];
+                copy[idx] = { ...copy[idx], text: editData.text, isEdited: true };
+                updated[targetChatId] = copy;
+                hasChanges = true;
+              }
+            }
+          } else if (update.type === 'message_delete') {
+            const currentList = updated[targetChatId];
+            if (currentList && update.data?.ids) {
+              const deleteIds = new Set(update.data.ids.map(String));
+              updated[targetChatId] = currentList.filter((m) => !deleteIds.has(m.id));
+              hasChanges = true;
+            }
+          }
+        }
+        return hasChanges ? updated : prev;
+      });
+
+      setChats((prev) => {
+        let updatedChats = [...prev];
+        let chatsChanged = false;
+
+        for (const update of batchUpdates) {
+          if (update.type === 'message') {
+            const msg = update.data;
+            const targetChatId = update.chatId;
+            const idx = updatedChats.findIndex((c) => c.id === targetChatId);
+            if (idx >= 0) {
+              const chat = updatedChats[idx];
+              const isSelected = selectedChatId === targetChatId;
+              const updatedChat = {
+                ...chat,
+                unreadCount: isSelected || msg.isOut ? 0 : (chat.unreadCount || 0) + 1,
+                lastMessage: {
+                  id: msg.id,
+                  text: msg.text || (msg.media?.type ? `[${msg.media.type}]` : ''),
+                  timestamp: msg.timestamp || Date.now(),
+                  isOut: !!msg.isOut,
+                  senderId: msg.senderId,
+                  senderName: msg.senderName,
+                  senderAvatar: msg.senderAvatar,
+                },
+              };
+              updatedChats.splice(idx, 1);
+              updatedChats.unshift(updatedChat);
+              chatsChanged = true;
+            }
+          }
+        }
+        return chatsChanged ? updatedChats : prev;
+      });
+    });
+
+    return () => unsubscribe();
+  }, [selectedChatId]);
+
+  // Channel difference recovery subscription
+  useEffect(() => {
+    const unsub = channelDifferenceService.subscribe((channelId, newMessages) => {
+      setMessagesMap((prev) => {
+        const current = prev[channelId] || [];
+        const merged = [...current];
+        let hasNew = false;
+        for (const m of newMessages) {
+          if (!merged.some((exist) => exist.id === m.id)) {
+            merged.push(m);
+            hasNew = true;
+          }
+        }
+        return hasNew ? { ...prev, [channelId]: merged } : prev;
+      });
+    });
+    return () => unsub();
+  }, []);
+
+  // Sync active supergroup / channel difference when selected
+  useEffect(() => {
+    if (selectedChatId && !isDemoMode) {
+      const activeChat = chats.find((c) => c.id === selectedChatId);
+      if (activeChat && channelDifferenceService.isSupergroupOrChannel(activeChat)) {
+        channelDifferenceService.getChannelDifference(selectedChatId, false, 'chat_selected');
+      }
+    }
+  }, [selectedChatId, chats, isDemoMode]);
+
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
     const activeAcc = accounts.find((a) => a.id === activeAccountId);
@@ -865,14 +975,15 @@ export default function App() {
           wsClient.setLastTimestamp((event as any).lastTimestamp);
         }
       } else if ((event.type === 'new_message' || event.type === 'UpdateNewMessage' || event.type === 'UpdateNewChannelMessage') && event.message) {
+        const msg = event.message;
+        const targetChatId = String(event.peerId || msg.chatId || selectedChatId);
         if ((event as any).pts) {
           syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
+          channelDifferenceService.checkChannelPtsGap(targetChatId, (event as any).pts, (event as any).pts_count || 1);
         }
-        const msg = event.message;
         if (msg.timestamp) {
           wsClient.setLastTimestamp(msg.timestamp);
         }
-        const targetChatId = String(event.peerId || msg.chatId || selectedChatId);
 
         // Immediate Sound & Real-time Notification Dispatch for Incoming Messages
         if (!msg.isOut) {
@@ -1018,8 +1129,14 @@ export default function App() {
             c.id === targetChatId ? { ...c, unreadCount: 0 } : c
           )
         );
-      } else if (event.type === 'message_edited' && event.peerId && event.messageId) {
-        const targetChatId = event.peerId;
+      } else if ((event.type as any === 'message_edited' || event.type as any === 'edit_message' || (event as any).type === 'UpdateEditMessage' || (event as any).type === 'UpdateEditChannelMessage') && ((event as any).peerId || (event as any).chatId) && ((event as any).messageId || (event as any).id)) {
+        const targetChatId = (event as any).peerId || (event as any).chatId;
+        const msgId = (event as any).messageId || (event as any).id;
+        updatesBatchScheduler.enqueue({
+          type: 'message_edit',
+          chatId: targetChatId,
+          data: { id: msgId, text: (event as any).text || (event as any).message?.text || '' }
+        });
         setMessagesMap((prev) => {
           const list = prev[targetChatId];
           if (!list) return prev;
@@ -1042,7 +1159,14 @@ export default function App() {
               : c
           )
         );
-      } else if (event.type === 'messages_deleted' && event.messageIds) {
+      } else if ((event.type as any === 'messages_deleted' || event.type as any === 'delete_messages' || (event as any).type === 'UpdateDeleteMessages' || (event as any).type === 'UpdateDeleteChannelMessages') && ((event as any).messageIds || (event as any).ids || (event as any).messages)) {
+        const rawIds = (event as any).messageIds || (event as any).ids || (event as any).messages || [];
+        const targetChatId = (event as any).peerId || (event as any).chatId || selectedChatId;
+        updatesBatchScheduler.enqueue({
+          type: 'message_delete',
+          chatId: targetChatId,
+          data: { ids: rawIds }
+        });
         const delIds = new Set(event.messageIds);
         setMessagesMap((prev) => {
           const updated: Record<string, TelegramMessage[]> = {};
@@ -1115,14 +1239,46 @@ export default function App() {
   const loadMtprotoDialogs = async (token?: string, retryCount = 0) => {
     try {
       const activeToken = token || localStorage.getItem('tg_active_session_token');
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (activeToken) {
         headers['x-session-token'] = activeToken;
       }
-      const url = `/api/telegram/dialogs${activeToken ? `?token=${encodeURIComponent(activeToken)}` : ''}`;
-      const res = await fetch(url, { headers });
-      if (res.ok) {
-        const data = await res.json();
+
+      // Collect known last message IDs per chat for delta sync
+      const lastMessageIds: Record<string, string | number> = {};
+      (Object.entries(messagesMap) as [string, TelegramMessage[]][]).forEach(([cId, mList]) => {
+        if (mList && mList.length > 0) {
+          const lastMsg = mList[mList.length - 1];
+          if (lastMsg && lastMsg.id) lastMessageIds[cId] = lastMsg.id;
+        }
+      });
+
+      // Try light MTProto sync first for fast responsive update
+      let data: any = null;
+      try {
+        const syncRes = await fetch('/api/telegram/sync-light', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ token: activeToken, lastMessageIds }),
+        });
+        if (syncRes.ok) {
+          const syncData = await syncRes.json();
+          if (syncData.success && Array.isArray(syncData.dialogs)) {
+            data = syncData;
+          }
+        }
+      } catch (_) {}
+
+      // Fallback to /api/telegram/dialogs if sync-light unavailable
+      if (!data) {
+        const url = `/api/telegram/dialogs${activeToken ? `?token=${encodeURIComponent(activeToken)}` : ''}`;
+        const res = await fetch(url, { headers });
+        if (res.ok) {
+          data = await res.json();
+        }
+      }
+
+      if (data) {
         if (data.dialogs && Array.isArray(data.dialogs) && data.dialogs.length > 0) {
           const realDialogs: TelegramChat[] = data.dialogs;
           setChats((prev) => {

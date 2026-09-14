@@ -1415,63 +1415,134 @@ export class TelegramService {
     return null;
   }
 
-  public static async getDialogs(sessionToken: string, limit: number = 50) {
+  public static async getDialogs(sessionToken: string, limit: number = 200) {
     if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
       return [];
     }
     try {
       const client = await this.getOrCreateClient(sessionToken);
-      const dialogs = await client.getDialogs({ limit });
+
+      // Robust MTProto Pagination Loop
+      const targetLimit = Math.min(Math.max(limit || 50, 1), 3500);
+      const CHUNK_LIMIT = Math.min(targetLimit, 100);
+      const rawDialogs: any[] = [];
+      const seenDialogIds = new Set<string>();
+
+      let offsetId = 0;
+      let offsetDate = 0;
+      let offsetPeer: any = undefined;
+      let hasMore = true;
+      let iteration = 0;
+      const MAX_ITERATIONS = Math.min(Math.ceil(targetLimit / CHUNK_LIMIT) + 2, 35);
+
+      while (hasMore && rawDialogs.length < targetLimit && iteration < MAX_ITERATIONS) {
+        iteration++;
+        const chunkParams: any = { limit: CHUNK_LIMIT };
+        if (offsetId) chunkParams.offsetId = offsetId;
+        if (offsetDate) chunkParams.offsetDate = offsetDate;
+        if (offsetPeer) chunkParams.offsetPeer = offsetPeer;
+
+        let chunk: any[] = [];
+        try {
+          chunk = await client.getDialogs(chunkParams);
+        } catch (chunkErr: any) {
+          console.warn(`[getDialogs] Chunk error iteration ${iteration}:`, chunkErr?.message || chunkErr);
+          break;
+        }
+
+        if (!chunk || chunk.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        let newCount = 0;
+        for (const d of chunk) {
+          const dKey = String(d.id || d.entity?.id || (d as any).peer?.userId || (d as any).peer?.channelId || (d as any).peer?.chatId || "");
+          if (!dKey || !seenDialogIds.has(dKey)) {
+            if (dKey) seenDialogIds.add(dKey);
+            rawDialogs.push(d);
+            newCount++;
+          }
+        }
+
+        if (chunk.length < CHUNK_LIMIT || newCount === 0) {
+          hasMore = false;
+          break;
+        }
+
+        const lastDialog = chunk[chunk.length - 1];
+        if (lastDialog) {
+          offsetId = lastDialog.message?.id || lastDialog.id || 0;
+          offsetDate = lastDialog.date || lastDialog.message?.date || 0;
+          offsetPeer = lastDialog.inputEntity || undefined;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      // Also retrieve archived dialogs if available (folder: 1)
+      try {
+        const archivedChunk = await client.getDialogs({ limit: 100, folder: 1 });
+        if (archivedChunk && archivedChunk.length > 0) {
+          for (const d of archivedChunk) {
+            const dKey = String(d.id || d.entity?.id || "");
+            if (!dKey || !seenDialogIds.has(dKey)) {
+              if (dKey) seenDialogIds.add(dKey);
+              rawDialogs.push(d);
+            }
+          }
+        }
+      } catch (_) {}
 
       const s = activeSessions.get(sessionToken);
       if (s) {
         if (!s.entityCache) s.entityCache = new Map();
         if (!s.fullEntityCache) s.fullEntityCache = new Map();
-        for (const d of dialogs) {
+        for (const d of rawDialogs) {
           const cleanId = extractPeerId(d.id || d.entity?.id || (d as any).peer);
           if (cleanId) {
             if (d.inputEntity) s.entityCache.set(cleanId, d.inputEntity);
             if (d.entity) {
               s.fullEntityCache.set(cleanId, d.entity);
               s.entityCache.set(cleanId, d.entity);
-              if (cleanId.startsWith('-100')) {
+              if (cleanId.startsWith("-100")) {
                 s.fullEntityCache.set(cleanId.slice(4), d.entity);
               }
             }
             const entUsername = (d.entity as any)?.username;
             if (entUsername) {
               s.entityCache.set(entUsername.toLowerCase(), d.inputEntity || d.entity);
-              s.entityCache.set('@' + entUsername.toLowerCase(), d.inputEntity || d.entity);
+              s.entityCache.set("@" + entUsername.toLowerCase(), d.inputEntity || d.entity);
               if (d.entity) {
                 s.fullEntityCache.set(entUsername.toLowerCase(), d.entity);
-                s.fullEntityCache.set('@' + entUsername.toLowerCase(), d.entity);
+                s.fullEntityCache.set("@" + entUsername.toLowerCase(), d.entity);
               }
             }
           }
         }
       }
 
-      return dialogs.map((d: any) => {
-        let type: 'private' | 'group' | 'supergroup' | 'channel' | 'bot' = 'private';
+      return rawDialogs.map((d: any) => {
+        let type: "private" | "group" | "supergroup" | "channel" | "bot" = "private";
         const isMegagroup = Boolean(d.entity?.megagroup || (d.isChannel && !d.entity?.broadcast));
         const isBroadcast = Boolean(d.entity?.broadcast || (d.isChannel && !d.isGroup && !d.entity?.megagroup));
 
         if (isBroadcast) {
-          type = 'channel';
+          type = "channel";
         } else if (isMegagroup) {
-          type = 'supergroup';
+          type = "supergroup";
         } else if (d.isGroup) {
-          type = 'group';
+          type = "group";
         } else if (d.entity?.bot) {
-          type = 'bot';
+          type = "bot";
         } else {
-          type = 'private';
+          type = "private";
         }
 
         let canSendMessages = true;
         if (isBroadcast) {
           canSendMessages = Boolean(d.entity?.creator || d.entity?.adminRights?.postMessages);
-        } else if (type === 'group' || type === 'supergroup') {
+        } else if (type === "group" || type === "supergroup") {
           canSendMessages = Boolean(
             d.entity?.creator ||
             d.entity?.adminRights ||
@@ -1480,17 +1551,40 @@ export class TelegramService {
         }
 
         const lastMsg = d.message;
-        let text = lastMsg?.text || '';
+        let text = lastMsg?.text || "";
         if (!text && lastMsg?.media) {
-          text = '[وسائط / ميديا]';
+          const media = lastMsg.media;
+          if (media.photo) {
+            text = "📷 صورة";
+          } else if (media.document) {
+            const isVoice = media.document.attributes?.some((a: any) => a.voice);
+            const isAudio = media.document.attributes?.some((a: any) => a.audio || a.performer);
+            const isVideo = media.document.attributes?.some((a: any) => a.video);
+            const isSticker = media.document.attributes?.some((a: any) => a.stickerset);
+            const docName = media.document.attributes?.find((a: any) => a.fileName)?.fileName;
+
+            if (isVoice) text = "🎤 رسالة صوتية";
+            else if (isVideo) text = "🎥 مقطع مرئي";
+            else if (isAudio) text = "🎵 ملف صوتي";
+            else if (isSticker) text = "🎭 ملصق";
+            else text = docName ? `📄 ${docName}` : "📄 مستند";
+          } else if (media.poll) {
+            text = "📊 استطلاع رأي";
+          } else if (media.geo) {
+            text = "📍 موقع جغرافي";
+          } else if (media.contact) {
+            text = "👤 جهة اتصال";
+          } else {
+            text = "📎 وسائط / ميديا";
+          }
         }
 
         const peerId = extractPeerId(d.id || d.entity?.id || d.peer);
         const photoObj = (d.entity as any)?.photo || (d as any).photo;
         const hasPhoto = Boolean(
           photoObj &&
-          photoObj.className !== 'UserProfilePhotoEmpty' &&
-          photoObj.className !== 'ChatPhotoEmpty'
+          photoObj.className !== "UserProfilePhotoEmpty" &&
+          photoObj.className !== "ChatPhotoEmpty"
         );
         const avatarUrl = hasPhoto
           ? `/api/telegram/avatar/${encodeURIComponent(peerId)}?token=${encodeURIComponent(sessionToken)}`
@@ -1503,7 +1597,7 @@ export class TelegramService {
 
         return {
           id: peerId,
-          title: d.title || d.name || 'محادثة',
+          title: d.title || d.name || "محادثة",
           username: d.entity?.username || undefined,
           type,
           avatarUrl,

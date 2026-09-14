@@ -521,13 +521,103 @@ async function startServer() {
       const active = TelegramService.getActiveSessionToken(token);
       if (active) token = active;
     }
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 200;
     try {
-      const dialogs = await TelegramService.getDialogs(token, 50);
+      const dialogs = await TelegramService.getDialogs(token, limit);
       res.json({ dialogs });
     } catch (err: any) {
       console.error('Error fetching dialogs:', err);
       res.status(500).json({ error: err.message || 'فشل جلب المحادثات' });
     }
+  });
+
+  // MTProto Light & Delta Dialogs Sync
+  app.all(['/api/telegram/sync-light', '/api/sync-light'], async (req, res) => {
+    let token = (req.body?.token || req.query?.token || req.body?.sessionToken || (req as any).sessionToken) as string;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      return res.status(401).json({ success: false, error: 'NO_SESSION', message: 'لا توجد جلسة تيليجرام نشطة.' });
+    }
+
+    const lastMessageIds = req.body?.lastMessageIds || {};
+    try {
+      const [dialogs, user] = await Promise.all([
+        TelegramService.getDialogs(token, 200),
+        TelegramService.getMe(token).catch(() => null),
+      ]);
+
+      // Fetch delta messages for top 15 active chats
+      const messagesRecord: Record<string, any[]> = {};
+      const topChats = dialogs.slice(0, 15);
+      await Promise.allSettled(
+        topChats.map(async (chat: any) => {
+          try {
+            const minId = lastMessageIds[chat.id] ? Number(String(lastMessageIds[chat.id]).replace(/\D/g, '')) || 0 : 0;
+            const msgs = await TelegramService.getMessages(token, chat.id, 30);
+            if (minId > 0 && msgs.length > 0) {
+              const deltaMsgs = msgs.filter((m: any) => Number(m.id) > minId);
+              messagesRecord[chat.id] = deltaMsgs;
+            } else {
+              messagesRecord[chat.id] = msgs;
+            }
+          } catch (_) {
+            messagesRecord[chat.id] = [];
+          }
+        })
+      );
+
+      return res.json({
+        success: true,
+        isLightSync: true,
+        isRealTelegramMTProto: true,
+        dialogs,
+        messages: messagesRecord,
+        user,
+        syncTimestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.warn('[sync-light] error:', err?.message || err);
+      return res.status(500).json({ success: false, error: err?.message || 'فشل مزامنة المحادثات' });
+    }
+  });
+
+  // MTProto Delta Messages Endpoint
+  app.post('/api/telegram/messages/delta', async (req, res) => {
+    let token = (req.body?.token || req.body?.sessionToken || (req as any).sessionToken) as string;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      return res.status(401).json({ success: false, error: 'NO_SESSION' });
+    }
+
+    const { chatSyncStates } = req.body || {};
+    const deltas: Record<string, { newMessages: any[]; hasChanges: boolean; lastMsgId?: number }> = {};
+    const entries = Object.entries(chatSyncStates || {});
+
+    await Promise.allSettled(
+      entries.map(async ([chatId, state]: [string, any]) => {
+        try {
+          const lastKnownId = Number(state?.lastMessageId || state?.lastMsgId || 0) || 0;
+          const msgs = await TelegramService.getMessages(token, chatId, 30);
+          const newMsgs = lastKnownId > 0 ? msgs.filter((m: any) => Number(m.id) > lastKnownId) : msgs;
+          const maxId = newMsgs.length > 0 ? Math.max(...newMsgs.map((m: any) => Number(m.id) || 0)) : lastKnownId;
+          deltas[chatId] = {
+            newMessages: newMsgs,
+            hasChanges: newMsgs.length > 0,
+            lastMsgId: maxId,
+          };
+        } catch (_) {
+          deltas[chatId] = { newMessages: [], hasChanges: false };
+        }
+      })
+    );
+
+    return res.json({ success: true, deltas });
   });
 
   // ==========================================
@@ -670,9 +760,16 @@ async function startServer() {
   });
 
   // Channel Updates Difference: updates.getChannelDifference
-  app.get('/api/telegram/updates/channel-difference', async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { channelPeer, pts, limit } = req.query;
+  app.all('/api/telegram/updates/channel-difference', async (req, res) => {
+    let token = (req as any).sessionToken || req.body?.token || req.query?.token;
+    if (!token) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    const channelPeer = req.body?.channelPeer || req.body?.channelId || req.query?.channelPeer || req.query?.channelId;
+    const pts = req.body?.pts !== undefined ? req.body.pts : req.query?.pts;
+    const limit = req.body?.limit || req.query?.limit;
+
     if (!channelPeer) {
       return res.status(400).json({ error: 'channelPeer مطلوب' });
     }
