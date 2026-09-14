@@ -3985,7 +3985,10 @@
             <div class="alert alert-${cls} alert-dismissible shadow-lg fade show" role="alert" style="font-size:0.88rem">
               <strong>${d.success ? '✅ اكتمل الإرسال الذكي' : '❌ فشل الإرسال الذكي'}</strong><br>
               <small>${escapeHtml(d.entity || '')}</small><br>
-              <small>بعد ${d.waited || 0} رسائل</small>
+              ${d.success
+                ? `<small>بعد ${d.waited || 0} رسائل</small>`
+                : `<small><b>السبب:</b> ${escapeHtml(d.reason || d.message || 'سبب غير معروف')}</small><br>
+                   <small><b>التفاصيل:</b> ${escapeHtml(d.technical || '')}</small>`}
               <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>`;
           document.body.appendChild(toast);
@@ -3993,6 +3996,33 @@
             new Notification('✅ اكتمل الإرسال الذكي', { body: d.entity, icon: '/static/icons/icon-192.png' });
           }
           setTimeout(() => { try { toast.remove(); } catch(e){} }, 9000);
+        });
+        // إشعار فشل/تخطي كل مجموعة مع السبب الأصلي الدقيق
+        s.on('send_failure', (d) => {
+          const safe = (value) => String(value || '').replace(/[&<>"']/g, (c) => ({
+            '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+          }[c]));
+          const skipped = d && d.status === 'skipped';
+          const toast = document.createElement('div');
+          toast.className = 'position-fixed';
+          toast.style.cssText = 'bottom:80px;right:16px;z-index:10000;max-width:430px;width:calc(100vw - 32px);';
+          toast.innerHTML = `
+            <div class="alert alert-${skipped ? 'warning' : 'danger'} alert-dismissible shadow-lg fade show"
+                 role="alert" style="font-size:0.86rem;direction:rtl;text-align:right;">
+              <strong>${skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال'}</strong><br>
+              <b>المجموعة:</b> ${safe(d && d.group)}<br>
+              <b>السبب:</b> ${safe(d && d.reason)}<br>
+              <small><b>تفاصيل Telegram:</b> ${safe(d && d.technical)}</small>
+              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>`;
+          document.body.appendChild(toast);
+          if (window.Notification && Notification.permission === 'granted') {
+            new Notification(skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال', {
+              body: `${d && d.group ? d.group : ''}: ${d && d.reason ? d.reason : 'سبب غير معروف'}`,
+              icon: '/static/icons/icon-192.png'
+            });
+          }
+          setTimeout(() => { try { toast.remove(); } catch(e){} }, 15000);
         });
         // تبديل الحساب — أعد تحميل حالة الحساب الجديد (تستعيد الجارية تلقائياً)
         s.on('user_switched', () => {

@@ -2973,7 +2973,8 @@ class TelegramManager:
                         "message": f"⏭️ تم تخطي {entity} (قرار الفحص الاستباقي)"
                     }, to=user_id)
                     return {"success": False, "skipped": True,
-                            "message": f"تم تخطي المجموعة: {entity}"}
+                            "message": f"تم تخطي المجموعة: {entity}",
+                            "reason": "تم تخطي المجموعة وفق نتيجة الفحص الاستباقي"}
             else:
                 action, _ = self._check_group_protection(user_id, client_manager, entity_obj, entity)
 
@@ -3001,7 +3002,8 @@ class TelegramManager:
             )
             if final_message is None:
                 return {"success": False, "skipped": True,
-                        "message": "تم تخطي الإرسال: المجموعة محمية أو الرسالة فارغة بعد التنقية"}
+                        "message": "تم تخطي الإرسال: المجموعة محمية أو الرسالة فارغة بعد التنقية",
+                        "reason": "المجموعة محمية أو أصبحت الرسالة فارغة بعد التنقية"}
 
             result = client_manager.run_coroutine(
                 client_manager.client.send_message(entity_obj, final_message)
@@ -3214,7 +3216,25 @@ class TelegramManager:
                     except Exception as _notif_err:
                         logger.debug(f"[Smart] خطأ في إرسال إشعار السلام: {_notif_err}")
                 except Exception as send_err:
-                    logger.error(f"[Smart] فشل إرسال 'السلام عليكم' إلى {entity_label}: {send_err}")
+                    detail = _send_failure_detail(entity_label, error=send_err)
+                    logger.error(
+                        f"[Smart] فشل إرسال 'السلام عليكم' إلى {entity_label}: "
+                        f"{detail['technical']}"
+                    )
+                    socketio.emit('log_update', {
+                        "message": (
+                            f"❌ [Smart] فشل الإرسال إلى {entity_label}: "
+                            f"{detail['reason']} — التفاصيل: {detail['technical']}"
+                        )
+                    }, to=user_id)
+                    _emit_send_failure_notification(user_id, detail, "الإرسال الذكي")
+                    socketio.emit('smart_send_done', {
+                        "success": False,
+                        "entity": entity_label,
+                        "reason": detail["reason"],
+                        "technical": detail["technical"],
+                        "message": detail["reason"],
+                    }, to=user_id)
                     time.sleep(10)
                     continue
 
@@ -3317,9 +3337,24 @@ class TelegramManager:
                         time.sleep(10)
 
         except Exception as e:
-            logger.error(f"[Smart] خطأ عام في الإرسال الذكي لـ {entity_label}: {e}")
+            detail = _send_failure_detail(entity_label, error=e)
+            logger.error(
+                f"[Smart] خطأ عام في الإرسال الذكي لـ {entity_label}: "
+                f"{detail['technical']}"
+            )
             socketio.emit('log_update', {
-                "message": f"❌ [Smart] فشل في {entity_label}: {str(e)[:100]}"
+                "message": (
+                    f"❌ [Smart] فشل في {entity_label}: {detail['reason']} — "
+                    f"التفاصيل: {detail['technical']}"
+                )
+            }, to=user_id)
+            _emit_send_failure_notification(user_id, detail, "الإرسال الذكي")
+            socketio.emit('smart_send_done', {
+                "success": False,
+                "entity": entity_label,
+                "reason": detail["reason"],
+                "technical": detail["technical"],
+                "message": detail["reason"],
             }, to=user_id)
         finally:
             self._smart_running.discard(key)
@@ -3388,7 +3423,8 @@ class TelegramManager:
             action, _reason = self._check_group_protection(user_id, client_manager, entity_obj, entity)
             if action == 'skip':
                 return {"success": False, "skipped": True,
-                        "message": f"تم تخطي المجموعة المحمية: {entity}"}
+                        "message": f"تم تخطي المجموعة المحمية: {entity}",
+                        "reason": _reason or "المجموعة محمية وفق إعدادات الحماية"}
 
             results = []
             paths = [f['path'] for f in image_files if os.path.exists(f.get('path', ''))]
@@ -3439,7 +3475,8 @@ class TelegramManager:
                 _cleaned = self._maybe_sanitize(user_id, client_manager, entity_obj, entity, message)
                 if _cleaned is None:
                     return {"success": False, "skipped": True,
-                            "message": "تم تخطي الإرسال: الرسالة بعد التنقية أصبحت فارغة"}
+                            "message": "تم تخطي الإرسال: الرسالة بعد التنقية أصبحت فارغة",
+                            "reason": "الرسالة أصبحت فارغة بعد التنقية"}
                 message = _cleaned
 
             results = []
@@ -3794,6 +3831,99 @@ def api_resume_scheduled():
     return jsonify({"success": True, "message": msg})
 
 
+def _describe_send_failure(error):
+    """إرجاع سبب مفهوم مع الاحتفاظ برسالة Telegram الأصلية كما هي."""
+    error_type = type(error).__name__ if error is not None else "UnknownError"
+    raw = " ".join(str(error or "").split()).strip()
+    if not raw:
+        raw = error_type
+
+    seconds = getattr(error, "seconds", None)
+    reasons = {
+        "FloodWaitError": (
+            f"تيليجرام فرض مهلة انتظار بسبب كثرة الإرسال"
+            f"{f' — انتظر {seconds} ثانية' if seconds is not None else ''}"
+        ),
+        "SlowModeWaitError": (
+            f"المجموعة تستخدم الوضع البطيء"
+            f"{f' — انتظر {seconds} ثانية' if seconds is not None else ''}"
+        ),
+        "ChatWriteForbiddenError": "الحساب لا يملك صلاحية الكتابة في هذه المجموعة",
+        "ChatAdminRequiredError": "تيليجرام يتطلب صلاحية مشرف لتنفيذ الإرسال",
+        "ChatRestrictedError": "الكتابة مقيّدة في هذه المجموعة لهذا الحساب",
+        "ChatForbiddenError": "تيليجرام منع الوصول إلى هذه المجموعة",
+        "UserBannedInChannelError": "الحساب محظور من هذه المجموعة أو القناة",
+        "UserNotParticipantError": "الحساب غير منضم إلى هذه المجموعة",
+        "ChannelPrivateError": "المجموعة خاصة أو لم يعد الحساب يملك وصولًا إليها",
+        "ChannelInvalidError": "معرّف المجموعة غير صالح",
+        "PeerIdInvalidError": "رابط أو معرّف المجموعة غير صالح",
+        "UsernameNotOccupiedError": "اسم المستخدم أو رابط المجموعة غير موجود",
+        "MessageTooLongError": "الرسالة أطول من الحد المسموح به في Telegram",
+        "MediaCaptionTooLongError": "وصف الصورة أطول من الحد المسموح به في Telegram",
+        "MediaEmptyError": "ملف الصورة فارغ أو غير صالح",
+        "FileReferenceExpiredError": "مرجع الملف انتهت صلاحيته، أعد رفع الصورة",
+        "AuthKeyUnregisteredError": "جلسة Telegram غير صالحة، يجب إعادة تسجيل الدخول",
+        "UserDeactivatedBanError": "حساب Telegram معطّل أو محظور",
+    }
+    reason = reasons.get(error_type)
+    if not reason:
+        lower = raw.lower()
+        if "timeout" in lower or "timed out" in lower:
+            reason = "انتهت مهلة الاتصال أثناء الإرسال"
+        elif "connection" in lower or "network" in lower:
+            reason = "حدث خطأ في اتصال الشبكة مع Telegram"
+        else:
+            reason = "رفض Telegram الإرسال أو حدث خطأ غير مصنّف"
+
+    return {
+        "type": error_type,
+        "reason": reason,
+        "technical": f"{error_type}: {raw}",
+    }
+
+
+def _send_failure_detail(group, error=None, reason=None, status="failed"):
+    """توحيد بيانات الفشل لتظهر في السجل والإشعار وتقرير Telegram."""
+    if error is not None:
+        detail = _describe_send_failure(error)
+    else:
+        detail = {
+            "type": "Skipped",
+            "reason": reason or "تم تخطي الإرسال دون سبب محدد",
+            "technical": reason or "Skipped",
+        }
+    return {
+        "group": str(group),
+        "status": status,
+        **detail,
+    }
+
+
+def _emit_send_failure_notification(user_id, detail, mode="الإرسال"):
+    """إرسال إشعار حيّ يحتوي المجموعة والسبب الدقيق والتفاصيل الأصلية."""
+    socketio.emit("send_failure", {
+        "group": detail.get("group", ""),
+        "status": detail.get("status", "failed"),
+        "reason": detail.get("reason", "سبب غير معروف"),
+        "technical": detail.get("technical", ""),
+        "type": detail.get("type", ""),
+        "mode": mode,
+        "timestamp": time.strftime("%H:%M:%S"),
+    }, to=user_id)
+
+
+def _failure_report_lines(title, details):
+    """تنسيق أسباب الفشل داخل تقرير الرسائل المحفوظة في Telegram."""
+    if not details:
+        return []
+    lines = [f"{title} ({len(details)}):"]
+    for detail in details:
+        lines.append(f"  • {detail['group']}")
+        lines.append(f"    السبب: {detail['reason']}")
+        lines.append(f"    التفاصيل: {detail['technical']}")
+    return lines
+
+
 def execute_scheduled_messages(user_id, settings):
     groups = settings.get('groups', [])
     message = settings.get('message', '')
@@ -3808,8 +3938,11 @@ def execute_scheduled_messages(user_id, settings):
 
         successful = 0
         failed = 0
+        skipped = 0
         successful_groups_sched = []
         failed_groups_sched = []
+        failed_details_sched = []
+        skipped_details_sched = []
 
         # ── الحصول على مدير العميل لفحص العضوية ──────────────────────────
         _sched_client_mgr = None
@@ -3898,10 +4031,20 @@ def execute_scheduled_messages(user_id, settings):
                     result = telegram_manager.send_message_async(user_id, group, message)
 
                 if isinstance(result, dict) and result.get('skipped'):
+                    detail = _send_failure_detail(
+                        group,
+                        reason=result.get('reason') or result.get('message'),
+                        status="skipped",
+                    )
                     socketio.emit('log_update', {
-                        "message": f"⏭️ [{i}/{len(groups)}] تم تخطي: {group} (الرسالة لم تُرسَل)"
+                        "message": (
+                            f"⏭️ [{i}/{len(groups)}] تم تخطي: {group} — "
+                            f"السبب: {detail['reason']}"
+                        )
                     }, to=user_id)
-                    failed += 1
+                    _emit_send_failure_notification(user_id, detail, "الإرسال المجدول")
+                    skipped += 1
+                    skipped_details_sched.append(detail)
                     with USERS_LOCK:
                         if user_id in USERS:
                             USERS[user_id]['stats']['errors'] += 1
@@ -3919,21 +4062,32 @@ def execute_scheduled_messages(user_id, settings):
                     time.sleep(3)
 
             except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Scheduled send error to {group}: {error_msg}")
+                detail = _send_failure_detail(group, error=e)
+                logger.error(
+                    f"Scheduled send error to {group}: {detail['technical']}"
+                )
 
                 socketio.emit('log_update', {
-                    "message": f"❌ [{i}/{len(groups)}] إرسال مجدول فشل إلى {group}"
+                    "message": (
+                        f"❌ [{i}/{len(groups)}] إرسال مجدول فشل إلى {group} — "
+                        f"السبب: {detail['reason']} — "
+                        f"التفاصيل: {detail['technical']}"
+                    )
                 }, to=user_id)
+                _emit_send_failure_notification(user_id, detail, "الإرسال المجدول")
 
                 failed += 1
                 failed_groups_sched.append(group)
+                failed_details_sched.append(detail)
                 with USERS_LOCK:
                     if user_id in USERS:
                         USERS[user_id]['stats']['errors'] += 1
 
         socketio.emit('log_update', {
-            "message": f"📊 انتهى الإرسال المجدول: ✅ {successful} نجح | ❌ {failed} فشل"
+            "message": (
+                f"📊 انتهى الإرسال المجدول: ✅ {successful} نجح | "
+                f"❌ {failed} فشل | ⏭️ {skipped} تخطي"
+            )
         }, to=user_id)
 
         # ══ إرسال تقرير مفصل عبر تيليجرام ══
@@ -3949,6 +4103,7 @@ def execute_scheduled_messages(user_id, settings):
                     f"📋 إجمالي المجموعات: {_total_s}",
                     f"✅ نجح: {successful}",
                     f"❌ فشل: {failed}",
+                    f"⏭️ تم تخطيه: {skipped}",
                     f"🧠 دورات ذكية نشطة: {_smart_s}",
                     f"🚫 غير منضم: {len(_sched_not_joined)}",
                     "",
@@ -3958,8 +4113,14 @@ def execute_scheduled_messages(user_id, settings):
                     _sched_report.extend([f"  • {g}" for g in successful_groups_sched])
                     _sched_report.append("")
                 if failed_groups_sched:
-                    _sched_report.append(f"❌ المجموعات الفاشلة ({failed}):")
-                    _sched_report.extend([f"  • {g}" for g in failed_groups_sched])
+                    _sched_report.extend(
+                        _failure_report_lines("❌ أسباب فشل المجموعات", failed_details_sched)
+                    )
+                    _sched_report.append("")
+                if skipped_details_sched:
+                    _sched_report.extend(
+                        _failure_report_lines("⏭️ أسباب تخطي المجموعات", skipped_details_sched)
+                    )
                     _sched_report.append("")
                 if _sched_not_joined:
                     _sched_report.append(f"🚫 غير منضم ({len(_sched_not_joined)}):")
@@ -5330,8 +5491,11 @@ def api_send_now():
         try:
             successful = 0
             failed = 0
+            skipped = 0
             successful_groups = []
             failed_groups = []
+            failed_details = []
+            skipped_details = []
             batch_id = str(uuid.uuid4())
             batch_entries = []
 
@@ -5420,9 +5584,20 @@ def api_send_now():
                         )
 
                     if isinstance(result, dict) and result.get('skipped'):
+                        detail = _send_failure_detail(
+                            group,
+                            reason=result.get('reason') or result.get('message'),
+                            status="skipped",
+                        )
                         socketio.emit('log_update', {
-                            "message": f"⏭️ [{i}/{len(groups_list)}] تم تخطي المجموعة المحمية: {group}"
+                            "message": (
+                                f"⏭️ [{i}/{len(groups_list)}] تم تخطي المجموعة: {group} — "
+                                f"السبب: {detail['reason']}"
+                            )
                         }, to=user_id)
+                        _emit_send_failure_notification(user_id, detail, "الإرسال الفوري")
+                        skipped += 1
+                        skipped_details.append(detail)
                     else:
                         socketio.emit('log_update', {
                             "message": f"✅ [{i}/{len(groups_list)}] نجح إلى: {group}"
@@ -5446,42 +5621,34 @@ def api_send_now():
                         time.sleep(3)
 
                 except Exception as e:
-                    error_msg = str(e)
-                    if "banned" in error_msg.lower() or "ban" in error_msg.lower():
-                        error_type = "محظور من المجموعة"
-                    elif "flood" in error_msg.lower():
-                        # استخرج وقت الانتظار إذا كان متاحاً
-                        import re as _re
-                        m = _re.search(r'(\d+)', error_msg)
-                        wait_s = int(m.group(1)) if m else '?'
-                        error_type = f"تجاوز حد الإرسال — انتظر {wait_s} ثانية"
-                    elif "timeout" in error_msg.lower():
-                        error_type = "انتهت مهلة الاتصال (timeout)"
-                    elif "private" in error_msg.lower():
-                        error_type = "مجموعة خاصة/محدودة"
-                    elif "can't write" in error_msg.lower() or "write" in error_msg.lower():
-                        error_type = "لا يُسمح بالإرسال في هذه المجموعة"
-                    elif "not found" in error_msg.lower() or "invalid" in error_msg.lower() or "username" in error_msg.lower():
-                        error_type = "المجموعة غير موجودة أو الرابط خاطئ"
-                    elif "يُعاد تشغيله" in error_msg or "restart" in error_msg.lower():
-                        error_type = "العميل يُعاد تشغيله، أعد المحاولة"
-                    else:
-                        error_type = error_msg[:150]  # رسالة خطأ كاملة لتسهيل التشخيص
-                    log_user_event(user_id, 'ERROR', f"❌ فشل الإرسال إلى {group}: {error_type}")
-                    logger.error(f"Send error to {group}: {error_msg}")
+                    detail = _send_failure_detail(group, error=e)
+                    log_user_event(
+                        user_id,
+                        'ERROR',
+                        f"❌ فشل الإرسال إلى {group}: {detail['reason']} — {detail['technical']}",
+                    )
+                    logger.error(f"Send error to {group}: {detail['technical']}")
                     socketio.emit('log_update', {
-                        "message": f"❌ [{i}/{len(groups_list)}] فشل إلى {group}: {error_type}"
+                        "message": (
+                            f"❌ [{i}/{len(groups_list)}] فشل إلى {group}: "
+                            f"{detail['reason']} — التفاصيل: {detail['technical']}"
+                        )
                     }, to=user_id)
+                    _emit_send_failure_notification(user_id, detail, "الإرسال الفوري")
 
                     failed += 1
                     failed_groups.append(group)
+                    failed_details.append(detail)
                     with USERS_LOCK:
                         if user_id in USERS:
                             USERS[user_id]['stats']['errors'] += 1
                             socketio.emit('stats_update', USERS[user_id]['stats'], to=user_id)
 
             socketio.emit('log_update', {
-                "message": f"📊 انتهى الإرسال: ✅ {successful} نجح | ❌ {failed} فشل"
+                "message": (
+                    f"📊 انتهى الإرسال: ✅ {successful} نجح | "
+                    f"❌ {failed} فشل | ⏭️ {skipped} تخطي"
+                )
             }, to=user_id)
 
             # ══ إرسال تقرير مفصل عبر تيليجرام ══
@@ -5499,6 +5666,7 @@ def api_send_now():
                         f"📋 إجمالي المجموعات: {_total}",
                         f"✅ نجح: {successful}",
                         f"❌ فشل: {failed}",
+                        f"⏭️ تم تخطيه: {skipped}",
                         f"🧠 دورات ذكية نشطة: {_smart_count}",
                         f"🚫 غير منضم: {len(_not_joined_groups)}",
                         "",
@@ -5508,8 +5676,14 @@ def api_send_now():
                         _report_lines.extend([f"  • {g}" for g in successful_groups])
                         _report_lines.append("")
                     if failed_groups:
-                        _report_lines.append(f"❌ المجموعات الفاشلة ({failed}):")
-                        _report_lines.extend([f"  • {g}" for g in failed_groups])
+                        _report_lines.extend(
+                            _failure_report_lines("❌ أسباب فشل المجموعات", failed_details)
+                        )
+                        _report_lines.append("")
+                    if skipped_details:
+                        _report_lines.extend(
+                            _failure_report_lines("⏭️ أسباب تخطي المجموعات", skipped_details)
+                        )
                         _report_lines.append("")
                     if _not_joined_groups:
                         _report_lines.append(f"🚫 غير منضم ({len(_not_joined_groups)}):")
