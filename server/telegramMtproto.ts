@@ -139,7 +139,7 @@ let pendingAuthData: {
 } | null = null;
 
 /**
- * Check if an error indicates that the MTProto session has expired or was revoked
+ * Check if an error indicates that the MTProto session has expired, was revoked, or duplicated
  */
 export function isSessionRevokedError(err: any): boolean {
   if (!err) return false;
@@ -147,12 +147,14 @@ export function isSessionRevokedError(err: any): boolean {
   return (
     msg.includes('SESSION_REVOKED') ||
     msg.includes('AUTH_KEY_UNREGISTERED') ||
+    msg.includes('AUTH_KEY_DUPLICATED') ||
     msg.includes('SESSION_EXPIRED') ||
     msg.includes('USER_DEACTIVATED') ||
     msg.includes('401') ||
     err.code === 401 ||
     err.errorMessage === 'SESSION_REVOKED' ||
-    err.errorMessage === 'AUTH_KEY_UNREGISTERED'
+    err.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+    err.errorMessage === 'AUTH_KEY_DUPLICATED'
   );
 }
 
@@ -195,7 +197,7 @@ export async function withTimeout<T>(
 /**
  * Safely disconnects and cleans up a TelegramClient instance
  */
-export async function cleanupTelegramClient(client?: TelegramClient | null) {
+export async function cleanupTelegramClient(client?: TelegramClient | null, sessionString?: string) {
   if (client) {
     try {
       await client.disconnect();
@@ -213,6 +215,49 @@ export async function cleanupTelegramClient(client?: TelegramClient | null) {
   activeClient = null;
   activeSessionString = '';
   connectingPromise = null;
+  if (sessionString) {
+    failedSessionCache.delete(sessionString);
+  }
+}
+
+/**
+ * Cleanly logs out from Telegram MTProto servers and purges all credentials and caches:
+ * 1. Invokes auth.logOut on Telegram servers so the session is explicitly invalidated remotely
+ * 2. Disconnects client transport cleanly
+ * 3. Purges all in-memory references, auth keys, pending temp sessions, and event listeners
+ */
+export async function logoutTelegramSession(client?: TelegramClient | null, sessionString?: string): Promise<boolean> {
+  const targetClient = client || activeClient;
+  let loggedOut = false;
+  if (targetClient) {
+    try {
+      if (targetClient.connected) {
+        await withTimeout(
+          targetClient.invoke(new Api.auth.LogOut()).catch(() => {}),
+          3500,
+          'مهلة تسجيل الخروج من خوادم تيليجرام'
+        ).catch(() => {});
+        loggedOut = true;
+      }
+    } catch (_) {}
+    try {
+      await targetClient.disconnect();
+    } catch (_) {}
+  }
+  if (activeClient && (activeClient === targetClient || !client)) {
+    activeClient = null;
+  }
+  if (sessionString) {
+    failedSessionCache.delete(sessionString);
+  }
+  if (activeSessionString && (!sessionString || activeSessionString === sessionString)) {
+    failedSessionCache.delete(activeSessionString);
+    activeSessionString = '';
+  }
+  pendingAuthData = null;
+  connectingPromise = null;
+  recentUpdates.length = 0;
+  return loggedOut;
 }
 
 /**

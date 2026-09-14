@@ -1054,6 +1054,32 @@ async function startServer() {
   const activeSseClients = new Set<express.Response>();
   const serverRecentUpdates: any[] = [];
 
+  // High performance scoped cache for fetchRealTelegramData to prevent cross-session pollution
+  const telegramDataCache = new Map<string, { data: any; timestamp: number }>();
+  const TELEGRAM_DATA_CACHE_TTL_MS = 6000;
+
+  // Cache purger for clean session lifecycle, logout, and revocation
+  const purgeTelegramDataCache = (filter?: { accountIndex?: number; phone?: string; sessionKey?: string; authKeyHex?: string } | 'all') => {
+    if (!filter || filter === 'all') {
+      telegramDataCache.clear();
+      console.log('[CacheEngine] Purged entire telegramDataCache');
+      return;
+    }
+    let count = 0;
+    for (const key of Array.from(telegramDataCache.keys())) {
+      let match = false;
+      if (filter.phone && key.includes(filter.phone)) match = true;
+      if (filter.sessionKey && key.includes(filter.sessionKey.substring(0, 16))) match = true;
+      if (filter.authKeyHex && key.includes(filter.authKeyHex)) match = true;
+      if (typeof filter.accountIndex === 'number' && key.startsWith(`acc_${filter.accountIndex}_`)) match = true;
+      if (match) {
+        telegramDataCache.delete(key);
+        count++;
+      }
+    }
+    console.log(`[CacheEngine] Purged ${count} entries from telegramDataCache`);
+  };
+
   // ==========================================
   // WEB PUSH & BACKGROUND SUBSCRIPTION ENGINE
   // ==========================================
@@ -1409,17 +1435,18 @@ async function startServer() {
     return sendWebPushNotificationToSubscribers(payload);
   };
 
-  // Helper to revoke session and notify subscribers
+  // Helper to revoke session, wipe memory, clean disk, and notify subscribers
   const handleSessionRevocation = async (sessionKey: string, reason: string = 'SESSION_REVOKED') => {
     console.warn(`[MTProto] Session Revocation detected for [${sessionKey.substring(0, 15)}...]. Reason: ${reason}`);
 
-    // 1. Remove from active authenticated Telegram clients
+    // 1. Remove from active authenticated Telegram clients and disconnect transport
     if (authenticatedTelegramClients.has(sessionKey)) {
       try {
         await authenticatedTelegramClients.get(sessionKey)?.disconnect();
       } catch (_) {}
       authenticatedTelegramClients.delete(sessionKey);
     }
+
     const formattedPhone = formatE164Phone(sessionKey);
     if (formattedPhone && realTelegramSessions.has(formattedPhone)) {
       try {
@@ -1427,9 +1454,44 @@ async function startServer() {
       } catch (_) {}
       realTelegramSessions.delete(formattedPhone);
     }
+
     if (activeSessions.has(sessionKey)) {
       activeSessions.delete(sessionKey);
     }
+
+    sessionFailureCooldowns.delete(sessionKey);
+    if (formattedPhone) sessionFailureCooldowns.delete(formattedPhone);
+
+    // 1.1 Check if this session matches any registered AccountInstance and cleanly purge it
+    for (const [accIdx, inst] of accountInstances.entries()) {
+      const matchSession = inst.sessionString && (inst.sessionString === sessionKey || sessionKey.includes(inst.sessionString.substring(0, 16)));
+      const matchPhone = inst.phone && (inst.phone === sessionKey || formattedPhone === formatE164Phone(inst.phone));
+      if (matchSession || matchPhone) {
+        console.warn(`[MTProto] Session Revocation wiping account slot ${accIdx} on disk and memory`);
+        try {
+          if (inst.client) {
+            await inst.client.disconnect().catch(() => {});
+          }
+        } catch (_) {}
+        deleteAccountSessionFromDisk(accIdx);
+        accountInstances.delete(accIdx);
+        USERS.delete(accIdx);
+        purgeTelegramDataCache({ accountIndex: accIdx, phone: inst.phone, sessionKey: inst.sessionString });
+        if (currentAccount === accIdx) {
+          const remaining = loadAllAccountSessionsFromDisk();
+          if (remaining.size > 0) {
+            currentAccount = remaining.keys().next().value ?? 0;
+            mainTelegramClient = accountInstances.get(currentAccount)?.client || null;
+          } else {
+            currentAccount = 0;
+            mainTelegramClient = null;
+          }
+        }
+      }
+    }
+
+    // Purge cached data for this session to eliminate stale cache errors
+    purgeTelegramDataCache({ phone: formattedPhone, sessionKey });
 
     // 2. Broadcast real-time SSE event to all open tabs
     const revokeEvent = {
@@ -2713,21 +2775,18 @@ async function startServer() {
 
     if (sessionKey) {
       sessionFailureCooldowns.set(sessionKey, Date.now());
+      // Strict Session Isolation: If a specific sessionKey was provided and could not be resolved or authenticated,
+      // DO NOT fallback to an unrelated client! This prevents session leaks and AUTH_KEY_DUPLICATED.
+      return null;
     }
 
-    // 3. Fallback to any active authenticated client in memory
-    for (const client of authenticatedTelegramClients.values()) {
-      if (client && client.connected) {
-        const isAuth = await client.checkAuthorization().catch(() => false);
-        if (isAuth) return client;
-      }
+    // 3. Fallback ONLY if NO specific sessionKey or phone was requested (default ambient context)
+    const currentInst = accountInstances.get(currentAccount);
+    if (currentInst?.client && currentInst.client.connected) {
+      const isAuth = await currentInst.client.checkAuthorization().catch(() => false);
+      if (isAuth) return currentInst.client;
     }
-    for (const sess of realTelegramSessions.values()) {
-      if (sess.client && sess.client.connected) {
-        const isAuth = await sess.client.checkAuthorization().catch(() => false);
-        if (isAuth) return sess.client;
-      }
-    }
+
     if (mainTelegramClient && mainTelegramClient.connected) {
       const isAuth = await mainTelegramClient.checkAuthorization().catch(() => false);
       if (isAuth) return mainTelegramClient;
@@ -2736,12 +2795,10 @@ async function startServer() {
     return null;
   };
 
-  // High performance cache for fetchRealTelegramData to prevent high concurrency throttling
-  const telegramDataCache = new Map<string, { data: any; timestamp: number }>();
-  const TELEGRAM_DATA_CACHE_TTL_MS = 6000; // 6 seconds debounce cache for rapid re-renders
-
   // Helper to fetch real MTProto profile, chats (dialogs), avatars and messages
   const fetchRealTelegramData = async (client: TelegramClient, phoneHint?: string, isLight = false, lastMessageIds?: Record<string, string | number>) => {
+    const authKeyHex = (client.session ? (client.session as any).authKey?.key?.toString('hex') : '') || '';
+    const baseKey = `acc_${currentAccount}_${phoneHint || authKeyHex || 'default'}`;
     const baseKey = phoneHint || (client.session ? (client.session as any).authKey?.key?.toString('hex') : 'default');
     const hasDeltaKeys = lastMessageIds && Object.keys(lastMessageIds).length > 0;
     const cacheKey = `${baseKey}_${isLight ? 'light' : 'full'}_${hasDeltaKeys ? 'delta' : 'all'}`;
@@ -2756,7 +2813,8 @@ async function startServer() {
     } catch (meErr: any) {
       const errMsg = meErr?.message || meErr?.errorMessage || String(meErr);
       console.warn('[MTProto] getMe error:', errMsg);
-      if (errMsg.includes('SESSION_REVOKED') || errMsg.includes('AUTH_KEY_UNREGISTERED') || errMsg.includes('401')) {
+      if (errMsg.includes('SESSION_REVOKED') || errMsg.includes('AUTH_KEY_UNREGISTERED') || errMsg.includes('AUTH_KEY_DUPLICATED') || errMsg.includes('401')) {
+        purgeTelegramDataCache({ accountIndex: currentAccount, phone: phoneHint, authKeyHex });
         const err = new Error('SESSION_REVOKED');
         (err as any).code = 'SESSION_REVOKED';
         throw err;
@@ -8334,45 +8392,129 @@ Please provide the concise summary.`;
     }
   });
 
-  app.post('/api/telegram/accounts/remove', async (req, res) => {
-    const { accountId, currentAccount: reqAccountIndex, index } = req.body || {};
-    let targetIndex = 0;
-    if (typeof reqAccountIndex === 'number') {
-      targetIndex = reqAccountIndex;
-    } else if (typeof index === 'number') {
-      targetIndex = index;
-    } else if (typeof accountId === 'string') {
-      const match = accountId.match(/\d+/);
-      if (match) targetIndex = parseInt(match[0], 10);
-    }
+  // Clean Logout & Session Teardown Endpoints
+  // Completely revokes session on Telegram MTProto servers, clears cache, unbinds transports, and wipes storage
+  app.post(['/api/telegram/auth/logout', '/api/telegram/logout', '/api/telegram/accounts/remove'], async (req, res) => {
+    const { accountId, currentAccount: reqAccountIndex, index, sessionString, phone, allAccounts } = req.body || {};
+    console.log(`[MTProto] Clean Logout/Remove request: accountId=${accountId}, index=${reqAccountIndex ?? index}, allAccounts=${allAccounts}`);
 
     try {
-      const client = accountInstances.get(targetIndex)?.client;
-      if (client) {
-        try { await client.disconnect(); } catch (_) {}
+      if (allAccounts) {
+        // Disconnect and wipe ALL accounts cleanly
+        for (const [idx, inst] of accountInstances.entries()) {
+          if (inst?.client) {
+            try {
+              if (inst.client.connected) {
+                await withTimeout(inst.client.invoke(new Api.auth.LogOut()).catch(() => {}), 3000, null).catch(() => {});
+              }
+              await inst.client.disconnect().catch(() => {});
+            } catch (_) {}
+          }
+          deleteAccountSessionFromDisk(idx);
+        }
+        for (const [key, client] of authenticatedTelegramClients.entries()) {
+          try {
+            if (client.connected) {
+              await withTimeout(client.invoke(new Api.auth.LogOut()).catch(() => {}), 2000, null).catch(() => {});
+            }
+            await client.disconnect().catch(() => {});
+          } catch (_) {}
+        }
+        for (const [ph, sess] of realTelegramSessions.entries()) {
+          try {
+            await sess?.client?.disconnect().catch(() => {});
+          } catch (_) {}
+        }
+
+        accountInstances.clear();
+        authenticatedTelegramClients.clear();
+        realTelegramSessions.clear();
+        USERS.clear();
+        sessionFailureCooldowns.clear();
+        telegramDataCache.clear();
+        currentAccount = 0;
+        mainTelegramClient = null;
+
+        return res.json({
+          success: true,
+          allAccounts: true,
+          currentAccount: 0,
+          message: 'تم تسجيل الخروج من جميع الجلسات وإتلاف كاش الذاكرة وملفات الجلسات بنجاح.',
+        });
       }
-      deleteAccountSessionFromDisk(targetIndex);
+
+      // Single Account Logout & Isolation
+      let targetIndex = 0;
+      if (typeof reqAccountIndex === 'number') {
+        targetIndex = reqAccountIndex;
+      } else if (typeof index === 'number') {
+        targetIndex = index;
+      } else if (typeof accountId === 'string') {
+        const match = accountId.match(/\d+/);
+        if (match) targetIndex = parseInt(match[0], 10);
+      }
+      targetIndex = Math.max(0, Math.min(3, targetIndex));
+
+      const instance = accountInstances.get(targetIndex);
+      const client = instance?.client;
+      const targetSessionStr = sessionString || instance?.sessionString;
+      const targetPhone = phone || instance?.phone;
+
+      if (client) {
+        try {
+          if (client.connected) {
+            await withTimeout(client.invoke(new Api.auth.LogOut()).catch(() => {}), 3500, null).catch(() => {});
+          }
+          await client.disconnect().catch(() => {});
+        } catch (_) {}
+      }
+
+      // Remove from memory registries
       accountInstances.delete(targetIndex);
       USERS.delete(targetIndex);
 
-      // If active account was removed, switch to another available account if one exists
+      if (targetSessionStr) {
+        authenticatedTelegramClients.delete(targetSessionStr.trim());
+        sessionFailureCooldowns.delete(targetSessionStr.trim());
+      }
+      if (targetPhone) {
+        const formatted = formatE164Phone(targetPhone);
+        if (formatted) {
+          realTelegramSessions.delete(formatted);
+          sessionFailureCooldowns.delete(formatted);
+        }
+      }
+
+      // Purge isolated session file from disk
+      deleteAccountSessionFromDisk(targetIndex);
+
+      // Purge cached data for this session to eliminate stale cache errors
+      purgeTelegramDataCache({
+        accountIndex: targetIndex,
+        phone: targetPhone,
+        sessionKey: targetSessionStr,
+      });
+
+      // If active account was removed, switch cleanly to next remaining account or reset
       if (currentAccount === targetIndex) {
         const remaining = loadAllAccountSessionsFromDisk();
         if (remaining.size > 0) {
           const firstKey = remaining.keys().next().value;
           currentAccount = firstKey !== undefined ? firstKey : 0;
           const nextClient = accountInstances.get(currentAccount)?.client;
-          if (nextClient) mainTelegramClient = nextClient;
+          mainTelegramClient = nextClient || null;
         } else {
           currentAccount = 0;
           mainTelegramClient = null;
+          telegramDataCache.clear();
         }
       }
 
       res.json({
         success: true,
+        loggedOutIndex: targetIndex,
         currentAccount,
-        message: `تم حذف جلسة الحساب ${targetIndex} بنجاح من مجلد sessions/`,
+        message: `تم تسجيل الخروج من الحساب ${targetIndex} بنجاح، ومسح الذاكرة المؤقتة وملف الجلسة.`,
       });
     } catch (removeErr: any) {
       res.status(500).json({

@@ -1990,10 +1990,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isPremium: true,
     };
 
+    const wasExplicitlyLoggedOut =
+      localStorage.getItem('tg_explicitly_logged_out') === 'true' ||
+      SecureSessionStorage.getItem('tg_explicitly_logged_out') === 'true';
+
     const effectiveSessionString =
       data.sessionString ||
-      SecureSessionStorage.getItem<string>('tg_session_string') ||
-      localStorage.getItem('tg_session_string') ||
+      (!wasExplicitlyLoggedOut ? (SecureSessionStorage.getItem<string>('tg_session_string') || localStorage.getItem('tg_session_string') || '') : '') ||
       `1BA${btoa(newUser.phone || 'tg_user')}_${Date.now()}`;
 
     try {
@@ -2002,7 +2005,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       localStorage.setItem('tg_phone', newUser.phone);
       localStorage.setItem('tg_auth_session_active', 'true');
       localStorage.removeItem('tg_explicitly_logged_out');
+      SecureSessionStorage.removeItem('tg_explicitly_logged_out');
     } catch {}
+
+    // Cleanly isolate view state so previous session messages do not pollute new login
+    setChats([]);
+    setMessages({});
+    setActiveChatId(null);
 
     // DrKLO Architecture Reset & Session Binding
     UserConfig.selectedAccount = 0;
@@ -2152,6 +2161,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const accIdToRemove = targetAccountId || activeAccountId;
     const accIndex = accounts.findIndex((a) => a.id === accIdToRemove);
     const targetIndex = accIndex >= 0 ? accIndex : 0;
+    const targetAcc = accounts.find((a) => a.id === accIdToRemove);
+    const targetSessionString = targetAcc?.sessionString;
+    const targetPhone = targetAcc?.user?.phone;
 
     // DrKLO Storage & Configuration purge
     UserConfig.getInstance(targetIndex).clearConfig(true);
@@ -2161,10 +2173,27 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const remaining = accounts.filter((a) => a.id !== accIdToRemove);
 
+    // Send clean logout call to server to revoke remote MTProto session and purge server cache
+    fetch('/api/telegram/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: accIdToRemove,
+        currentAccount: targetIndex,
+        sessionString: targetSessionString,
+        phone: targetPhone,
+        allAccounts: remaining.length === 0,
+      }),
+    }).catch(() => {});
+
     if (remaining.length === 0) {
       setAccounts([]);
       setIsAuthenticated(false);
       setActiveAccountId('');
+      setActiveChatId(null);
+      setChats([]);
+      setMessages({});
+      setCurrentUser(null as any);
       storageSyncManager.clearAllOnLogout();
       messageCache.clearAll().catch(() => {});
       try {
@@ -2173,11 +2202,25 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         SecureSessionStorage.removeItem('tg_multi_accounts_v3');
         SecureSessionStorage.removeItem('tg_active_account_id_v3');
         SecureSessionStorage.removeItem('tg_session_string');
+        for (let i = 0; i < 4; i++) {
+          SecureSessionStorage.removeItem(`tg_session_string_${i}`);
+          localStorage.removeItem(`tg_session_string_${i}`);
+        }
+        localStorage.removeItem('tg_session_string');
+        localStorage.removeItem('tg_phone');
+        localStorage.removeItem('tg_auth_session_active');
+        localStorage.setItem('tg_explicitly_logged_out', 'true');
       } catch {}
       showToast(settings.language === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Logged out successfully', '👋');
       setActiveModal('none');
       return;
     }
+
+    try {
+      SecureSessionStorage.removeItem(`tg_session_string_${targetIndex}`);
+      localStorage.removeItem(`tg_session_string_${targetIndex}`);
+      messageCache.clearAll().catch(() => {});
+    } catch {}
 
     setAccounts(remaining);
     if (activeAccountId === accIdToRemove) {
