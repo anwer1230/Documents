@@ -1,0 +1,35 @@
+{
+  "auto_replies": [
+    {
+      "id": "rule_1",
+      "keyword": "السلام عليكم",
+      "replyText": "وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸",
+      "reply": "وعليكم السلام ورحمة الله وبركاته، مرحباً بك! كيف يمكنني مساعدتك؟ 🌸",
+      "matchType": "contains",
+      "match": "contains",
+      "scope": "all",
+      "isEnabled": true,
+      "timesTriggered": 0,
+      "used_count": 0,
+      "last_used": 0,
+      "created_at": 1788962333825,
+      "updated_at": 1788962333825
+    },
+    {
+      "id": "rule_2",
+      "keyword": "الأسعار",
+      "replyText": "أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨",
+      "reply": "أهلاً بك! يمكنك الاطلاع على باقاتنا وعروضنا الحالية عبر الرابط المثبت أو إرسال تفاصيل طلبك مباشرة ✨",
+      "matchType": "contains",
+      "match": "contains",
+      "scope": "all",
+      "isEnabled": true,
+      "timesTriggered": 0,
+      "used_count": 0,
+      "last_used": 0,
+      "created_at": 1788962333825,
+      "updated_at": 1788962333825
+    }
+  ],
+  "auto_replies_enabled": true
+}

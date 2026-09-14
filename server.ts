@@ -319,6 +319,32 @@ async function startServer() {
     res.json({ csrfToken: req.session?.csrfToken || '' });
   });
 
+  // General Health & Info Endpoints
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  app.get("/api/env/info", (_req, res) => {
+    res.json({
+      environment: process.env.NODE_ENV || "production",
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+      features: {
+        mtprotoSync: true,
+        channelDifference: true,
+        updatesBatchScheduler: true,
+        draftSync: true,
+      },
+    });
+  });
+
+  app.get("/api/cache/stats", (_req, res) => {
+    res.json({
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+    });
+  });
+
   // Telegram Health and Connection Status Endpoint
   app.get('/api/telegram/status', async (req, res) => {
     let token = (req as any).sessionToken;

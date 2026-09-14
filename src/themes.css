@@ -1,0 +1,45 @@
+/* الوضع النهاري (Light) */
+:root, [data-theme="light"] {
+  --tg-bg-color: #ffffff;
+  --tg-secondary-bg-color: #f5f5f5;
+  --tg-text-color: #000000;
+  --tg-hint-color: #999999;
+  --tg-link-color: #26a5e4;
+  --tg-message-in-bg: #f1f1f1;
+  --tg-message-out-bg: #e7f8f3;
+  --tg-header-bg: #ffffff;
+  --tg-border-color: #e0e0e0;
+  --tg-shadow-color: rgba(0, 0, 0, 0.1);
+}
+
+/* الوضع الليلي (Dark) */
+[data-theme="dark"] {
+  --tg-bg-color: #17212b;
+  --tg-secondary-bg-color: #21262c;
+  --tg-text-color: #ffffff;
+  --tg-hint-color: #a7a7c4;
+  --tg-link-color: #26a5e4;
+  --tg-message-in-bg: #21262c;
+  --tg-message-out-bg: #133a34;
+  --tg-header-bg: #17212b;
+  --tg-border-color: #2b343e;
+  --tg-shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* تطبيق المتغيرات */
+body {
+  background-color: var(--tg-bg-color);
+  color: var(--tg-text-color);
+}
+
+.chat-list {
+  background-color: var(--tg-secondary-bg-color);
+}
+
+.message-in {
+  background-color: var(--tg-message-in-bg);
+}
+
+.message-out {
+  background-color: var(--tg-message-out-bg);
+}
