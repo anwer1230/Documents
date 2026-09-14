@@ -6,6 +6,8 @@
  * and background synchronizations while preserving full TypeScript safety.
  */
 
+import { csrfFetch } from './csrfFetch.js';
+
 export interface ApiResponse<T = any> {
   success: boolean;
   data?: T;
@@ -52,7 +54,7 @@ export async function request<T = any>(endpoint: string, options: RequestOptions
   const id = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const res = await fetch(url, {
+    const res = await csrfFetch(url, {
       ...fetchOptions,
       headers: {
         'Content-Type': 'application/json',

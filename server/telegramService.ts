@@ -2416,4 +2416,104 @@ export class TelegramService {
     });
   }
 
+  public static async createChannel(
+    sessionToken: string,
+    title: string,
+    about: string = '',
+    megagroup: boolean = false
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('channels.createChannel', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.channels.CreateChannel({
+          title,
+          about: about || '',
+          megagroup: Boolean(megagroup),
+          broadcast: !megagroup,
+        })
+      );
+      return res;
+    });
+  }
+
+  public static async getContacts(sessionToken: string) {
+    return FloodWaitQueue.executeWithFloodRetry('contacts.getContacts', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.contacts.GetContacts({
+          hash: 0 as any,
+        })
+      );
+      if (res && Array.isArray(res.users)) {
+        return res.users.map((u: any) => ({
+          id: String(u.id),
+          firstName: u.firstName || '',
+          lastName: u.lastName || '',
+          username: u.username || '',
+          phone: u.phone || '',
+          isOnline: u.status?.className === 'UserStatusOnline',
+          photo: u.photo ? true : false,
+        }));
+      }
+      return [];
+    });
+  }
+
+  public static async updateProfile(
+    sessionToken: string,
+    firstName?: string,
+    lastName?: string,
+    about?: string
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('account.updateProfile', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const updates: any = {};
+      if (firstName !== undefined) updates.firstName = firstName;
+      if (lastName !== undefined) updates.lastName = lastName;
+      if (about !== undefined) updates.about = about;
+
+      const res: any = await client.invoke(new Api.account.UpdateProfile(updates));
+      return res;
+    });
+  }
+
+  public static async archiveDialog(
+    sessionToken: string,
+    peerId: string,
+    folderId: number = 1
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('folders.editPeerFolders', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const res: any = await client.invoke(
+        new Api.folders.EditPeerFolders({
+          folderPeers: [
+            new Api.InputFolderPeer({
+              peer,
+              folderId,
+            }),
+          ],
+        })
+      );
+      return res;
+    });
+  }
+
+  public static async updatePasswordSettings(
+    sessionToken: string,
+    newSettings: any
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('account.updatePasswordSettings', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.account.UpdatePasswordSettings({
+          password: new Api.InputCheckPasswordEmpty(),
+          newSettings,
+        })
+      );
+      return res;
+    });
+  }
+
 }
+

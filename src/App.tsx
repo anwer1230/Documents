@@ -21,6 +21,7 @@ import { ReportChatModal } from './components/modals/ReportChatModal';
 import { Loader2 } from 'lucide-react';
 import { wsClient } from './utils/websocket';
 import { Api } from './services/api';
+import { csrfFetch } from './services/csrfFetch';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -1061,10 +1062,21 @@ export default function App() {
     }
   };
 
-  const handleToggleArchive = (chatId: string) => {
+  const handleToggleArchive = async (chatId: string) => {
+    const targetChat = chats.find((c) => c.id === chatId);
+    const newArchived = !targetChat?.isArchived;
     setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, isArchived: !c.isArchived } : c))
+      prev.map((c) => (c.id === chatId ? { ...c, isArchived: newArchived } : c))
     );
+    try {
+      await csrfFetch('/api/dialogs/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peerId: chatId, folderId: newArchived ? 1 : 0 }),
+      });
+    } catch (err) {
+      console.warn('Failed to sync archive status to cloud:', err);
+    }
   };
 
   const handleLogout = async () => {
@@ -1072,7 +1084,7 @@ export default function App() {
       await handleRemoveAccount(activeAccountId);
     } else {
       try {
-        await fetch('/api/telegram/logout', { method: 'POST' });
+        await csrfFetch('/api/telegram/logout', { method: 'POST' });
       } catch {}
       localStorage.removeItem('tg_active_user');
       setCurrentUser(null);
@@ -1673,11 +1685,35 @@ export default function App() {
   };
 
   // Create new channel / group
-  const handleCreateChat = (newChatData: Partial<TelegramChat>) => {
-    const id = 'custom_' + Date.now();
+  const handleCreateChat = async (newChatData: Partial<TelegramChat>) => {
+    let id = 'custom_' + Date.now();
+    let createdTitle = newChatData.title || 'محادثة جديدة';
+    
+    // Call server endpoint to create real channel on Telegram if logged in
+    if (newChatData.type === 'channel' || newChatData.type === 'group') {
+      try {
+        const res = await csrfFetch('/api/channels/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: createdTitle,
+            about: newChatData.description || '',
+            megagroup: newChatData.type === 'group',
+          }),
+        });
+        const data = await res.json();
+        if (data?.channel?.id) {
+          id = String(data.channel.id);
+          createdTitle = data.channel.title || createdTitle;
+        }
+      } catch (err) {
+        console.warn('Could not create channel via MTProto, falling back to local chat:', err);
+      }
+    }
+
     const chat: TelegramChat = {
       id,
-      title: newChatData.title || 'محادثة جديدة',
+      title: createdTitle,
       username: newChatData.username,
       type: newChatData.type || 'channel',
       avatarColor: newChatData.avatarColor || '#3390ec',

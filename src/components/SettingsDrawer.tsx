@@ -54,6 +54,7 @@ import {
   getPushSubscription,
 } from '../utils/pushNotifications';
 import api, { Api } from '../services/api';
+import { csrfFetch } from '../services/csrfFetch';
 import { PrivacySettings } from './PrivacySettings';
 
 interface SettingsDrawerProps {
@@ -273,9 +274,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const fetchCloud2FA = async () => {
     setTwoStepLoading(true);
     try {
-      // Direct call to Api.account.GetPassword as requested
-      const res: any = await Api.account.GetPassword();
-      const data = res?.result || res;
+      const res = await csrfFetch('/api/account/2fa/get');
+      const data = await res.json();
       if (data) {
         setTwoStepEnabled(Boolean(data.hasPassword));
         setTwoStepHint(data.hint || '');
@@ -288,7 +288,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         });
       }
     } catch (err: any) {
-      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password via Api.account.GetPassword:', err);
+      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password:', err);
     } finally {
       setTwoStepLoading(false);
     }
@@ -481,7 +481,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setPushLoading(false);
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateUser({
       firstName,
@@ -490,6 +490,19 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       username: username.replace(/^@/, ''),
       photoUrl: photoUrl.trim() || undefined,
     });
+    try {
+      await csrfFetch('/api/account/update-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          about: bio,
+        }),
+      });
+    } catch (err) {
+      console.warn('Could not sync profile to cloud:', err);
+    }
     setProfileSavedToast(true);
     setTimeout(() => {
       setProfileSavedToast(false);
@@ -503,14 +516,19 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     onUpdateTheme({ fontSize: sizeCategory });
   };
 
-  const handleClearCache = () => {
+  const handleClearCache = async () => {
     setIsClearingCache(true);
+    try {
+      await csrfFetch('/api/account/clear-cache', { method: 'POST' });
+    } catch (err) {
+      console.warn('Error clearing backend cache:', err);
+    }
     setTimeout(() => {
       setCacheSize('0.0 KB');
       setIsClearingCache(false);
       setCacheCleared(true);
       setTimeout(() => setCacheCleared(false), 2500);
-    }, 1200);
+    }, 600);
   };
 
   const handleCreateFolder = () => {
@@ -1799,11 +1817,13 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                       setIsSaving2FA(true);
                       setTwoStepSuccessMsg(null);
                       try {
-                        await api.mtproto.invoke('account.updatePasswordSettings', {
-                          password: twoStepPassword || undefined,
-                          newSettings: {
+                        await csrfFetch('/api/account/2fa/set', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            password: twoStepPassword || undefined,
                             hint: newTwoStepHint || undefined,
-                          },
+                          }),
                         });
                         setTwoStepHint(newTwoStepHint);
                         setTwoStepEnabled(true);

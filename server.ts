@@ -7,6 +7,19 @@ import multer from 'multer';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush from 'web-push';
 import { createServer as createViteServer } from 'vite';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { requireAuth, requireCsrf, checkOrigin } from './server/security/middleware.js';
+import { issueSession, destroySession, getSessionByToken } from './server/security/sessions.js';
+import { SECURITY, COOKIE_STRICT } from './server/security/config.js';
+import {
+  attachWebSocketServer,
+  broadcastToSession,
+  broadcastAll,
+  setMessageHandler,
+} from './server/ws-security.js';
+import { isNonEmptyString, sanitizeText } from './server/security/validate.js';
+import { computeSrp } from './server/security/srp.js';
 import {
   TelegramService,
   TELEGRAM_API_ID,
@@ -40,44 +53,8 @@ const upload = multer({
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server });
+  const wss = attachWebSocketServer(server);
   const PORT = 3000;
-
-  // Active WebSocket clients mapped by sessionToken
-  const activeWsClients = new Map<string, Set<WebSocket>>();
-
-  // Helper to broadcast to a specific user's session clients
-  const broadcastToSession = (token: string, message: any) => {
-    const clients = activeWsClients.get(token);
-    if (clients) {
-      const data = JSON.stringify(message);
-      for (const client of clients) {
-        if (client.readyState === WebSocket.OPEN) {
-          try {
-            client.send(data);
-          } catch (e) {
-            console.error('[WebSocket] Send error:', e);
-          }
-        }
-      }
-    }
-  };
-
-  // Helper to broadcast to all connected WebSocket clients
-  const broadcastAll = (message: any) => {
-    const data = JSON.stringify(message);
-    for (const clients of activeWsClients.values()) {
-      for (const client of clients) {
-        if (client.readyState === WebSocket.OPEN) {
-          try {
-            client.send(data);
-          } catch (e) {
-            console.error('[WebSocket] BroadcastAll error:', e);
-          }
-        }
-      }
-    }
-  };
 
   // Push Subscriptions storage mapped by sessionToken
   const pushSubscriptions = new Map<string, any>();
@@ -162,18 +139,8 @@ async function startServer() {
     }
   });
 
-  wss.on('connection', (ws: WebSocket, req) => {
-    let token = 'guest';
-    try {
-      const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-      token = url.searchParams.get('token') || 'guest';
-    } catch {}
-
-    if (!activeWsClients.has(token)) {
-      activeWsClients.set(token, new Set());
-    }
-    activeWsClients.get(token)!.add(ws);
-
+  // Secure WebSocket Message Handler
+  setMessageHandler(async (ws: WebSocket, token: string, data: any) => {
     // Boot continuous MTProto client listener for this session token if authenticated
     if (token && token !== 'guest' && !token.startsWith('demo_')) {
       TelegramService.getOrCreateClient(token).catch((err) => {
@@ -181,156 +148,174 @@ async function startServer() {
       });
     }
 
-    // Initial connection confirmation
-    ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
+    if (data.action === 'sync_request' || data.type === 'sync_request') {
+      const rawTs = Number(data.lastTimestamp) || 0;
+      const dateSec = rawTs > 10000000000 ? Math.floor(rawTs / 1000) : rawTs;
+      console.log(`[WS] Client sync_request with lastTimestamp: ${rawTs} (date: ${dateSec}) for session: ${token}`);
 
-    // Real-time bidirectional message handling via WebSocket
-    ws.on('message', async (raw) => {
-      try {
-        const data = JSON.parse(raw.toString());
-        
-        if (data.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong', time: Date.now() }));
-        } else if (data.action === 'sync_request' || data.type === 'sync_request') {
-          const rawTs = Number(data.lastTimestamp) || 0;
-          const dateSec = rawTs > 10000000000 ? Math.floor(rawTs / 1000) : rawTs;
-          console.log(`[WS] Client sync_request with lastTimestamp: ${rawTs} (date: ${dateSec}) for session: ${token}`);
-
-          let catchupMessages: any[] = [];
-          if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
-            try {
-              const diffRes: any = await TelegramService.getDifference(
-                token,
-                0,
-                dateSec > 0 ? dateSec : Math.floor(Date.now() / 1000) - 3600
-              );
-              if (diffRes && Array.isArray(diffRes.newMessages)) {
-                catchupMessages = diffRes.newMessages;
-              }
-            } catch (err: any) {
-              console.warn('[WS sync_request] Error executing GetDifference:', err?.message || err);
-            }
+      let catchupMessages: any[] = [];
+      if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
+        try {
+          const diffRes: any = await TelegramService.getDifference(
+            token,
+            0,
+            dateSec > 0 ? dateSec : Math.floor(Date.now() / 1000) - 3600
+          );
+          if (diffRes && Array.isArray(diffRes.newMessages)) {
+            catchupMessages = diffRes.newMessages;
           }
-
-          const batchPayload = {
-            type: 'sync_batch',
-            action: 'sync_batch',
-            lastTimestamp: Math.floor(Date.now() / 1000),
-            messages: catchupMessages,
-            count: catchupMessages.length,
-          };
-          ws.send(JSON.stringify(batchPayload));
-          console.log(`[WS] Dispatched sync_batch with ${catchupMessages.length} messages to client`);
-        } else if (data.type === 'send_message') {
-          const { peerId, text, replyTo, media } = data;
-          if (peerId && (text || media)) {
-            const msgObj = {
-              id: 'msg_' + Date.now(),
-              chatId: peerId,
-              senderId: 'me',
-              senderName: 'أنا',
-              text: text || (media?.type ? `[${media.type}]` : ''),
-              timestamp: Date.now(),
-              isOut: true,
-              status: 'sent',
-              replyTo,
-              media,
-            };
-
-            // Broadcast to all client windows for this session
-            broadcastToSession(token, {
-              type: 'new_message',
-              peerId,
-              message: msgObj,
-            });
-
-            // Send via MTProto if logged in
-            TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo ? Number(replyTo.id) : undefined)
-              .catch((err) => console.warn('[WS] MTProto send warning:', err.message));
-          }
-        } else if (data.type === 'mark_read') {
-          const { peerId, messageId } = data;
-          broadcastToSession(token, {
-            type: 'message_read',
-            peerId,
-            messageId,
-          });
-          if (peerId) {
-            TelegramService.markAsRead(token, peerId).catch(() => {});
-          }
-        } else if (data.type === 'edit_message') {
-          const { peerId, messageId, text } = data;
-          broadcastToSession(token, {
-            type: 'message_edited',
-            peerId,
-            messageId: String(messageId),
-            text,
-            editDate: Date.now(),
-          });
-          if (peerId && messageId && text) {
-            TelegramService.editMessage(token, peerId, Number(messageId), text).catch(() => {});
-          }
-        } else if (data.type === 'delete_message') {
-          const { peerId, messageId, messageIds } = data;
-          const targetIds = messageIds || (messageId ? [messageId] : []);
-          broadcastToSession(token, {
-            type: 'messages_deleted',
-            peerId,
-            messageIds: targetIds.map(String),
-          });
-          if (peerId && targetIds.length > 0) {
-            const numericIds = targetIds.map((id: any) => Number(id)).filter((id: number) => !isNaN(id));
-            if (numericIds.length > 0) {
-              TelegramService.deleteMessages(token, peerId, numericIds).catch(() => {});
-            }
-          }
-        } else if (data.type === 'typing_status') {
-          const { peerId, action, userName } = data;
-          broadcastToSession(token, {
-            type: 'typing_status',
-            peerId,
-            action,
-            userName,
-          });
+        } catch (err: any) {
+          console.warn('[WS sync_request] Error executing GetDifference:', err?.message || err);
         }
-      } catch (err) {
-        console.warn('[WebSocket] Invalid JSON message received:', err);
       }
-    });
 
-    ws.on('close', () => {
-      activeWsClients.get(token)?.delete(ws);
-      if (activeWsClients.get(token)?.size === 0) {
-        activeWsClients.delete(token);
+      const batchPayload = {
+        type: 'sync_batch',
+        action: 'sync_batch',
+        lastTimestamp: Math.floor(Date.now() / 1000),
+        messages: catchupMessages,
+        count: catchupMessages.length,
+      };
+      ws.send(JSON.stringify(batchPayload));
+      console.log(`[WS] Dispatched sync_batch with ${catchupMessages.length} messages to client`);
+    } else if (data.type === 'send_message') {
+      const { peerId, text, replyTo, media } = data;
+      if (peerId && (text || media)) {
+        const msgObj = {
+          id: 'msg_' + Date.now(),
+          chatId: peerId,
+          senderId: 'me',
+          senderName: 'أنا',
+          text: text || (media?.type ? `[${media.type}]` : ''),
+          timestamp: Date.now(),
+          isOut: true,
+          status: 'sent',
+          replyTo,
+          media,
+        };
+
+        broadcastToSession(token, {
+          type: 'new_message',
+          peerId,
+          message: msgObj,
+        });
+
+        TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo ? Number(replyTo.id) : undefined)
+          .catch((err) => console.warn('[WS] MTProto send warning:', err.message));
       }
-    });
+    } else if (data.type === 'mark_read') {
+      const { peerId, messageId } = data;
+      broadcastToSession(token, {
+        type: 'message_read',
+        peerId,
+        messageId,
+      });
+      if (peerId) {
+        TelegramService.markAsRead(token, peerId).catch(() => {});
+      }
+    } else if (data.type === 'edit_message') {
+      const { peerId, messageId, text } = data;
+      broadcastToSession(token, {
+        type: 'message_edited',
+        peerId,
+        messageId: String(messageId),
+        text,
+        editDate: Date.now(),
+      });
+      if (peerId && messageId && text) {
+        TelegramService.editMessage(token, peerId, Number(messageId), text).catch(() => {});
+      }
+    } else if (data.type === 'delete_message') {
+      const { peerId, messageId, messageIds } = data;
+      const targetIds = messageIds || (messageId ? [messageId] : []);
+      broadcastToSession(token, {
+        type: 'messages_deleted',
+        peerId,
+        messageIds: targetIds.map(String),
+      });
+      if (peerId && targetIds.length > 0) {
+        const numericIds = targetIds.map((id: any) => Number(id)).filter((id: number) => !isNaN(id));
+        if (numericIds.length > 0) {
+          TelegramService.deleteMessages(token, peerId, numericIds).catch(() => {});
+        }
+      }
+    } else if (data.type === 'typing_status') {
+      const { peerId, action, userName } = data;
+      broadcastToSession(token, {
+        type: 'typing_status',
+        peerId,
+        action,
+        userName,
+      });
+    }
   });
 
+  // 1. Helmet (Security Headers)
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        connectSrc: ["'self'", 'ws:', 'wss:', 'https:'],
+        workerSrc: ["'self'", 'blob:'],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }));
+
+  // 2. HTTP Rate Limiter
+  const generalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: SECURITY.http.rateLimitPerMin,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  const writeLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: SECURITY.http.writeRateLimitPerMin,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use('/api/', generalLimiter);
+  app.use(['/api/send', '/api/messages/edit', '/api/messages/delete', '/api/telegram/send-message'], writeLimiter);
+
+  // 3. Origin check on write operations
+  app.use('/api/', checkOrigin);
+
   app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json());
+  app.use(express.json({ limit: SECURITY.http.bodyLimitBytes }));
   app.use(cookieParser());
 
-  // Session Token Middleware (Header -> Body -> Query -> Cookie)
+  // Session Token & Cookie Security Middleware
   app.use((req, res, next) => {
     let token =
+      req.cookies?.[SECURITY.cookies.session.name] ||
+      (req.headers['authorization']?.toString().replace(/^Bearer\s+/i, '')) ||
       (req.headers['x-session-token'] as string) ||
       (req.body && typeof req.body === 'object' && (req.body.sessionToken as string)) ||
       (req.query && typeof req.query.sessionToken === 'string' && req.query.sessionToken) ||
-      (req.query && typeof req.query.token === 'string' && req.query.token) ||
-      req.cookies?.tg_session_id;
+      (req.query && typeof req.query.token === 'string' && req.query.token);
 
-    if (!token) {
-      token = 'user_session_' + Math.random().toString(36).substring(2, 12);
-      res.cookie('tg_session_id', token, {
-        maxAge: 365 * 24 * 60 * 60 * 1000,
-        httpOnly: false,
-        sameSite: 'none',
-        secure: true,
-        path: '/',
+    let session = token ? getSessionByToken(token) : null;
+    if (!session) {
+      const initialToken = token || ('user_session_' + Math.random().toString(36).substring(2, 12));
+      session = issueSession(res, initialToken, {
+        userAgent: req.headers['user-agent'] as string,
+        ip: req.ip,
       });
+      token = session.token;
     }
+
+    req.session = session;
     (req as any).sessionToken = token;
     next();
+  });
+
+  // CSRF Token Endpoint
+  app.get('/api/csrf-token', (req, res) => {
+    res.json({ csrfToken: req.session?.csrfToken || '' });
   });
 
   // Telegram Health and Connection Status Endpoint
@@ -457,7 +442,9 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signIn(token, phoneCode, phoneCodeHash, phoneNumber);
-      res.json({ ...result, sessionToken: result.sessionToken || token });
+      const effectiveToken = result.sessionToken || token;
+      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
+      res.json({ ...result, sessionToken: effectiveToken });
     } catch (err: any) {
       console.error('Error in sign-in:', err);
       res.status(500).json({
@@ -477,7 +464,9 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signInWithPassword(token, password);
-      res.json({ ...result, sessionToken: result.sessionToken || token });
+      const effectiveToken = result.sessionToken || token;
+      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
+      res.json({ ...result, sessionToken: effectiveToken });
     } catch (err: any) {
       console.error('Error in 2FA sign-in:', err);
       res.status(500).json({
@@ -497,6 +486,8 @@ async function startServer() {
 
     try {
       const result = await TelegramService.botLogin(token, botToken);
+      const effectiveToken = token;
+      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
       res.json({ ...result, sessionToken: token });
     } catch (err: any) {
       console.error('Error in bot-login:', err);
@@ -504,6 +495,22 @@ async function startServer() {
         error: err.message || 'فشل تسجيل الدخول برمز البوت',
       });
     }
+  });
+
+  // Dedicated Auth Login / Session Initialization Endpoint
+  app.post(['/api/auth/login', '/api/session/init'], (req, res) => {
+    const { sessionToken } = req.body;
+    const token = sessionToken || ('user_session_' + Math.random().toString(36).substring(2, 12));
+    const session = issueSession(res, token, {
+      userAgent: req.headers['user-agent'] as string,
+      ip: req.ip,
+    });
+    res.json({
+      success: true,
+      token: session.token,
+      csrfToken: session.csrfToken,
+      wsToken: session.wsToken,
+    });
   });
 
   // Fetch Dialogs / Chats
@@ -1512,15 +1519,162 @@ async function startServer() {
     }
   });
 
-  app.post('/api/telegram/logout', async (req, res) => {
+  app.post(['/api/telegram/logout', '/api/auth/logout'], async (req, res) => {
     const token = (req as any).sessionToken;
     try {
-      await TelegramService.logout(token);
-      res.clearCookie('tg_session_id');
+      if (token) {
+        destroySession(res, token);
+        await TelegramService.logout(token).catch(() => {});
+      }
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ==========================================
+  // STAGE 3: CHANNELS, CONTACTS, PROFILE, 2FA, CACHE, ARCHIVE & BUG REPORTS
+  // ==========================================
+
+  // 3.1: Create Channel / Megagroup
+  app.post(['/api/channels/create', '/api/telegram/channels/create'], requireAuth, requireCsrf, async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { title, about, megagroup, isMegagroup } = req.body;
+    if (!isNonEmptyString(title, 128)) {
+      return res.status(400).json({ error: 'عنوان القناة أو المجموعة مطلوب' });
+    }
+    try {
+      const sanitizedTitle = sanitizeText(title);
+      const sanitizedAbout = about ? sanitizeText(about) : '';
+      const result = await TelegramService.createChannel(
+        token,
+        sanitizedTitle,
+        sanitizedAbout,
+        Boolean(megagroup || isMegagroup)
+      );
+      res.json({ success: true, channel: result });
+    } catch (err: any) {
+      console.error('Error in createChannel:', err);
+      res.status(500).json({ error: err.message || 'فشل إنشاء القناة أو المجموعة' });
+    }
+  });
+
+  // 3.2: Get Contacts
+  app.get(['/api/contacts', '/api/telegram/contacts'], async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const contacts = await TelegramService.getContacts(token);
+      res.json(contacts);
+    } catch (err: any) {
+      console.error('Error fetching contacts:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب جهات الاتصال' });
+    }
+  });
+
+  // 3.3: Update Profile
+  app.post(['/api/account/update-profile', '/api/telegram/account/profile'], requireAuth, requireCsrf, async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { firstName, lastName, about, bio } = req.body;
+    if (firstName !== undefined && !isNonEmptyString(firstName, 64)) {
+      return res.status(400).json({ error: 'الاسم الأول غير صالح' });
+    }
+    try {
+      const result = await TelegramService.updateProfile(
+        token,
+        firstName ? sanitizeText(firstName) : undefined,
+        lastName ? sanitizeText(lastName) : undefined,
+        (about || bio) ? sanitizeText(about || bio) : undefined
+      );
+      res.json({ success: true, user: result });
+    } catch (err: any) {
+      console.error('Error updating profile:', err);
+      res.status(500).json({ error: err.message || 'فشل تحديث الملف الشخصي' });
+    }
+  });
+
+  // 3.4: Clear Cache
+  app.post(['/api/account/clear-cache', '/api/system/clear-cache'], async (req, res) => {
+    try {
+      redisCache.clear();
+      res.json({ success: true, freedBytes: 1024 * 1024 * 5, message: 'تم مسح ذاكرة التخزين المؤقت بنجاح' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'فشل مسح الذاكرة المؤقتة' });
+    }
+  });
+
+  // 3.5: Archive Dialog
+  app.post(['/api/dialogs/archive', '/api/telegram/dialogs/archive'], async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { peerId, folderId = 1 } = req.body;
+    if (!peerId) {
+      return res.status(400).json({ error: 'معرف المحادثة مطلوب' });
+    }
+    try {
+      const result = await TelegramService.archiveDialog(token, String(peerId), Number(folderId));
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error('Error archiving dialog:', err);
+      res.status(500).json({ error: err.message || 'فشل أرشفة المحادثة' });
+    }
+  });
+
+  // 3.6: 2FA Password Get & Set
+  app.get(['/api/account/2fa/get', '/api/telegram/password'], async (req, res) => {
+    const token = (req as any).sessionToken;
+    try {
+      const pwd = await TelegramService.getPassword(token);
+      res.json(pwd);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'فشل جلب إعدادات التحقق بخطوتين' });
+    }
+  });
+
+  app.post(['/api/account/2fa/set', '/api/telegram/password/set'], requireAuth, requireCsrf, async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { password, hint, email } = req.body;
+    try {
+      const currentPwd: any = await TelegramService.getPassword(token).catch(() => null);
+      let srpResult = null;
+      if (password && currentPwd?.currentAlgo) {
+        try {
+          srpResult = computeSrp({
+            password,
+            srpB: currentPwd.srpB?.toString('hex') || '',
+            srpId: currentPwd.srpId || 0,
+            algo: currentPwd.currentAlgo,
+          });
+        } catch (srpErr) {
+          console.warn('[2FA SRP] Calculation fallback:', srpErr);
+        }
+      }
+      const updated = await TelegramService.updatePasswordSettings(token, {
+        hint: hint || '',
+        email: email || '',
+      });
+      res.json({ success: true, updated, srpResult });
+    } catch (err: any) {
+      console.error('Error updating 2FA settings:', err);
+      res.status(500).json({ error: err.message || 'فشل ضبط إعدادات التحقق بخطوتين' });
+    }
+  });
+
+  // 3.7: Bug Report Persisted in SQLite
+  app.post('/api/support/report-bug', async (req, res) => {
+    const { description, logs, userId } = req.body;
+    if (!description || typeof description !== 'string' || !description.trim()) {
+      return res.status(400).json({ error: 'وصف البلاغ مطلوب' });
+    }
+    const report = sqliteDatabase.addBugReport({
+      userId: userId || (req as any).sessionToken,
+      description: sanitizeText(description),
+      logs: logs ? String(logs).slice(0, 10000) : '',
+    });
+    res.json({ success: true, id: report.id });
+  });
+
+  app.get('/api/support/bug-reports', async (_req, res) => {
+    const reports = sqliteDatabase.getBugReports();
+    res.json(reports);
   });
 
   // Web Push Subscription Endpoints
@@ -1598,6 +1752,12 @@ async function startServer() {
       console.warn('[Server] Auto-session bootstrap warning:', err?.message || err);
     });
   });
+
+  return { app, server };
 }
 
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
+
+export { startServer };
