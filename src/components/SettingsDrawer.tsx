@@ -56,6 +56,7 @@ import {
 import api, { Api } from '../services/api';
 import { csrfFetch } from '../services/csrfFetch';
 import { PrivacySettings } from './PrivacySettings';
+import { PasswordStrengthIndicator } from './PasswordStrengthIndicator';
 import { VAPID_SUBJECT } from '../config';
 
 interface SettingsDrawerProps {
@@ -1793,6 +1794,8 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                       {show2faPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  {/* Real-time Password Strength Visualizer */}
+                  <PasswordStrengthIndicator password={twoStepPassword} lang={isAr ? 'ar' : 'en'} />
                 </div>
 
                 <div className="space-y-1.5">
