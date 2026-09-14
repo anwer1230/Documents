@@ -40,6 +40,9 @@ import {
   Gift,
   ArrowLeft,
   ArrowRight,
+  AlertTriangle,
+  AlertCircle,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   TelegramChat,
@@ -168,6 +171,55 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     x: number;
     y: number;
   } | null>(null);
+
+  // Spam banner dismissed state
+  const [isSpamBannerDismissed, setIsSpamBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setIsSpamBannerDismissed(false);
+  }, [chat?.id]);
+
+  const handleAddContact = async () => {
+    if (!chat) return;
+    try {
+      const activeToken = localStorage.getItem('tg_active_session_token') || '';
+      const res = await fetch('/api/telegram/add-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-session-token': activeToken },
+        body: JSON.stringify({ peerId: chat.id, firstName: chat.title }),
+      });
+      if (res.ok) {
+        onToast(isAr ? 'تمت إضافة جهة الاتصال بنجاح' : 'Contact added successfully', 'success');
+        setIsSpamBannerDismissed(true);
+      } else {
+        const err = await res.json();
+        onToast(err.error || (isAr ? 'فشل إضافة جهة الاتصال' : 'Failed to add contact'), 'error');
+      }
+    } catch {
+      onToast(isAr ? 'حدث خطأ أثناء إضافة جهة الاتصال' : 'Error adding contact', 'error');
+    }
+  };
+
+  const handleReportSpamAndBlock = async () => {
+    if (!chat) return;
+    try {
+      const activeToken = localStorage.getItem('tg_active_session_token') || '';
+      const res = await fetch('/api/telegram/report-spam', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-session-token': activeToken },
+        body: JSON.stringify({ peerId: chat.id, reason: 'spam', details: 'Reported via peer banner' }),
+      });
+      if (res.ok) {
+        onToast(isAr ? 'تم الإبلاغ عن المحادثة بنجاح' : 'Reported spam successfully', 'success');
+        setIsSpamBannerDismissed(true);
+      } else {
+        const err = await res.json();
+        onToast(err.error || (isAr ? 'فشل الإبلاغ' : 'Failed to report'), 'error');
+      }
+    } catch {
+      onToast(isAr ? 'حدث خطأ أثناء الإبلاغ' : 'Error reporting', 'error');
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -828,6 +880,70 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         )}
       </header>
 
+      {/* Legal & Regional Restriction Warning Banner (Official MTProto Restriction Notice) */}
+      {chat.restrictionReason && chat.restrictionReason.length > 0 && (
+        <div
+          className={`px-4 py-2.5 flex items-center justify-between text-xs border-b select-none z-10 ${
+            isDark ? 'bg-amber-950/40 border-amber-800/40 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold block text-[11px]">
+                {isAr ? '⚠️ إشعار قيود قانونية / إقليمية' : '⚠️ Legal / Regional Notice'}
+              </span>
+              <p className="truncate text-xs opacity-90">
+                {chat.restrictionReason[0].text || chat.restrictionReason[0].reason || (isAr ? 'هذه المحادثة مقيدة قانونياً في بعض المناطق' : 'Restricted in certain jurisdictions')}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Telegram Spam & Peer Verification Banner (Official Web K Peer Settings) */}
+      {!isSpamBannerDismissed && (chat.peerSettings?.reportSpam || chat.peerSettings?.addContact) && (
+        <div
+          className={`px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs border-b select-none z-10 transition ${
+            isDark ? 'bg-[#182533] border-[#242f3d] text-gray-200' : 'bg-blue-50/90 border-blue-200/80 text-gray-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="text-[11px] font-medium">
+              {isAr ? 'هذا المستخدم ليس ضمن جهات اتصالك.' : 'This user is not in your contacts.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 ms-auto">
+            {chat.peerSettings?.addContact && (
+              <button
+                onClick={handleAddContact}
+                className="px-2.5 py-1 rounded-md bg-[#3390ec] text-white hover:bg-[#2881da] font-medium text-[11px] flex items-center gap-1 transition"
+              >
+                <UserPlus className="w-3 h-3" />
+                <span>{isAr ? 'إضافة لجهات الاتصال' : 'Add Contact'}</span>
+              </button>
+            )}
+            {chat.peerSettings?.reportSpam && (
+              <button
+                onClick={handleReportSpamAndBlock}
+                className="px-2.5 py-1 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 font-medium text-[11px] flex items-center gap-1 transition"
+              >
+                <Flag className="w-3 h-3" />
+                <span>{isAr ? 'إبلاغ عن سبام وحظر' : 'Report Spam'}</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsSpamBannerDismissed(true)}
+              className="text-gray-400 hover:text-gray-200 p-1"
+              title={isAr ? 'تجاهل' : 'Dismiss'}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Supergroup Forum Topics Bar */}
       {forumTopics.length > 0 && (
         <ForumTopicsBar
@@ -1462,8 +1578,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
       )}
 
-      {/* Bottom Action Bar: JOIN CHANNEL or MUTE/UNMUTE or Message Input */}
-      {chat.type === 'channel' && chat.isJoined === false ? (
+      {/* Bottom Action Bar: JOIN CHANNEL or BROADCAST MUTE or RESTRICTED or Message Input */}
+      {chat.type === 'channel' && chat.isBroadcast && chat.isJoined === false ? (
         <div
           className={`w-full px-4 py-3 border-t flex flex-col sm:flex-row items-center justify-between gap-3 backdrop-blur-md transition-colors ${
             isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
@@ -1495,7 +1611,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             )}
           </button>
         </div>
-      ) : chat.type === 'channel' && chat.isJoined !== false ? (
+      ) : chat.type === 'channel' && chat.isBroadcast && chat.canSendMessages === false ? (
         <div
           className={`w-full px-4 py-2.5 border-t flex items-center justify-between gap-3 backdrop-blur-md transition-colors ${
             isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
@@ -1532,6 +1648,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               </>
             )}
           </button>
+        </div>
+      ) : chat.canSendMessages === false ? (
+        <div
+          className={`w-full px-4 py-3 border-t flex items-center justify-center gap-2 backdrop-blur-md text-xs font-semibold ${
+            isDark ? 'bg-[#17212b]/95 border-[#0e1621] text-gray-400' : 'bg-gray-50 border-gray-200 text-gray-500'
+          }`}
+        >
+          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+          <span>
+            {isAr
+              ? 'إرسال الرسائل مقيد في هذه المجموعة بواسطة المشرفين'
+              : 'Posting is restricted in this group by administrators'}
+          </span>
         </div>
       ) : (
         /* Bottom Message Input Bar */

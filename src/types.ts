@@ -136,7 +136,7 @@ export interface TelegramMessage {
   text: string;
   timestamp: number;
   isOut: boolean;
-  status: 'sending' | 'sent' | 'read';
+  status: 'sending' | 'sent' | 'read' | 'error';
   replyTo?: {
     id: string;
     senderName: string;
@@ -180,7 +180,9 @@ export interface TelegramChat {
   lastMessage?: {
     text: string;
     timestamp: number;
+    senderId?: string;
     senderName?: string;
+    senderAvatar?: string;
     isOut?: boolean;
     mediaType?: string;
   };
@@ -195,6 +197,16 @@ export interface TelegramChat {
   membersCount?: number;
   description?: string;
   inviteLink?: string;
+  canSendMessages?: boolean;
+  isBroadcast?: boolean;
+  restrictionReason?: Array<{ platform: string; reason: string; text: string }>;
+  peerSettings?: {
+    reportSpam?: boolean;
+    addContact?: boolean;
+    blockContact?: boolean;
+    shareContact?: boolean;
+    needReq?: boolean;
+  };
   members?: Array<{
     id: string;
     name: string;

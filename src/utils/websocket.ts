@@ -11,6 +11,8 @@ export interface WebSocketMessage {
   type:
     | 'connected'
     | 'new_message'
+    | 'UpdateNewMessage'
+    | 'UpdateNewChannelMessage'
     | 'typing_status'
     | 'user_status'
     | 'message_read'
@@ -18,6 +20,7 @@ export interface WebSocketMessage {
     | 'messages_deleted'
     | 'notification'
     | 'sync_batch';
+  className?: string;
   payload?: any;
   peerId?: string;
   action?: string;

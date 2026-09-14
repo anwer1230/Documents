@@ -925,7 +925,83 @@ async function startServer() {
       res.json({ success: true, result });
     } catch (err: any) {
       console.error('Error sending message:', err);
-      res.status(500).json({ error: err.message || 'فشل إرسال الرسالة عبر تيليجرام' });
+      const errorCode = err.errorMessage || err.code || 'SEND_FAILED';
+      let errorMsg = err.message || 'فشل إرسال الرسالة عبر تيليجرام';
+      if (errorCode === 'PEER_FLOOD') {
+        errorMsg = 'عذراً، يمكنك فقط إرسال رسائل إلى جهات الاتصال المشتركة في الوقت الحالي (حدود سبام تيليجرام). لمزيد من المعلومات افتح @SpamBot';
+      } else if (errorCode === 'CHAT_WRITE_FORBIDDEN') {
+        errorMsg = 'غير مسموح لك بإرسال رسائل في هذه المحادثة';
+      } else if (errorCode === 'USER_BANNED_IN_CHANNEL') {
+        errorMsg = 'تم حظرك من النشر في هذه القناة أو المجموعة';
+      } else if (typeof errorCode === 'string' && errorCode.startsWith('SLOWMODE_WAIT_')) {
+        errorMsg = 'الوضع البطيء مفعل. يرجى الانتظار قبل إرسال رسالة أخرى.';
+      } else if (typeof errorCode === 'string' && errorCode.startsWith('FLOOD_WAIT_')) {
+        errorMsg = 'طلبات كثيرة جداً. يرجى الانتظار قليلاً قبل إعادة المحاولة.';
+      }
+      res.status(400).json({ error: errorMsg, errorCode });
+    }
+  });
+
+  // Live Chat/Channel Full Information (Description, Member Count, Permissions, Spam Settings, Restrictions)
+  app.get('/api/telegram/chat-info', async (req, res) => {
+    let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    const peerId = (req.query.peerId as string) || (req.query.id as string);
+    if (!peerId) {
+      return res.status(400).json({ error: 'peerId مطلوب' });
+    }
+    try {
+      const info = await TelegramService.getChatFullInfo(token, peerId);
+      if (!info) {
+        return res.status(404).json({ error: 'تعذر جلب تفاصيل المحادثة' });
+      }
+      res.json(info);
+    } catch (err: any) {
+      console.error('Error fetching chat full info:', err);
+      res.status(500).json({ error: err.message || 'فشل جلب تفاصيل المحادثة' });
+    }
+  });
+
+  // Report Spam & Legal Violations
+  app.post('/api/telegram/report-spam', async (req, res) => {
+    let token = req.body?.sessionToken || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    const { peerId, reason, details } = req.body;
+    if (!peerId) {
+      return res.status(400).json({ error: 'peerId مطلوب' });
+    }
+    try {
+      const result = await TelegramService.reportSpam(token, peerId, reason, details);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error reporting spam:', err);
+      res.status(500).json({ error: err.message || 'فشل إرسال البلاغ' });
+    }
+  });
+
+  // Add Contact
+  app.post('/api/telegram/add-contact', async (req, res) => {
+    let token = req.body?.sessionToken || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
+    const { peerId, firstName, lastName, phone } = req.body;
+    if (!peerId || !firstName) {
+      return res.status(400).json({ error: 'peerId والاسم الأول مطلوبان' });
+    }
+    try {
+      const result = await TelegramService.addContact(token, peerId, firstName, lastName, phone);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Error adding contact:', err);
+      res.status(500).json({ error: err.message || 'فشل إضافة جهة الاتصال' });
     }
   });
 

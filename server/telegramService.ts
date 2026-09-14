@@ -450,33 +450,35 @@ export class TelegramService {
         const text = msg.message || msg.text || '';
         const rawPeer = msg.peerId;
         const peerId =
-          rawPeer?.userId?.toString() ||
-          rawPeer?.channelId?.toString() ||
-          rawPeer?.chatId?.toString() ||
-          msg.chatId?.toString() ||
-          msg.fromId?.userId?.toString() ||
-          msg.fromId?.channelId?.toString() ||
-          msg.userId?.toString() ||
-          'user';
+          (rawPeer?.channelId ? `-100${rawPeer.channelId}` : undefined) ||
+          (rawPeer?.chatId ? `-${rawPeer.chatId}` : undefined) ||
+          (rawPeer?.userId ? rawPeer.userId.toString() : undefined) ||
+          (msg.chatId ? `-${msg.chatId}` : undefined) ||
+          (msg.userId ? msg.userId.toString() : undefined) ||
+          extractPeerId(rawPeer || msg.fromId || 'user');
 
-        const isOut = !!msg.out;
-        const senderId = isOut
-          ? 'me'
-          : (msg.fromId?.userId?.toString() || msg.fromId?.channelId?.toString() || msg.userId?.toString() || peerId);
-        const senderName = isOut ? 'أنا' : 'Telegram';
+        const senderInfo = TelegramService.resolveSenderInfo(
+          msg,
+          sessionToken,
+          client,
+          (update as any).users,
+          (update as any).chats
+        );
 
         TelegramService.onUpdateCallback(sessionToken, {
           type: 'new_message',
+          className,
           peerId,
           message: {
             id: msg.id?.toString() || 'msg_' + Date.now(),
             chatId: peerId,
-            senderId,
-            senderName,
+            senderId: senderInfo.senderId,
+            senderName: senderInfo.senderName,
+            senderAvatar: senderInfo.senderAvatar,
             text,
             timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
-            isOut,
-            status: isOut ? 'sent' : 'received',
+            isOut: Boolean(msg.out),
+            status: msg.out ? 'sent' : 'received',
             replyTo: msg.replyTo?.replyToMsgId ? { id: msg.replyTo.replyToMsgId.toString() } : undefined,
             media: msg.media ? sanitizeData(msg.media) : undefined,
           },
@@ -1226,10 +1228,32 @@ export class TelegramService {
       }
 
       return dialogs.map((d: any) => {
-        let type = 'private';
-        if (d.isChannel) type = 'channel';
-        else if (d.isGroup) type = 'group';
-        else if (d.entity?.bot) type = 'bot';
+        let type: 'private' | 'group' | 'supergroup' | 'channel' | 'bot' = 'private';
+        const isMegagroup = Boolean(d.entity?.megagroup || (d.isChannel && !d.entity?.broadcast));
+        const isBroadcast = Boolean(d.entity?.broadcast || (d.isChannel && !d.isGroup && !d.entity?.megagroup));
+
+        if (isBroadcast) {
+          type = 'channel';
+        } else if (isMegagroup) {
+          type = 'supergroup';
+        } else if (d.isGroup) {
+          type = 'group';
+        } else if (d.entity?.bot) {
+          type = 'bot';
+        } else {
+          type = 'private';
+        }
+
+        let canSendMessages = true;
+        if (isBroadcast) {
+          canSendMessages = Boolean(d.entity?.creator || d.entity?.adminRights?.postMessages);
+        } else if (type === 'group' || type === 'supergroup') {
+          canSendMessages = Boolean(
+            d.entity?.creator ||
+            d.entity?.adminRights ||
+            (!d.entity?.defaultBannedRights?.sendMessages && !d.entity?.bannedRights?.sendMessages)
+          );
+        }
 
         const lastMsg = d.message;
         let text = lastMsg?.text || '';
@@ -1248,6 +1272,11 @@ export class TelegramService {
           ? `/api/telegram/avatar/${encodeURIComponent(peerId)}?token=${encodeURIComponent(sessionToken)}`
           : undefined;
 
+        let lastMessageSenderInfo = undefined;
+        if (lastMsg) {
+          lastMessageSenderInfo = TelegramService.resolveSenderInfo(lastMsg, sessionToken, client);
+        }
+
         return {
           id: peerId,
           title: d.title || d.name || 'محادثة',
@@ -1257,11 +1286,19 @@ export class TelegramService {
           unreadCount: d.unreadCount || 0,
           isPinned: !!d.isPinned,
           isMuted: !!d.isMuted,
+          canSendMessages,
+          isBroadcast,
+          description: d.entity?.about || undefined,
+          membersCount: d.entity?.participantsCount || undefined,
+          restrictionReason: d.entity?.restrictionReason || undefined,
           lastMessage: lastMsg
             ? {
                 text,
                 timestamp: (lastMsg.date || Math.floor(Date.now() / 1000)) * 1000,
                 isOut: !!lastMsg.out,
+                senderId: lastMessageSenderInfo?.senderId,
+                senderName: lastMessageSenderInfo?.senderName,
+                senderAvatar: lastMessageSenderInfo?.senderAvatar,
               }
             : undefined,
         };
@@ -1365,18 +1402,20 @@ export class TelegramService {
           }
         }
 
-        const senderId = m.fromId?.userId?.toString() || (m.out ? 'me' : peerId);
-        const senderAvatar =
-          !m.out && senderId && senderId !== 'me'
-            ? `/api/telegram/avatar/${encodeURIComponent(senderId)}?token=${encodeURIComponent(sessionToken)}`
-            : undefined;
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          (messages as any)?.users,
+          (messages as any)?.chats
+        );
 
         return {
           id: m.id?.toString(),
           chatId: peerId,
-          senderId,
-          senderName: m.out ? 'أنا' : 'عضو',
-          senderAvatar,
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.text || (mediaType ? `[${mediaType}]` : ''),
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
@@ -1974,11 +2013,20 @@ export class TelegramService {
           };
         }
 
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          diff.users,
+          diff.chats
+        );
+
         return {
           id: String(m.id),
           chatId: peerId,
-          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-          senderName: m.out ? 'أنا' : 'عضو',
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.message || (media ? `[${media.type}]` : ''),
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
@@ -2061,11 +2109,20 @@ export class TelegramService {
             url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
           };
         }
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          (diff as any).users,
+          (diff as any).chats
+        );
+
         return {
           id: String(m.id),
           chatId: peerId,
-          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-          senderName: m.out ? 'أنا' : 'قناة',
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.message || '',
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
@@ -2512,6 +2569,336 @@ export class TelegramService {
         })
       );
       return res;
+    });
+  }
+
+  /**
+   * Universal MTProto Sender Info & Avatar Resolver
+   */
+  public static resolveSenderInfo(
+    m: any,
+    sessionToken: string,
+    client?: any,
+    users?: any[],
+    chats?: any[]
+  ): { senderId: string; senderName: string; senderAvatar?: string } {
+    const isOut = Boolean(m.out);
+    let senderId = '';
+
+    if (isOut) {
+      senderId = 'me';
+    } else if (m.senderId) {
+      senderId = extractPeerId(m.senderId);
+    } else if (m.fromId) {
+      senderId = extractPeerId(m.fromId);
+    } else if (m.peerId) {
+      senderId = extractPeerId(m.peerId);
+    } else {
+      senderId = 'user';
+    }
+
+    if (isOut) {
+      return { senderId: 'me', senderName: 'أنا' };
+    }
+
+    const s = activeSessions.get(sessionToken);
+
+    if (s) {
+      if (!s.fullEntityCache) s.fullEntityCache = new Map();
+      if (!s.entityCache) s.entityCache = new Map();
+
+      if (Array.isArray(users)) {
+        for (const u of users) {
+          if (!u) continue;
+          const uid = extractPeerId(u.id);
+          if (uid) {
+            s.fullEntityCache.set(uid, u);
+            s.entityCache.set(uid, u);
+            if (u.username) {
+              s.fullEntityCache.set(u.username.toLowerCase(), u);
+            }
+          }
+        }
+      }
+      if (Array.isArray(chats)) {
+        for (const c of chats) {
+          if (!c) continue;
+          const cid = extractPeerId(c.id);
+          if (cid) {
+            s.fullEntityCache.set(cid, c);
+            s.entityCache.set(cid, c);
+            if (c.username) {
+              s.fullEntityCache.set(c.username.toLowerCase(), c);
+            }
+          }
+        }
+      }
+    }
+
+    // Attempt to locate sender entity
+    let entity: any = m.sender || m._sender;
+    const cleanId = senderId.replace(/^-100/, '').replace(/^-/, '');
+
+    if (!entity && s && senderId) {
+      entity =
+        s.fullEntityCache?.get(senderId) ||
+        s.fullEntityCache?.get(cleanId) ||
+        s.fullEntityCache?.get('-100' + cleanId) ||
+        s.fullEntityCache?.get('-' + cleanId);
+    }
+
+    if (!entity && Array.isArray(users) && senderId) {
+      entity = users.find((u: any) => {
+        const uid = extractPeerId(u.id);
+        return uid === senderId || uid === cleanId;
+      });
+    }
+
+    if (!entity && Array.isArray(chats) && senderId) {
+      entity = chats.find((c: any) => {
+        const cid = extractPeerId(c.id);
+        return cid === senderId || cid === cleanId || cid === '-100' + cleanId;
+      });
+    }
+
+    if (!entity && client?._entityCache && senderId) {
+      try {
+        entity = (client as any)._entityCache.get(senderId) || (client as any)._entityCache.get(cleanId);
+      } catch (_) {}
+    }
+
+    if (entity && s && senderId) {
+      s.fullEntityCache?.set(senderId, entity);
+      s.entityCache?.set(senderId, entity);
+      if (cleanId) {
+        s.fullEntityCache?.set(cleanId, entity);
+      }
+    }
+
+    let senderName = '';
+    if (entity) {
+      const parts = [entity.firstName, entity.lastName].filter(Boolean);
+      if (parts.length > 0) {
+        senderName = parts.join(' ').trim();
+      } else if (entity.title) {
+        senderName = entity.title;
+      } else if (entity.username) {
+        senderName = '@' + entity.username;
+      }
+    }
+
+    if (!senderName) {
+      if (m.postAuthor) {
+        senderName = m.postAuthor;
+      } else if (m.sender?.title) {
+        senderName = m.sender.title;
+      } else {
+        senderName = 'مستخدم';
+      }
+    }
+
+    let senderAvatar: string | undefined = undefined;
+    const photoObj = entity?.photo || m.sender?.photo;
+    const hasPhoto = Boolean(
+      photoObj &&
+      photoObj.className !== 'UserProfilePhotoEmpty' &&
+      photoObj.className !== 'ChatPhotoEmpty'
+    );
+
+    if (hasPhoto && senderId && senderId !== 'me') {
+      senderAvatar = `/api/telegram/avatar/${encodeURIComponent(senderId)}?token=${encodeURIComponent(sessionToken)}`;
+    }
+
+    return { senderId, senderName, senderAvatar };
+  }
+
+  /**
+   * Fetch Live Full Details for Chat, Channel, Supergroup, or User
+   */
+  public static async getChatFullInfo(sessionToken: string, peerId: string) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return null;
+    }
+    return FloodWaitQueue.executeWithFloodRetry(`chat.getFullInfo_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      if (!peer) return null;
+
+      let description = '';
+      let membersCount = 0;
+      let inviteLink: string | undefined = undefined;
+      let canSendMessages = true;
+      let isBroadcast = false;
+      let restrictionReason: any = undefined;
+      let peerSettings: any = undefined;
+
+      try {
+        const inputPeer = await client.getInputEntity(peer);
+        if (
+          inputPeer.className === 'InputPeerChannel' ||
+          (peer as any).className === 'Channel' ||
+          (peer as any).broadcast ||
+          (peer as any).megagroup
+        ) {
+          const full: any = await client.invoke(
+            new Api.channels.GetFullChannel({
+              channel: new Api.InputChannel({
+                channelId: (peer as any).id || (inputPeer as any).channelId,
+                accessHash: (peer as any).accessHash || (inputPeer as any).accessHash,
+              }),
+            })
+          );
+          const fullChat = full.fullChat;
+          description = fullChat?.about || '';
+          membersCount = fullChat?.participantsCount || 0;
+          if (fullChat?.exportedInvite?.link) {
+            inviteLink = fullChat.exportedInvite.link;
+          }
+          const ch = full.chats?.[0] || peer;
+          isBroadcast = Boolean(ch?.broadcast);
+          const isCreator = Boolean(ch?.creator);
+          const adminRights = ch?.adminRights;
+          const defaultBanned = ch?.defaultBannedRights;
+          const bannedRights = ch?.bannedRights;
+
+          if (isBroadcast) {
+            canSendMessages = Boolean(isCreator || adminRights?.postMessages);
+          } else {
+            canSendMessages = Boolean(
+              isCreator ||
+              adminRights?.postMessages ||
+              (!defaultBanned?.sendMessages && !bannedRights?.sendMessages)
+            );
+          }
+
+          if (ch?.restrictionReason && ch.restrictionReason.length > 0) {
+            restrictionReason = ch.restrictionReason;
+          }
+        } else if (inputPeer.className === 'InputPeerChat' || (peer as any).className === 'Chat') {
+          const full: any = await client.invoke(
+            new Api.messages.GetFullChat({
+              chatId: (peer as any).id || (inputPeer as any).chatId,
+            })
+          );
+          const fullChat = full.fullChat;
+          description = fullChat?.about || '';
+          membersCount = fullChat?.participants?.participants?.length || 0;
+          canSendMessages = !(fullChat?.defaultBannedRights?.sendMessages);
+        } else if (inputPeer.className === 'InputPeerUser' || (peer as any).className === 'User') {
+          const full: any = await client.invoke(
+            new Api.users.GetFullUser({
+              id: inputPeer as any,
+            })
+          );
+          description = full.fullUser?.about || '';
+          canSendMessages = true;
+          if (full.users?.[0]?.restrictionReason) {
+            restrictionReason = full.users[0].restrictionReason;
+          }
+        }
+
+        try {
+          const settingsRes: any = await client.invoke(
+            new Api.messages.GetPeerSettings({
+              peer: inputPeer as any,
+            })
+          );
+          if (settingsRes?.settings) {
+            peerSettings = {
+              reportSpam: Boolean(settingsRes.settings.reportSpam),
+              addContact: Boolean(settingsRes.settings.addContact),
+              blockContact: Boolean(settingsRes.settings.blockContact),
+              shareContact: Boolean(settingsRes.settings.shareContact),
+              needReq: Boolean(settingsRes.settings.needReq),
+            };
+          }
+        } catch (_) {}
+
+        return {
+          id: peerId,
+          description,
+          membersCount,
+          participantsCount: membersCount,
+          inviteLink,
+          canSendMessages,
+          isBroadcast,
+          restrictionReason,
+          peerSettings,
+        };
+      } catch (err: any) {
+        console.warn(`[getChatFullInfo] Notice fetching full info for ${peerId}:`, err?.message || err);
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Report Spam or Terms Violation (messages.reportSpam / account.reportPeer)
+   */
+  public static async reportSpam(
+    sessionToken: string,
+    peerId: string,
+    reason?: string,
+    details?: string
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry(`chat.reportSpam_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const inputPeer = await client.getInputEntity(peer);
+
+      try {
+        let reportReason: any = new Api.InputReportReasonSpam();
+        if (reason === 'violence') reportReason = new Api.InputReportReasonViolence();
+        else if (reason === 'child_abuse') reportReason = new Api.InputReportReasonChildAbuse();
+        else if (reason === 'pornography') reportReason = new Api.InputReportReasonPornography();
+        else if (reason === 'copyright') reportReason = new Api.InputReportReasonCopyright();
+        else if (reason === 'illegal_goods') reportReason = new Api.InputReportReasonIllegalDrugs();
+        else if (reason === 'personal_details') reportReason = new Api.InputReportReasonPersonalDetails();
+        else if (reason === 'other') reportReason = new Api.InputReportReasonOther();
+
+        const res: any = await client.invoke(
+          new Api.account.ReportPeer({
+            peer: inputPeer as any,
+            reason: reportReason,
+            message: details || 'Reported by user',
+          })
+        );
+        return { success: Boolean(res) };
+      } catch {
+        const res: any = await client.invoke(
+          new Api.messages.ReportSpam({
+            peer: inputPeer as any,
+          })
+        );
+        return { success: Boolean(res) };
+      }
+    });
+  }
+
+  /**
+   * Add Contact (contacts.addContact)
+   */
+  public static async addContact(
+    sessionToken: string,
+    peerId: string,
+    firstName: string,
+    lastName: string = '',
+    phone: string = ''
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry(`contacts.addContact_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const inputPeer = await client.getInputEntity(peer);
+      const res: any = await client.invoke(
+        new Api.contacts.AddContact({
+          id: inputPeer as any,
+          firstName,
+          lastName,
+          phone,
+          addPhonePrivacyException: true,
+        })
+      );
+      return sanitizeData(res);
     });
   }
 

@@ -684,9 +684,16 @@ export default function App() {
                 return {
                   ...chat,
                   title: live.title || chat.title,
+                  type: live.type || chat.type,
                   avatarUrl: live.avatarUrl || chat.avatarUrl,
                   unreadCount: typeof live.unreadCount === 'number' ? live.unreadCount : chat.unreadCount,
                   lastMessage: live.lastMessage || chat.lastMessage,
+                  canSendMessages: live.canSendMessages !== undefined ? live.canSendMessages : chat.canSendMessages,
+                  isBroadcast: live.isBroadcast !== undefined ? live.isBroadcast : chat.isBroadcast,
+                  description: live.description || chat.description,
+                  membersCount: live.membersCount || chat.membersCount,
+                  restrictionReason: live.restrictionReason || chat.restrictionReason,
+                  peerSettings: live.peerSettings || chat.peerSettings,
                 };
               }
               return chat;
@@ -821,7 +828,7 @@ export default function App() {
         if ((event as any).lastTimestamp) {
           wsClient.setLastTimestamp((event as any).lastTimestamp);
         }
-      } else if (event.type === 'new_message' && event.message) {
+      } else if ((event.type === 'new_message' || event.type === 'UpdateNewMessage' || event.type === 'UpdateNewChannelMessage') && event.message) {
         if ((event as any).pts) {
           syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
         }
@@ -829,7 +836,7 @@ export default function App() {
         if (msg.timestamp) {
           wsClient.setLastTimestamp(msg.timestamp);
         }
-        const targetChatId = event.peerId || msg.chatId || selectedChatId;
+        const targetChatId = String(event.peerId || msg.chatId || selectedChatId);
 
         setMessagesMap((prev) => {
           const currentList = prev[targetChatId] || [];
@@ -842,21 +849,26 @@ export default function App() {
           };
         });
 
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChatId
-              ? {
-                  ...c,
-                  unreadCount: c.id === selectedChatId ? 0 : (c.unreadCount || 0) + 1,
-                  lastMessage: {
-                    text: msg.text || '[وسائط]',
-                    timestamp: msg.timestamp || Date.now(),
-                    isOut: !!msg.isOut,
-                  },
-                }
-              : c
-          )
-        );
+        setChats((prev) => {
+          const existingIdx = prev.findIndex((c) => c.id === targetChatId);
+          if (existingIdx >= 0) {
+            const listCopy = [...prev];
+            const chatToUpdate = {
+              ...listCopy[existingIdx],
+              unreadCount: listCopy[existingIdx].id === selectedChatId ? 0 : (listCopy[existingIdx].unreadCount || 0) + 1,
+              lastMessage: {
+                text: msg.text || '[وسائط]',
+                timestamp: msg.timestamp || Date.now(),
+                isOut: !!msg.isOut,
+                senderName: msg.senderName,
+                senderAvatar: msg.senderAvatar,
+              },
+            };
+            listCopy.splice(existingIdx, 1);
+            return [chatToUpdate, ...listCopy];
+          }
+          return prev;
+        });
       } else if (event.type === 'message_read' && event.peerId) {
         const targetChatId = event.peerId;
         setMessagesMap((prev) => {
@@ -997,6 +1009,28 @@ export default function App() {
               localStorage.setItem('tg_real_chats_' + currentAccId, JSON.stringify(finalChatList));
             }
             return finalChatList;
+          });
+
+          setMessagesMap((prev) => {
+            let updated = { ...prev };
+            for (const d of realDialogs) {
+              if (d.lastMessage && (!updated[d.id] || updated[d.id].length === 0)) {
+                updated[d.id] = [
+                  {
+                    id: `dialog_last_${d.id}`,
+                    chatId: d.id,
+                    senderId: d.lastMessage.senderId || (d.lastMessage.isOut ? 'me' : d.id),
+                    senderName: d.lastMessage.senderName || (d.lastMessage.isOut ? 'أنا' : d.title),
+                    senderAvatar: d.lastMessage.senderAvatar || (d.lastMessage.isOut ? undefined : d.avatarUrl),
+                    text: d.lastMessage.text || '',
+                    timestamp: d.lastMessage.timestamp || Date.now(),
+                    isOut: !!d.lastMessage.isOut,
+                    status: d.lastMessage.isOut ? 'read' : 'sent',
+                  },
+                ];
+              }
+            }
+            return updated;
           });
 
           setSelectedChatId((curr) => {
@@ -1282,7 +1316,7 @@ export default function App() {
       return prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
     });
 
-    // Populate messages if none exist yet (e.g. for channels selected from Global Search)
+    // Mark unread as read in UI
     setMessagesMap((prev) => {
       if (prev[chat.id] && prev[chat.id].length > 0) {
         return {
@@ -1290,46 +1324,6 @@ export default function App() {
           [chat.id]: prev[chat.id].map((m) => (!m.isOut ? { ...m, status: 'read' as const } : m)),
         };
       }
-
-      // Generate initial channel announcements and updates
-      if (chat.type === 'channel') {
-        const initialChannelPosts: TelegramMessage[] = [
-          {
-            id: `post_1_${chat.id}`,
-            chatId: chat.id,
-            senderId: chat.id,
-            senderName: chat.title,
-            text: `📢 مرحباً بكم في قناة (${chat.title}) على تيليجرام!\n\n${chat.description || 'هنا ننشر أحدث الأخبار، التحديثات التقنية، والبيانات الحصرية لمتابعينا.'}\n\nانقر على زر "الانضمام إلى القناة" بالأسفل لتلقي كل جديد مباشرة.`,
-            timestamp: Date.now() - 3600 * 24 * 1000,
-            isOut: false,
-            status: 'read',
-            reactions: [
-              { emoji: '🔥', count: 1840 },
-              { emoji: '❤️', count: 2950 },
-              { emoji: '👏', count: 980 },
-            ],
-          },
-          {
-            id: `post_2_${chat.id}`,
-            chatId: chat.id,
-            senderId: chat.id,
-            senderName: chat.title,
-            text: `🚀 تحديث هام:\nتم إطلاق الميزات الجديدة وتحسين سرعة الأداء والاستجابة على منصة تيليجرام مع دعم قنوات البث والبحث العام الفوري. يسعدنا دائماً تفاعلكم المستمر!`,
-            timestamp: Date.now() - 3600 * 5 * 1000,
-            isOut: false,
-            status: 'read',
-            reactions: [
-              { emoji: '⚡', count: 1420 },
-              { emoji: '🎉', count: 2130 },
-            ],
-          },
-        ];
-        return {
-          ...prev,
-          [chat.id]: initialChannelPosts,
-        };
-      }
-
       return prev;
     });
 
@@ -1350,13 +1344,15 @@ export default function App() {
       body: JSON.stringify({ peerId: chat.id, sessionToken: token }),
     }).catch(() => {});
 
-    // If real MTProto session active, attempt loading live messages
+    // If real MTProto session active, attempt loading live messages & metadata
     if (activeAccountId && !isDemoMode) {
       try {
         const headers: Record<string, string> = {};
         if (token) headers['x-session-token'] = token;
+
+        // Fetch live messages with real sender details
         const res = await fetch(
-          `/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30${token ? `&token=${encodeURIComponent(token)}` : ''}`,
+          `/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=50${token ? `&token=${encodeURIComponent(token)}` : ''}`,
           { headers }
         );
         if (res.ok) {
@@ -1368,8 +1364,23 @@ export default function App() {
             }));
           }
         }
+
+        // Fetch live chat metadata (permissions, broadcast flags, restrictions, peer settings)
+        fetch(
+          `/api/telegram/chat-info?peerId=${encodeURIComponent(chat.id)}${token ? `&token=${encodeURIComponent(token)}` : ''}`,
+          { headers }
+        )
+          .then((r) => r.json())
+          .then((infoData) => {
+            if (infoData.chat) {
+              setChats((prev) =>
+                prev.map((c) => (c.id === chat.id ? { ...c, ...infoData.chat } : c))
+              );
+            }
+          })
+          .catch(() => {});
       } catch {
-        // Fallback already rendered
+        // Continue
       }
     }
   };
