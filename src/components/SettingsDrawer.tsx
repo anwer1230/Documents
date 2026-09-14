@@ -556,12 +556,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
 
               <div className="flex items-center gap-3 mt-1">
                 {currentUser.photoUrl ? (
-                  <img
-                    src={currentUser.photoUrl}
-                    alt={currentUser.firstName}
-                    referrerPolicy="no-referrer"
-                    className="w-14 h-14 rounded-full object-cover border-2 border-white/30 shadow-md"
-                  />
+                  <div className="relative w-14 h-14 shrink-0">
+                    <img
+                      src={currentUser.photoUrl}
+                      alt={currentUser.firstName}
+                      referrerPolicy="no-referrer"
+                      className="w-14 h-14 rounded-full object-cover border-2 border-white/30 shadow-md"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = 'flex';
+                      }}
+                    />
+                    <div className="w-14 h-14 rounded-full bg-[#3390ec] items-center justify-center font-bold text-xl border-2 border-white/30 shadow-md hidden">
+                      {currentUser.firstName.slice(0, 2).toUpperCase()}
+                    </div>
+                  </div>
                 ) : (
                   <div className="w-14 h-14 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-xl border-2 border-white/30 shadow-md">
                     {currentUser.firstName.slice(0, 2).toUpperCase()}
@@ -917,12 +927,22 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
             }`}>
               <div className="relative group cursor-pointer" onClick={() => setActiveSection('edit-profile')}>
                 {currentUser.photoUrl ? (
-                  <img
-                    src={currentUser.photoUrl}
-                    alt={currentUser.firstName}
-                    referrerPolicy="no-referrer"
-                    className="w-20 h-20 rounded-full object-cover border-2 border-[#3390ec] shadow-lg"
-                  />
+                  <div className="relative w-20 h-20">
+                    <img
+                      src={currentUser.photoUrl}
+                      alt={currentUser.firstName}
+                      referrerPolicy="no-referrer"
+                      className="w-20 h-20 rounded-full object-cover border-2 border-[#3390ec] shadow-lg"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                        if (fallback) fallback.style.display = 'flex';
+                      }}
+                    />
+                    <div className="w-20 h-20 rounded-full bg-[#3390ec] items-center justify-center font-bold text-2xl text-white border-2 border-white/20 shadow-lg hidden">
+                      {currentUser.firstName.slice(0, 2).toUpperCase()}
+                    </div>
+                  </div>
                 ) : (
                   <div className="w-20 h-20 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-2xl text-white border-2 border-white/20 shadow-lg">
                     {currentUser.firstName.slice(0, 2).toUpperCase()}

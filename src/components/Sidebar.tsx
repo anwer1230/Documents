@@ -198,12 +198,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Avatar */}
         <div className="relative shrink-0">
           {chat.avatarUrl ? (
-            <img
-              src={chat.avatarUrl}
-              alt={chat.title}
-              referrerPolicy="no-referrer"
-              className="w-12 h-12 rounded-full object-cover"
-            />
+            <div className="relative w-12 h-12">
+              <img
+                src={chat.avatarUrl}
+                alt={chat.title}
+                referrerPolicy="no-referrer"
+                className="w-12 h-12 rounded-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                  const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                  if (fallback) fallback.style.display = 'flex';
+                }}
+              />
+              <div
+                className="w-12 h-12 rounded-full items-center justify-center text-white font-bold text-base shadow-sm hidden"
+                style={{
+                  backgroundColor:
+                    chat.avatarColor || (chat.type === 'saved' ? '#3390ec' : '#5682a3'),
+                }}
+              >
+                {chat.type === 'saved' ? (
+                  <Bookmark className="w-5 h-5 fill-white text-white" />
+                ) : (
+                  chat.title.slice(0, 2)
+                )}
+              </div>
+            </div>
           ) : (
             <div
               className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-base shadow-sm"
@@ -405,12 +425,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
               title={isAr ? `الحسابات النشطة: ${accounts.length}/6` : `Active accounts: ${accounts.length}/6`}
             >
               {currentUser.photoUrl ? (
-                <img
-                  src={currentUser.photoUrl}
-                  alt={currentUser.firstName}
-                  referrerPolicy="no-referrer"
-                  className="w-7 h-7 rounded-full object-cover"
-                />
+                <div className="relative w-7 h-7">
+                  <img
+                    src={currentUser.photoUrl}
+                    alt={currentUser.firstName}
+                    referrerPolicy="no-referrer"
+                    className="w-7 h-7 rounded-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                      if (fallback) fallback.style.display = 'flex';
+                    }}
+                  />
+                  <div className="w-7 h-7 rounded-full bg-[#3390ec] text-white text-[11px] font-bold items-center justify-center hidden">
+                    {currentUser.firstName.slice(0, 1)}
+                  </div>
+                </div>
               ) : (
                 <div className="w-7 h-7 rounded-full bg-[#3390ec] text-white text-[11px] font-bold flex items-center justify-center">
                   {currentUser.firstName.slice(0, 1)}

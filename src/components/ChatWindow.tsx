@@ -38,6 +38,8 @@ import {
   MessagesSquare,
   Clock,
   Gift,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-react';
 import {
   TelegramChat,
@@ -87,6 +89,7 @@ interface ChatWindowProps {
   onJoinChannel?: (chatId: string) => Promise<void> | void;
   isJoiningChannel?: boolean;
   onToast: (message: string, type?: 'success' | 'info' | 'error') => void;
+  onBack?: () => void;
   lang: 'ar' | 'en';
   isDark: boolean;
 }
@@ -114,6 +117,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   onJoinChannel,
   isJoiningChannel,
   onToast,
+  onBack,
   lang,
   isDark,
 }) => {
@@ -478,18 +482,46 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         ) : (
           /* Normal Header */
           <>
+            {/* Mobile Back Button */}
+            {onBack && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBack();
+                }}
+                className="md:hidden p-2 -ms-1 me-1 rounded-full hover:bg-black/10 dark:hover:bg-white/10 transition text-gray-500 dark:text-gray-300 shrink-0"
+                title={isAr ? 'الرجوع للمحادثات' : 'Back to chats'}
+                aria-label="Back"
+              >
+                {isAr ? <ArrowRight className="w-5 h-5" /> : <ArrowLeft className="w-5 h-5" />}
+              </button>
+            )}
+
             {/* Left: Avatar + Title + Status */}
             <div
               onClick={onToggleChatInfo}
               className="flex items-center gap-3 cursor-pointer min-w-0 flex-1 hover:opacity-90 transition"
             >
               {chat.avatarUrl ? (
-                <img
-                  src={chat.avatarUrl}
-                  alt={chat.title}
-                  referrerPolicy="no-referrer"
-                  className="w-10 h-10 rounded-full object-cover shrink-0 shadow"
-                />
+                <div className="relative w-10 h-10 shrink-0">
+                  <img
+                    src={chat.avatarUrl}
+                    alt={chat.title}
+                    referrerPolicy="no-referrer"
+                    className="w-10 h-10 rounded-full object-cover shadow"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                      if (fallback) fallback.style.display = 'flex';
+                    }}
+                  />
+                  <div
+                    className="w-10 h-10 rounded-full items-center justify-center text-white font-bold text-sm shadow hidden"
+                    style={{ backgroundColor: chat.avatarColor || '#3390ec' }}
+                  >
+                    {chat.type === 'saved' ? <Bookmark className="w-5 h-5 fill-white" /> : chat.title.slice(0, 2)}
+                  </div>
+                </div>
               ) : (
                 <div
                   className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold shrink-0 text-sm shadow"

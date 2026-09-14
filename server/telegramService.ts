@@ -88,6 +88,8 @@ interface ActiveSession {
   isLoggedIn: boolean;
   user?: any;
   createdAt: number;
+  entityCache?: Map<string, any>;
+  fullEntityCache?: Map<string, any>;
 }
 
 const activeSessions = new Map<string, ActiveSession>();
@@ -95,6 +97,28 @@ const connectionLocks = new Map<string, Promise<TelegramClient>>();
 const pendingAuthByHash = new Map<string, { sessionToken: string; phoneNumber: string; createdAt: number }>();
 const pendingAuthByPhone = new Map<string, { sessionToken: string; phoneCodeHash?: string; createdAt: number }>();
 const SESSIONS_FILE = path.join(process.cwd(), '.telegram_sessions.json');
+
+// Helper to extract a clean string ID from any GramJS peer representation
+export function extractPeerId(peer: any): string {
+  if (!peer) return '';
+  if (typeof peer === 'string' || typeof peer === 'number' || typeof peer === 'bigint') {
+    let s = String(peer).trim();
+    if (s.startsWith('{')) {
+      try {
+        const p = JSON.parse(s);
+        return String(p.channelId || p.userId || p.chatId || p.id || s);
+      } catch (_) {}
+    }
+    return s;
+  }
+  if (typeof peer === 'object') {
+    if (peer.channelId) return peer.channelId.toString();
+    if (peer.userId) return peer.userId.toString();
+    if (peer.chatId) return peer.chatId.toString();
+    if (peer.id) return extractPeerId(peer.id);
+  }
+  return String(peer);
+}
 
 // Helper to sanitize BigInt and non-serializable properties for JSON response
 export function sanitizeData(data: any): any {
@@ -124,16 +148,63 @@ export function sanitizeData(data: any): any {
   return data;
 }
 
-// Peer resolving helper for GramJS (handles usernames, string numeric IDs, channel IDs)
-export async function resolvePeer(client: TelegramClient, peerId: string | number): Promise<any> {
-  if (peerId === 'me' || peerId === 'self') {
+// Peer resolving helper for GramJS (handles usernames, string numeric IDs, channel IDs, peer objects)
+export async function resolvePeer(client: TelegramClient, peerId: any): Promise<any> {
+  if (!peerId) return null;
+  if (
+    peerId === 'me' ||
+    peerId === 'self' ||
+    peerId === 'saved' ||
+    peerId === 'saved_messages' ||
+    peerId === 'chat_saved_messages'
+  ) {
     return 'me';
   }
-  if (typeof peerId === 'object' && peerId !== null) {
-    return peerId;
+
+  let target = peerId;
+
+  // Handle object representation (e.g. { channelId: "...", className: "PeerChannel" })
+  if (typeof target === 'object' && target !== null) {
+    if (target.className?.includes('InputPeer')) {
+      return target;
+    }
+    target = extractPeerId(target);
   }
-  const str = String(peerId).trim();
+
+  let str = String(target).trim();
   if (!str) return 'me';
+
+  if (str.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(str);
+      str = String(parsed.channelId || parsed.userId || parsed.chatId || parsed.id || str);
+    } catch (_) {}
+  }
+
+  // Strip UI/mock prefixes
+  if (
+    str === 'me' ||
+    str === 'self' ||
+    str === 'saved' ||
+    str === 'saved_messages' ||
+    str === 'chat_saved_messages'
+  ) {
+    return 'me';
+  }
+  str = str.replace(/^(chat_|user_|channel_)/, '');
+
+  // Check in active session entity caches first
+  for (const s of activeSessions.values()) {
+    if (s.client === client && s.entityCache) {
+      if (s.entityCache.has(str)) return s.entityCache.get(str);
+      if (str.startsWith('-100') && s.entityCache.has(str.slice(4))) {
+        return s.entityCache.get(str.slice(4));
+      }
+      if (s.entityCache.has('-100' + str)) {
+        return s.entityCache.get('-100' + str);
+      }
+    }
+  }
 
   // Handle usernames starting with @
   if (str.startsWith('@')) {
@@ -149,30 +220,71 @@ export async function resolvePeer(client: TelegramClient, peerId: string | numbe
     }
   }
 
-  // Handle channel IDs with -100 prefix
+  // Helper to test multiple input formats for channels, chats, and users
+  const tryCandidates = async (cands: any[]) => {
+    for (const c of cands) {
+      try {
+        const res = await client.getInputEntity(c);
+        if (res) return res;
+      } catch (_) {}
+    }
+    return null;
+  };
+
+  // Build candidate representations
+  const candidates: any[] = [];
   if (str.startsWith('-100')) {
     const numPart = str.slice(4);
-    try {
-      return await client.getInputEntity(Number(numPart));
-    } catch {
-      try {
-        return await client.getEntity(Number(numPart));
-      } catch {
-        // fallback
-      }
-    }
+    candidates.push(str);
+    try { candidates.push(BigInt(str) as any); } catch (_) {}
+    try { candidates.push(Number(str)); } catch (_) {}
+    candidates.push(numPart);
+    try { candidates.push(Number(numPart)); } catch (_) {}
+    try { candidates.push(BigInt(numPart) as any); } catch (_) {}
+  } else if (/^\d+$/.test(str)) {
+    // Numeric string: could be a channel (requires -100) or user or chat
+    candidates.push('-100' + str);
+    try { candidates.push(BigInt('-100' + str) as any); } catch (_) {}
+    candidates.push(str);
+    try { candidates.push(Number(str)); } catch (_) {}
+    try { candidates.push(BigInt(str) as any); } catch (_) {}
+  } else {
+    candidates.push(str);
   }
 
-  // Regular input entity lookup
+  // First attempt: resolve from existing client entity cache
+  const firstAttempt = await tryCandidates(candidates);
+  if (firstAttempt) return firstAttempt;
+
+  // Second attempt: prime dialogs into GramJS entity cache if missing
   try {
-    return await client.getInputEntity(str);
-  } catch {
-    try {
-      return await client.getEntity(str);
-    } catch {
-      return str;
+    const dialogs = await client.getDialogs({ limit: 100 });
+    for (const s of activeSessions.values()) {
+      if (s.client === client) {
+        if (!s.entityCache) s.entityCache = new Map();
+        for (const d of dialogs) {
+          const cleanId = extractPeerId(d.id || d.entity?.id || (d as any).peer);
+          if (cleanId) {
+            if (d.inputEntity) s.entityCache.set(cleanId, d.inputEntity);
+            else if (d.entity) s.entityCache.set(cleanId, d.entity);
+          }
+        }
+      }
     }
+    const secondAttempt = await tryCandidates(candidates);
+    if (secondAttempt) return secondAttempt;
+  } catch (_) {}
+
+  // Third attempt: fallback to getEntity lookup
+  for (const c of candidates) {
+    try {
+      const ent = await client.getEntity(c);
+      if (ent) return ent;
+    } catch (_) {}
   }
+
+  // Return null if completely unresolvable so callers can handle gracefully
+  return null;
 }
 
 // Load saved multi-account storage
@@ -241,6 +353,26 @@ export class TelegramService {
   }
 
   /**
+   * Cleans up stale, revoked, or unregistered sessions immediately
+   */
+  public static purgeStaleSession(sessionToken: string) {
+    if (!sessionToken) return;
+    try {
+      removePersistedSession(sessionToken);
+      const session = activeSessions.get(sessionToken);
+      if (session?.client) {
+        try {
+          session.client.disconnect();
+        } catch (_) {}
+      }
+      activeSessions.delete(sessionToken);
+      console.log(`[TelegramService] Cleaned up stale/unregistered session: ${sessionToken}`);
+    } catch (err) {
+      console.error(`[TelegramService] Error purging session ${sessionToken}:`, err);
+    }
+  }
+
+  /**
    * Bootstraps continuous MTProto listeners for all saved accounts on server startup
    */
   public static async initAllSavedSessions(): Promise<void> {
@@ -249,10 +381,34 @@ export class TelegramService {
     console.log(`[MTProto Updates Engine] Bootstrapping continuous listeners for ${tokens.length} saved sessions`);
     for (const token of tokens) {
       try {
-        await this.getOrCreateClient(token, storage.sessions[token]);
-        console.log(`[MTProto Updates Engine] Connected & listening on session: ${token.slice(0, 10)}...`);
+        const client = await this.getOrCreateClient(token, storage.sessions[token]);
+        const isAuth = await client.isUserAuthorized().catch(() => false);
+        if (!isAuth) {
+          console.warn(`[MTProto Updates Engine] Session ${token.slice(0, 10)}... is unregistered or unauthorized. Purging.`);
+          this.purgeStaleSession(token);
+          continue;
+        }
+        const me = await client.getMe().catch(() => null);
+        if (me) {
+          const s = activeSessions.get(token);
+          if (s) {
+            s.isLoggedIn = true;
+            s.user = me;
+          }
+          this.saveAccount(token, me);
+          console.log(`[MTProto Updates Engine] Connected & listening on session: ${token.slice(0, 10)}... (${me.firstName || 'User'})`);
+        } else {
+          this.purgeStaleSession(token);
+        }
       } catch (err: any) {
         console.warn(`[MTProto Updates Engine] Warning restoring session ${token}:`, err?.message || err);
+        if (
+          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+          err?.code === 401
+        ) {
+          this.purgeStaleSession(token);
+        }
       }
     }
   }
@@ -815,6 +971,30 @@ export class TelegramService {
     };
   }
 
+  public static getActiveSessionToken(preferredToken?: string): string | null {
+    if (preferredToken && activeSessions.has(preferredToken) && activeSessions.get(preferredToken)?.isLoggedIn) {
+      return preferredToken;
+    }
+    const storage = loadStorage();
+    if (storage.activeAccountId) {
+      const acc = storage.accounts.find(a => a.id === storage.activeAccountId);
+      if (acc?.sessionToken && storage.sessions[acc.sessionToken]) {
+        return acc.sessionToken;
+      }
+    }
+    if (storage.accounts.length > 0 && storage.accounts[0].sessionToken) {
+      return storage.accounts[0].sessionToken;
+    }
+    const keys = Object.keys(storage.sessions);
+    if (keys.length > 0) {
+      return keys[0];
+    }
+    for (const [token, s] of activeSessions.entries()) {
+      if (s.isLoggedIn) return token;
+    }
+    return null;
+  }
+
   public static async getMe(sessionToken: string) {
     const session = activeSessions.get(sessionToken);
     if (session && session.client && session.client.connected) {
@@ -825,14 +1005,28 @@ export class TelegramService {
           session.user = me;
           this.saveAccount(sessionToken, me);
           const sanitized = sanitizeData(me);
-          if (sanitized && (me as any).photo) {
-            sanitized.photoUrl = `/api/telegram/avatar/me`;
-            sanitized.avatarUrl = `/api/telegram/avatar/me`;
+          const mePhoto = (me as any).photo;
+          const hasMePhoto = Boolean(
+            mePhoto &&
+            mePhoto.className !== 'UserProfilePhotoEmpty' &&
+            mePhoto.className !== 'ChatPhotoEmpty'
+          );
+          if (sanitized && hasMePhoto) {
+            sanitized.photoUrl = `/api/telegram/avatar/me?token=${encodeURIComponent(sessionToken)}`;
+            sanitized.avatarUrl = `/api/telegram/avatar/me?token=${encodeURIComponent(sessionToken)}`;
           }
           return { isLoggedIn: true, user: sanitized };
         }
-      } catch {
-        // Fall through
+      } catch (err: any) {
+        if (
+          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+          err?.code === 401
+        ) {
+          console.warn(`[TelegramService] Auth key unregistered for session ${sessionToken}, purging.`);
+          this.purgeStaleSession(sessionToken);
+          return { isLoggedIn: false, user: null };
+        }
       }
     }
 
@@ -840,6 +1034,11 @@ export class TelegramService {
     if (storage.sessions[sessionToken]) {
       try {
         const client = await this.getOrCreateClient(sessionToken, storage.sessions[sessionToken]);
+        const isAuth = await client.isUserAuthorized().catch(() => false);
+        if (!isAuth) {
+          this.purgeStaleSession(sessionToken);
+          return { isLoggedIn: false, user: null };
+        }
         const me = await client.getMe();
         if (me) {
           const s = activeSessions.get(sessionToken);
@@ -849,16 +1048,21 @@ export class TelegramService {
           }
           this.saveAccount(sessionToken, me);
           const sanitized = sanitizeData(me);
-          if (sanitized && (me as any).photo) {
-            sanitized.photoUrl = `/api/telegram/avatar/me`;
-            sanitized.avatarUrl = `/api/telegram/avatar/me`;
+          const mePhoto = (me as any).photo;
+          const hasMePhoto = Boolean(
+            mePhoto &&
+            mePhoto.className !== 'UserProfilePhotoEmpty' &&
+            mePhoto.className !== 'ChatPhotoEmpty'
+          );
+          if (sanitized && hasMePhoto) {
+            sanitized.photoUrl = `/api/telegram/avatar/me?token=${encodeURIComponent(sessionToken)}`;
+            sanitized.avatarUrl = `/api/telegram/avatar/me?token=${encodeURIComponent(sessionToken)}`;
           }
           return { isLoggedIn: true, user: sanitized };
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Session expired or could not be restored, cleaning up stale session token.');
-        removePersistedSession(sessionToken);
-        activeSessions.delete(sessionToken);
+        this.purgeStaleSession(sessionToken);
       }
     }
 
@@ -881,13 +1085,15 @@ export class TelegramService {
 
   public static getAccounts() {
     const storage = loadStorage();
-    const accounts = storage.accounts.map(acc => {
-      const active = activeSessions.get(acc.sessionToken);
-      return {
-        ...acc,
-        isLoggedIn: !!(active?.isLoggedIn || storage.sessions[acc.sessionToken]),
-      };
-    });
+    const accounts = storage.accounts
+      .filter(acc => !!storage.sessions[acc.sessionToken])
+      .map(acc => {
+        const active = activeSessions.get(acc.sessionToken);
+        return {
+          ...acc,
+          isLoggedIn: !!(active?.isLoggedIn),
+        };
+      });
     return {
       accounts,
       activeAccountId: storage.activeAccountId || accounts[0]?.id,
@@ -907,13 +1113,23 @@ export class TelegramService {
 
   public static saveAccount(sessionToken: string, user: any) {
     const storage = loadStorage();
+    const hasPhoto = Boolean(
+      user.photo &&
+      user.photo.className !== 'UserProfilePhotoEmpty' &&
+      user.photo.className !== 'ChatPhotoEmpty'
+    );
+    const photoUrl =
+      user.photoUrl ||
+      user.avatarUrl ||
+      (hasPhoto ? `/api/telegram/avatar/me?token=${encodeURIComponent(sessionToken)}` : undefined);
+
     const cleanUser = {
       id: user.id?.toString() || 'me',
       firstName: user.firstName || 'مستخدم تيليجرام',
       lastName: user.lastName,
       username: user.username,
       phone: user.phone,
-      photoUrl: user.photoUrl,
+      photoUrl,
       isBot: !!user.bot,
       status: 'online',
     };
@@ -977,140 +1193,223 @@ export class TelegramService {
     if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
       return [];
     }
-    const client = await this.getOrCreateClient(sessionToken);
-    const dialogs = await client.getDialogs({ limit });
-    return dialogs.map((d: any) => {
-      let type = 'private';
-      if (d.isChannel) type = 'channel';
-      else if (d.isGroup) type = 'group';
-      else if (d.entity?.bot) type = 'bot';
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const dialogs = await client.getDialogs({ limit });
 
-      const lastMsg = d.message;
-      let text = lastMsg?.text || '';
-      if (!text && lastMsg?.media) {
-        text = '[وسائط / ميديا]';
+      const s = activeSessions.get(sessionToken);
+      if (s) {
+        if (!s.entityCache) s.entityCache = new Map();
+        if (!s.fullEntityCache) s.fullEntityCache = new Map();
+        for (const d of dialogs) {
+          const cleanId = extractPeerId(d.id || d.entity?.id || (d as any).peer);
+          if (cleanId) {
+            if (d.inputEntity) s.entityCache.set(cleanId, d.inputEntity);
+            if (d.entity) {
+              s.fullEntityCache.set(cleanId, d.entity);
+              s.entityCache.set(cleanId, d.entity);
+              if (cleanId.startsWith('-100')) {
+                s.fullEntityCache.set(cleanId.slice(4), d.entity);
+              }
+            }
+            const entUsername = (d.entity as any)?.username;
+            if (entUsername) {
+              s.entityCache.set(entUsername.toLowerCase(), d.inputEntity || d.entity);
+              s.entityCache.set('@' + entUsername.toLowerCase(), d.inputEntity || d.entity);
+              if (d.entity) {
+                s.fullEntityCache.set(entUsername.toLowerCase(), d.entity);
+                s.fullEntityCache.set('@' + entUsername.toLowerCase(), d.entity);
+              }
+            }
+          }
+        }
       }
 
-      const peerId = d.id?.toString() || d.entity?.id?.toString();
-      const hasPhoto = Boolean(d.entity?.photo || d.photo);
-      const avatarUrl = hasPhoto ? `/api/telegram/avatar/${encodeURIComponent(peerId)}` : undefined;
+      return dialogs.map((d: any) => {
+        let type = 'private';
+        if (d.isChannel) type = 'channel';
+        else if (d.isGroup) type = 'group';
+        else if (d.entity?.bot) type = 'bot';
 
-      return {
-        id: peerId,
-        title: d.title || d.name || 'محادثة',
-        username: d.entity?.username || undefined,
-        type,
-        avatarUrl,
-        unreadCount: d.unreadCount || 0,
-        isPinned: !!d.isPinned,
-        isMuted: !!d.isMuted,
-        lastMessage: lastMsg
-          ? {
-              text,
-              timestamp: (lastMsg.date || Math.floor(Date.now() / 1000)) * 1000,
-              isOut: !!lastMsg.out,
-            }
-          : undefined,
-      };
-    });
+        const lastMsg = d.message;
+        let text = lastMsg?.text || '';
+        if (!text && lastMsg?.media) {
+          text = '[وسائط / ميديا]';
+        }
+
+        const peerId = extractPeerId(d.id || d.entity?.id || d.peer);
+        const photoObj = (d.entity as any)?.photo || (d as any).photo;
+        const hasPhoto = Boolean(
+          photoObj &&
+          photoObj.className !== 'UserProfilePhotoEmpty' &&
+          photoObj.className !== 'ChatPhotoEmpty'
+        );
+        const avatarUrl = hasPhoto
+          ? `/api/telegram/avatar/${encodeURIComponent(peerId)}?token=${encodeURIComponent(sessionToken)}`
+          : undefined;
+
+        return {
+          id: peerId,
+          title: d.title || d.name || 'محادثة',
+          username: d.entity?.username || undefined,
+          type,
+          avatarUrl,
+          unreadCount: d.unreadCount || 0,
+          isPinned: !!d.isPinned,
+          isMuted: !!d.isMuted,
+          lastMessage: lastMsg
+            ? {
+                text,
+                timestamp: (lastMsg.date || Math.floor(Date.now() / 1000)) * 1000,
+                isOut: !!lastMsg.out,
+              }
+            : undefined,
+        };
+      });
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        console.warn(`[getDialogs] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
+        this.purgeStaleSession(sessionToken);
+      } else {
+        console.warn(`[getDialogs] Notice fetching dialogs:`, err?.message || err);
+      }
+      return [];
+    }
   }
 
   public static async getMessages(sessionToken: string, peerId: string, limit: number = 50) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const peer = await resolvePeer(client, peerId);
-    const messages = await client.getMessages(peer, { limit });
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      const cached = sqliteDatabase.getCachedMessages(peerId);
+      return cached || [];
+    }
 
-    return messages.map((m: any) => {
-      let mediaType: string | undefined;
-      let mediaTitle: string | undefined;
-      let mediaUrl: string | undefined;
-
-      if (m.media) {
-        const className = m.media.className || '';
-        mediaUrl = `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`;
-        if (className.includes('Photo')) {
-          mediaType = 'photo';
-        } else if (className.includes('Document')) {
-          const mime = m.media.document?.mimeType || '';
-          if (mime.startsWith('audio/') || mime.includes('ogg') || Boolean(m.media.voice)) {
-            mediaType = 'voice';
-          } else if (mime.startsWith('video/') || Boolean(m.media.video)) {
-            mediaType = 'video';
-          } else {
-            mediaType = 'document';
-          }
-          mediaTitle = m.media.document?.attributes?.find((a: any) => a.fileName || a.title)?.fileName || 'مستند';
-        }
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      if (!peer) {
+        console.warn(`[getMessages] Notice: peer ${peerId} could not be resolved, returning cached messages.`);
+        const cached = sqliteDatabase.getCachedMessages(peerId);
+        return cached || [];
       }
 
-      let replyMarkup: any = undefined;
-      if (m.replyMarkup) {
-        const rmClass = m.replyMarkup.className || '';
-        if (rmClass.includes('ReplyInlineMarkup')) {
-          replyMarkup = {
-            type: 'inline',
-            inlineKeyboard: m.replyMarkup.rows?.map((row: any) =>
-              row.buttons?.map((btn: any) => {
-                let callbackData: string | undefined;
-                if (btn.data) {
-                  try {
-                    callbackData = Buffer.isBuffer(btn.data) ? btn.data.toString('utf-8') : String(btn.data);
-                  } catch {
-                    callbackData = String(btn.data);
-                  }
-                }
-                return {
-                  text: btn.text,
-                  url: btn.url,
-                  callbackData,
-                  webApp: btn.webApp?.url || (btn.url && btn.url.includes('t.me') ? { url: btn.url } : undefined),
-                  switchInlineQuery: btn.query,
-                  switchInlineQueryCurrentChat: btn.samePeer ? btn.query : undefined,
-                };
-              })
-            ) || [],
-          };
-        } else if (rmClass.includes('ReplyKeyboardMarkup')) {
-          replyMarkup = {
-            type: 'keyboard',
-            keyboard: m.replyMarkup.rows?.map((row: any) =>
-              row.buttons?.map((btn: any) => ({
-                text: btn.text,
-                requestContact: !!btn.requestContact,
-                requestLocation: !!btn.requestGeoLocation,
-              }))
-            ) || [],
-            resizeKeyboard: !!m.replyMarkup.resize,
-            oneTimeKeyboard: !!m.replyMarkup.singleUse,
-            isPersistent: !!m.replyMarkup.persistent,
-          };
-        }
-      }
+      const messages = await client.getMessages(peer, { limit });
 
-      return {
-        id: m.id?.toString(),
-        chatId: peerId,
-        senderId: m.fromId?.userId?.toString() || (m.out ? 'me' : peerId),
-        senderName: m.out ? 'أنا' : 'عضو',
-        text: m.text || (mediaType ? `[${mediaType}]` : ''),
-        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
-        isOut: !!m.out,
-        status: m.out ? 'read' : 'sent',
-        media: mediaType
-          ? {
-              type: mediaType,
-              title: mediaTitle,
-              url: mediaUrl,
+      return messages.map((m: any) => {
+        let mediaType: string | undefined;
+        let mediaTitle: string | undefined;
+        let mediaUrl: string | undefined;
+
+        if (m.media) {
+          const className = m.media.className || '';
+          mediaUrl = `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}?token=${encodeURIComponent(sessionToken)}`;
+          if (className.includes('Photo')) {
+            mediaType = 'photo';
+          } else if (className.includes('Document')) {
+            const mime = m.media.document?.mimeType || '';
+            if (mime.startsWith('audio/') || mime.includes('ogg') || Boolean(m.media.voice)) {
+              mediaType = 'voice';
+            } else if (mime.startsWith('video/') || Boolean(m.media.video)) {
+              mediaType = 'video';
+            } else {
+              mediaType = 'document';
             }
-          : undefined,
-        reactions: m.reactions?.results?.map((r: any) => ({
-          emoji: r.reaction?.emoticon || '❤️',
-          count: r.count,
-          userReacted: !!r.chosenOrder,
-        })),
-        replyMarkup,
-      };
-    });
+            mediaTitle = m.media.document?.attributes?.find((a: any) => a.fileName || a.title)?.fileName || 'مستند';
+          }
+        }
+
+        let replyMarkup: any = undefined;
+        if (m.replyMarkup) {
+          const rmClass = m.replyMarkup.className || '';
+          if (rmClass.includes('ReplyInlineMarkup')) {
+            replyMarkup = {
+              type: 'inline',
+              inlineKeyboard: m.replyMarkup.rows?.map((row: any) =>
+                row.buttons?.map((btn: any) => {
+                  let callbackData: string | undefined;
+                  if (btn.data) {
+                    try {
+                      callbackData = Buffer.isBuffer(btn.data) ? btn.data.toString('utf-8') : String(btn.data);
+                    } catch {
+                      callbackData = String(btn.data);
+                    }
+                  }
+                  return {
+                    text: btn.text,
+                    url: btn.url,
+                    callbackData,
+                    webApp: btn.webApp?.url || (btn.url && btn.url.includes('t.me') ? { url: btn.url } : undefined),
+                    switchInlineQuery: btn.query,
+                    switchInlineQueryCurrentChat: btn.samePeer ? btn.query : undefined,
+                  };
+                })
+              ) || [],
+            };
+          } else if (rmClass.includes('ReplyKeyboardMarkup')) {
+            replyMarkup = {
+              type: 'keyboard',
+              keyboard: m.replyMarkup.rows?.map((row: any) =>
+                row.buttons?.map((btn: any) => ({
+                  text: btn.text,
+                  requestContact: !!btn.requestContact,
+                  requestLocation: !!btn.requestGeoLocation,
+                }))
+              ) || [],
+              resizeKeyboard: !!m.replyMarkup.resize,
+              oneTimeKeyboard: !!m.replyMarkup.singleUse,
+              isPersistent: !!m.replyMarkup.persistent,
+            };
+          }
+        }
+
+        const senderId = m.fromId?.userId?.toString() || (m.out ? 'me' : peerId);
+        const senderAvatar =
+          !m.out && senderId && senderId !== 'me'
+            ? `/api/telegram/avatar/${encodeURIComponent(senderId)}?token=${encodeURIComponent(sessionToken)}`
+            : undefined;
+
+        return {
+          id: m.id?.toString(),
+          chatId: peerId,
+          senderId,
+          senderName: m.out ? 'أنا' : 'عضو',
+          senderAvatar,
+          text: m.text || (mediaType ? `[${mediaType}]` : ''),
+          timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+          isOut: !!m.out,
+          status: m.out ? 'read' : 'sent',
+          media: mediaType
+            ? {
+                type: mediaType,
+                title: mediaTitle,
+                url: mediaUrl,
+              }
+            : undefined,
+          reactions: m.reactions?.results?.map((r: any) => ({
+            emoji: r.reaction?.emoticon || '❤️',
+            count: r.count,
+            userReacted: !!r.chosenOrder,
+          })),
+          replyMarkup,
+        };
+      });
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        console.warn(`[getMessages] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
+        this.purgeStaleSession(sessionToken);
+      } else {
+        console.warn(`[getMessages] Notice fetching messages for ${peerId}:`, err?.message || err);
+      }
+      const cached = sqliteDatabase.getCachedMessages(peerId);
+      return cached || [];
+    }
   }
 
   public static async sendMessage(
@@ -1566,15 +1865,40 @@ export class TelegramService {
    * Official MTProto method: updates.getState
    */
   public static async getUpdatesState(sessionToken: string) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const state: any = await client.invoke(new Api.updates.GetState());
-    return {
-      pts: state.pts,
-      qts: state.qts,
-      date: state.date,
-      seq: state.seq,
-      unreadCount: state.unreadCount || 0,
+    const defaultState = {
+      pts: 1,
+      qts: 0,
+      date: Math.floor(Date.now() / 1000),
+      seq: 0,
+      unreadCount: 0,
     };
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return defaultState;
+    }
+
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const state: any = await client.invoke(new Api.updates.GetState());
+      return {
+        pts: state.pts,
+        qts: state.qts,
+        date: state.date,
+        seq: state.seq,
+        unreadCount: state.unreadCount || 0,
+      };
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        console.warn(`[getUpdatesState] AUTH_KEY_UNREGISTERED detected, purging session.`);
+        this.purgeStaleSession(sessionToken);
+      } else {
+        console.warn(`[getUpdatesState] Notice fetching updates state:`, err?.message || err);
+      }
+      return defaultState;
+    }
   }
 
   /**
@@ -1588,76 +1912,107 @@ export class TelegramService {
     qts: number = 0,
     ptsTotalLimit: number = 100
   ) {
-    const client = await this.getOrCreateClient(sessionToken);
-    let targetPts = Number(pts) || 0;
-    if (targetPts <= 0) {
-      try {
-        const state: any = await client.invoke(new Api.updates.GetState());
-        targetPts = state?.pts || 1;
-      } catch {
-        targetPts = 1;
-      }
+    const defaultDiff = {
+      className: 'updates.DifferenceEmpty',
+      state: {
+        pts: pts || 1,
+        qts: qts || 0,
+        date: date || Math.floor(Date.now() / 1000),
+        seq: 0,
+        unreadCount: 0,
+      },
+      newMessages: [],
+      otherUpdates: [],
+      isIntermediate: false,
+    };
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return defaultDiff;
     }
-    const diff: any = await client.invoke(
-      new Api.updates.GetDifference({
-        pts: targetPts,
-        date: Number(date) || Math.floor(Date.now() / 1000) - 86400,
-        qts: Number(qts) || 0,
-        ptsTotalLimit: Number(ptsTotalLimit) || 100,
-      })
-    );
 
-    const newMessages = (diff.newMessages || []).map((m: any) => {
-      const rawPeer = m.peerId;
-      const peerId =
-        rawPeer?.userId?.toString() ||
-        rawPeer?.channelId?.toString() ||
-        rawPeer?.chatId?.toString() ||
-        m.fromId?.userId?.toString() ||
-        'chat';
-
-      let media: any = undefined;
-      if (m.media) {
-        const isPhoto = Boolean(m.media.photo);
-        const isDoc = Boolean(m.media.document);
-        const isVoice = Boolean(m.media.voice) || m.media.document?.mimeType?.includes('audio') || m.media.document?.mimeType?.includes('ogg');
-        const isVideo = Boolean(m.media.video) || m.media.document?.mimeType?.includes('video');
-        const type = isVoice ? 'voice' : isVideo ? 'video' : isPhoto ? 'photo' : 'document';
-        const docAttr = m.media.document?.attributes?.find((a: any) => a.fileName || a.title);
-
-        media = {
-          type,
-          url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
-          fileName: docAttr?.fileName || docAttr?.title,
-        };
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      let targetPts = Number(pts) || 0;
+      if (targetPts <= 0) {
+        try {
+          const state: any = await client.invoke(new Api.updates.GetState());
+          targetPts = state?.pts || 1;
+        } catch {
+          targetPts = 1;
+        }
       }
+      const diff: any = await client.invoke(
+        new Api.updates.GetDifference({
+          pts: targetPts,
+          date: Number(date) || Math.floor(Date.now() / 1000) - 86400,
+          qts: Number(qts) || 0,
+          ptsTotalLimit: Number(ptsTotalLimit) || 100,
+        })
+      );
+
+      const newMessages = (diff.newMessages || []).map((m: any) => {
+        const rawPeer = m.peerId;
+        const peerId =
+          rawPeer?.userId?.toString() ||
+          rawPeer?.channelId?.toString() ||
+          rawPeer?.chatId?.toString() ||
+          m.fromId?.userId?.toString() ||
+          'chat';
+
+        let media: any = undefined;
+        if (m.media) {
+          const isPhoto = Boolean(m.media.photo);
+          const isDoc = Boolean(m.media.document);
+          const isVoice = Boolean(m.media.voice) || m.media.document?.mimeType?.includes('audio') || m.media.document?.mimeType?.includes('ogg');
+          const isVideo = Boolean(m.media.video) || m.media.document?.mimeType?.includes('video');
+          const type = isVoice ? 'voice' : isVideo ? 'video' : isPhoto ? 'photo' : 'document';
+          const docAttr = m.media.document?.attributes?.find((a: any) => a.fileName || a.title);
+
+          media = {
+            type,
+            url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
+            fileName: docAttr?.fileName || docAttr?.title,
+          };
+        }
+
+        return {
+          id: String(m.id),
+          chatId: peerId,
+          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
+          senderName: m.out ? 'أنا' : 'عضو',
+          text: m.message || (media ? `[${media.type}]` : ''),
+          timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+          isOut: !!m.out,
+          status: m.out ? 'read' : 'sent',
+          media,
+        };
+      });
 
       return {
-        id: String(m.id),
-        chatId: peerId,
-        senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-        senderName: m.out ? 'أنا' : 'عضو',
-        text: m.message || (media ? `[${media.type}]` : ''),
-        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
-        isOut: !!m.out,
-        status: m.out ? 'read' : 'sent',
-        media,
+        className: diff.className,
+        state: diff.state ? {
+          pts: diff.state.pts,
+          qts: diff.state.qts,
+          date: diff.state.date,
+          seq: diff.state.seq,
+          unreadCount: diff.state.unreadCount || 0,
+        } : undefined,
+        newMessages,
+        otherUpdates: sanitizeData(diff.otherUpdates || []),
+        isIntermediate: diff.className === 'updates.DifferenceSlice',
       };
-    });
-
-    return {
-      className: diff.className,
-      state: diff.state ? {
-        pts: diff.state.pts,
-        qts: diff.state.qts,
-        date: diff.state.date,
-        seq: diff.state.seq,
-        unreadCount: diff.state.unreadCount || 0,
-      } : undefined,
-      newMessages,
-      otherUpdates: sanitizeData(diff.otherUpdates || []),
-      isIntermediate: diff.className === 'updates.DifferenceSlice',
-    };
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        console.warn(`[getDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
+        this.purgeStaleSession(sessionToken);
+      } else {
+        console.warn(`[getDifference] Notice fetching updates difference:`, err?.message || err);
+      }
+      return defaultDiff;
+    }
   }
 
   /**
@@ -1670,83 +2025,127 @@ export class TelegramService {
     pts: number,
     limit: number = 100
   ) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const peer = await resolvePeer(client, channelPeer);
-    const diff: any = await client.invoke(
-      new Api.updates.GetChannelDifference({
-        channel: peer as any,
-        filter: new Api.ChannelMessagesFilterEmpty(),
-        pts: Number(pts) || 0,
-        limit: Number(limit) || 100,
-      })
-    );
-
-    const newMessages = (diff.newMessages || []).map((m: any) => {
-      const peerId = String(channelPeer);
-      let media: any = undefined;
-      if (m.media) {
-        media = {
-          type: m.media.photo ? 'photo' : 'document',
-          url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
-        };
-      }
-      return {
-        id: String(m.id),
-        chatId: peerId,
-        senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-        senderName: m.out ? 'أنا' : 'قناة',
-        text: m.message || '',
-        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
-        isOut: !!m.out,
-        status: 'sent',
-        media,
-      };
-    });
-
-    return {
-      className: diff.className,
-      pts: diff.pts,
-      timeout: diff.timeout,
-      newMessages,
-      otherUpdates: sanitizeData(diff.otherUpdates || []),
-      isFinal: diff.className === 'updates.ChannelDifference',
+    const defaultDiff = {
+      className: 'updates.ChannelDifferenceEmpty',
+      pts: Number(pts) || 1,
+      timeout: 0,
+      newMessages: [],
+      otherUpdates: [],
+      isFinal: true,
     };
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return defaultDiff;
+    }
+
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, channelPeer);
+      if (!peer) {
+        return defaultDiff;
+      }
+      const diff: any = await client.invoke(
+        new Api.updates.GetChannelDifference({
+          channel: peer as any,
+          filter: new Api.ChannelMessagesFilterEmpty(),
+          pts: Number(pts) || 0,
+          limit: Number(limit) || 100,
+        })
+      );
+
+      const newMessages = (diff.newMessages || []).map((m: any) => {
+        const peerId = String(channelPeer);
+        let media: any = undefined;
+        if (m.media) {
+          media = {
+            type: m.media.photo ? 'photo' : 'document',
+            url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
+          };
+        }
+        return {
+          id: String(m.id),
+          chatId: peerId,
+          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
+          senderName: m.out ? 'أنا' : 'قناة',
+          text: m.message || '',
+          timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+          isOut: !!m.out,
+          status: 'sent',
+          media,
+        };
+      });
+
+      return {
+        className: diff.className,
+        pts: diff.pts,
+        timeout: diff.timeout,
+        newMessages,
+        otherUpdates: sanitizeData(diff.otherUpdates || []),
+        isFinal: diff.className === 'updates.ChannelDifference',
+      };
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        console.warn(`[getChannelDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
+        this.purgeStaleSession(sessionToken);
+      } else {
+        console.warn(`[getChannelDifference] Notice fetching channel difference:`, err?.message || err);
+      }
+      return defaultDiff;
+    }
   }
 
   /**
    * 4. Binary Media Stream Downloader (Images, Audio, Voice, Video, Documents)
    */
   public static async downloadMedia(sessionToken: string, peerId: string, messageId: number) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const peer = await resolvePeer(client, peerId);
-    const msgs = await client.getMessages(peer, { ids: [Number(messageId)] });
-    if (!msgs || msgs.length === 0 || !msgs[0]?.media) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
       return null;
     }
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      if (!peer) return null;
+      const msgs = await client.getMessages(peer, { ids: [Number(messageId)] });
+      if (!msgs || msgs.length === 0 || !msgs[0]?.media) {
+        return null;
+      }
 
-    const msg = msgs[0];
-    const buffer = await client.downloadMedia(msg, {});
-    if (!buffer || !(buffer instanceof Buffer) || buffer.length === 0) {
+      const msg = msgs[0];
+      const buffer = await client.downloadMedia(msg, {});
+      if (!buffer || !(buffer instanceof Buffer) || buffer.length === 0) {
+        return null;
+      }
+
+      let mimeType = 'application/octet-stream';
+      let fileName: string | undefined = undefined;
+      const mediaObj = msg.media as any;
+
+      if (mediaObj.photo) {
+        mimeType = 'image/jpeg';
+        fileName = `photo_${messageId}.jpg`;
+      } else if (mediaObj.document) {
+        mimeType = mediaObj.document.mimeType || 'application/octet-stream';
+        const docAttr = mediaObj.document.attributes?.find((a: any) => a.fileName || a.title);
+        fileName = docAttr?.fileName || docAttr?.title || `file_${messageId}`;
+      } else if (mediaObj.voice) {
+        mimeType = 'audio/ogg';
+        fileName = `voice_${messageId}.ogg`;
+      }
+
+      return { buffer, mimeType, fileName };
+    } catch (err: any) {
+      if (
+        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        err?.code === 401
+      ) {
+        this.purgeStaleSession(sessionToken);
+      }
       return null;
     }
-
-    let mimeType = 'application/octet-stream';
-    let fileName: string | undefined = undefined;
-    const mediaObj = msg.media as any;
-
-    if (mediaObj.photo) {
-      mimeType = 'image/jpeg';
-      fileName = `photo_${messageId}.jpg`;
-    } else if (mediaObj.document) {
-      mimeType = mediaObj.document.mimeType || 'application/octet-stream';
-      const docAttr = mediaObj.document.attributes?.find((a: any) => a.fileName || a.title);
-      fileName = docAttr?.fileName || docAttr?.title || `file_${messageId}`;
-    } else if (mediaObj.voice) {
-      mimeType = 'audio/ogg';
-      fileName = `voice_${messageId}.ogg`;
-    }
-
-    return { buffer, mimeType, fileName };
   }
 
   /**
@@ -1921,12 +2320,42 @@ export class TelegramService {
   public static async downloadProfilePhoto(sessionToken: string, peerId: string, isBig: boolean = false) {
     return FloodWaitQueue.executeWithFloodRetry(`download_photo_${peerId}`, async () => {
       try {
-        const client = await this.getOrCreateClient(sessionToken);
+        let validToken = sessionToken;
+        if (!validToken || !(await this.isAuthorized(validToken))) {
+          const active = this.getActiveSessionToken(validToken);
+          if (active) validToken = active;
+        }
+        const client = await this.getOrCreateClient(validToken);
+        const s = activeSessions.get(validToken);
         let entity: any;
+
         if (peerId === 'me' || peerId === 'self') {
           entity = await client.getMe();
         } else {
-          entity = await resolvePeer(client, peerId);
+          const cleanId = extractPeerId(peerId);
+          // 1. Check fullEntityCache
+          if (s?.fullEntityCache?.has(cleanId)) {
+            entity = s.fullEntityCache.get(cleanId);
+          } else if (cleanId.startsWith('-100') && s?.fullEntityCache?.has(cleanId.slice(4))) {
+            entity = s.fullEntityCache.get(cleanId.slice(4));
+          } else if (!cleanId.startsWith('-100') && s?.fullEntityCache?.has('-100' + cleanId)) {
+            entity = s.fullEntityCache.get('-100' + cleanId);
+          }
+
+          // 2. If not found in cache, attempt client.getEntity
+          if (!entity) {
+            try {
+              entity = await client.getEntity(cleanId);
+            } catch {
+              try {
+                if (!cleanId.startsWith('-100')) {
+                  entity = await client.getEntity('-100' + cleanId);
+                }
+              } catch {
+                entity = await resolvePeer(client, peerId);
+              }
+            }
+          }
         }
         if (!entity) return null;
 

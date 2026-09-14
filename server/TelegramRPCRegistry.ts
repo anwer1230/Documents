@@ -48,6 +48,15 @@ export class TelegramRPCRegistry {
         return this.handleFallbackRPC(method, params, serverTime);
       }
 
+      // Methods requiring user authentication
+      const isPublicMethod = method === 'help.getConfig' || method === 'help.getNearestDc' || method === 'auth.sendCode';
+      if (!isPublicMethod) {
+        const isAuth = await client.isUserAuthorized().catch(() => false);
+        if (!isAuth) {
+          return this.handleFallbackRPC(method, params, serverTime);
+        }
+      }
+
       switch (method) {
         // ==========================================
         // 1. MESSAGES SUBSYSTEM (messages.*)
@@ -612,6 +621,13 @@ export class TelegramRPCRegistry {
           return this.handleFallbackRPC(method, params, serverTime);
       }
     } catch (error: any) {
+      if (
+        error?.message?.includes('AUTH_KEY_UNREGISTERED') ||
+        error?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
+        error?.code === 401
+      ) {
+        return this.handleFallbackRPC(method, params, serverTime);
+      }
       console.warn(`[MTProto Server RPC] Error executing ${method} (falling back gracefully):`, error?.message || error);
       return this.handleFallbackRPC(method, params, serverTime);
     }
@@ -687,6 +703,38 @@ export class TelegramRPCRegistry {
             key: params.key || 'statusTimestamp',
             option: params.rule || params.value || (Array.isArray(params.rules) ? params.rules[0] : params.rules) || 'contacts',
             rules: [{ className: 'PrivacyValueAllowContacts' }],
+          },
+        };
+      case 'updates.getState':
+        return {
+          success: true,
+          rpc: method,
+          serverTime,
+          result: {
+            pts: 1,
+            qts: 0,
+            date: serverTime,
+            seq: 0,
+            unreadCount: 0,
+          },
+        };
+      case 'updates.getDifference':
+        return {
+          success: true,
+          rpc: method,
+          serverTime,
+          result: {
+            className: 'updates.DifferenceEmpty',
+            state: {
+              pts: params.pts || 1,
+              qts: params.qts || 0,
+              date: params.date || serverTime,
+              seq: 0,
+              unreadCount: 0,
+            },
+            newMessages: [],
+            otherUpdates: [],
+            isIntermediate: false,
           },
         };
       case 'help.getConfig':

@@ -316,6 +316,7 @@ async function startServer() {
       (req.headers['x-session-token'] as string) ||
       (req.body && typeof req.body === 'object' && (req.body.sessionToken as string)) ||
       (req.query && typeof req.query.sessionToken === 'string' && req.query.sessionToken) ||
+      (req.query && typeof req.query.token === 'string' && req.query.token) ||
       req.cookies?.tg_session_id;
 
     if (!token) {
@@ -334,8 +335,12 @@ async function startServer() {
 
   // Telegram Health and Connection Status Endpoint
   app.get('/api/telegram/status', async (req, res) => {
-    const token = (req as any).sessionToken;
+    let token = (req as any).sessionToken;
     try {
+      if (!token || !(await TelegramService.isAuthorized(token))) {
+        const active = TelegramService.getActiveSessionToken(token);
+        if (active) token = active;
+      }
       const auth = await TelegramService.getMe(token);
       res.json({
         apiId: TELEGRAM_API_ID,
@@ -503,7 +508,11 @@ async function startServer() {
 
   // Fetch Dialogs / Chats
   app.get('/api/telegram/dialogs', async (req, res) => {
-    const token = (req as any).sessionToken;
+    let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
     try {
       const dialogs = await TelegramService.getDialogs(token, 50);
       res.json({ dialogs });
@@ -589,9 +598,13 @@ async function startServer() {
 
   // Avatar / Profile Photo Binary Endpoint (with In-Memory LRU Cache)
   app.get('/api/telegram/avatar/:peerId', async (req, res) => {
-    const token = (req as any).sessionToken;
+    let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
     const { peerId } = req.params;
-    const cacheKey = `avatar_${peerId}`;
+    const cacheKey = `avatar_${token || 'guest'}_${peerId}`;
 
     try {
       let cached = mediaCache.get(cacheKey);
@@ -833,7 +846,11 @@ async function startServer() {
 
   // Fetch Messages for Chat (Tiered Hot-Cache + SQLite + MTProto)
   app.get('/api/telegram/messages', async (req, res) => {
-    const token = (req as any).sessionToken;
+    let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
     const { peerId, limit, fresh } = req.query;
     if (!peerId) {
       return res.status(400).json({ error: 'peerId مطلوب' });
@@ -862,7 +879,11 @@ async function startServer() {
 
   // Send Message (supports text and media files)
   app.post('/api/telegram/send-message', async (req, res) => {
-    const token = (req as any).sessionToken;
+    let token = req.body?.sessionToken || (req as any).sessionToken;
+    if (!token || !(await TelegramService.isAuthorized(token))) {
+      const active = TelegramService.getActiveSessionToken(token);
+      if (active) token = active;
+    }
     const { peerId, text, replyTo, media } = req.body;
 
     if (!peerId || (!text && !media)) {
@@ -1155,9 +1176,12 @@ async function startServer() {
 
     try {
       let client: any = null;
-      if (token && token !== 'guest_user') {
+      if (token && token !== 'guest_user' && token !== 'guest' && !token.startsWith('demo_')) {
         try {
-          client = await TelegramService.getOrCreateClient(token);
+          const isAuth = await TelegramService.isAuthorized(token);
+          if (isAuth) {
+            client = await TelegramService.getOrCreateClient(token);
+          }
         } catch (_) {}
       }
       const rpcResult = await telegramRPCRegistry.executeRPC(client, method, params);
@@ -1418,8 +1442,10 @@ async function startServer() {
     const token = (req as any).sessionToken;
     try {
       let client: any = null;
-      if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+      if (token && token !== 'guest_user' && token !== 'guest' && !token.startsWith('demo_')) {
+        if (await TelegramService.isAuthorized(token)) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.getAuthorizations', {});
       res.json(result);
@@ -1433,8 +1459,10 @@ async function startServer() {
     const { hash } = req.body;
     try {
       let client: any = null;
-      if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+      if (token && token !== 'guest_user' && token !== 'guest' && !token.startsWith('demo_')) {
+        if (await TelegramService.isAuthorized(token)) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.resetAuthorization', { hash });
       res.json(result);
@@ -1447,8 +1475,10 @@ async function startServer() {
     const token = (req as any).sessionToken;
     try {
       let client: any = null;
-      if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+      if (token && token !== 'guest_user' && token !== 'guest' && !token.startsWith('demo_')) {
+        if (await TelegramService.isAuthorized(token)) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'auth.resetAuthorizations', {});
       res.json(result);
@@ -1463,7 +1493,9 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
-        client = await TelegramService.getOrCreateClient(token);
+        if (await TelegramService.isAuthorized(token)) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.getPassword', {});
       res.json(result);

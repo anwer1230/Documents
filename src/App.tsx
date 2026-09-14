@@ -82,6 +82,7 @@ export default function App() {
   // UI & Navigation State
   const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isMobileChatOpen, setIsMobileChatOpen] = useState(false);
   const [isChatInfoOpen, setIsChatInfoOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
@@ -367,6 +368,7 @@ export default function App() {
             lastName: statusData.user.lastName,
             username: statusData.user.username,
             phone: statusData.user.phone,
+            photoUrl: statusData.user.photoUrl || `/api/telegram/avatar/me?token=${encodeURIComponent(statusData.sessionToken)}`,
             status: 'online',
           };
 
@@ -509,6 +511,99 @@ export default function App() {
     );
   }, [selectedChatId]);
 
+  // Explicit logic to fetch and update user and group/channel profile images in state
+  // whenever the active account changes or the session is refreshed
+  const syncAccountAndSessionProfiles = useCallback(async (token?: string, accountId?: string) => {
+    const targetAccountId = accountId || activeAccountId;
+    const targetAcc = accounts.find((a) => a.id === targetAccountId);
+    const activeToken = token || targetAcc?.sessionToken || localStorage.getItem('tg_active_session_token');
+
+    if (!activeToken || activeToken.startsWith('demo_')) return;
+
+    try {
+      const headers: Record<string, string> = { 'x-session-token': activeToken };
+
+      // 1. Fetch & sync active user profile info and profile avatar
+      const userRes = await fetch(`/api/telegram/status?token=${encodeURIComponent(activeToken)}`, { headers });
+      if (userRes.ok) {
+        const statusData = await userRes.json();
+        if (statusData.isLoggedIn && statusData.user) {
+          const freshPhotoUrl =
+            statusData.user.photoUrl ||
+            `/api/telegram/avatar/me?token=${encodeURIComponent(activeToken)}&t=${Date.now()}`;
+
+          setCurrentUser((prev) => {
+            if (!prev) return prev;
+            const updated = {
+              ...prev,
+              firstName: statusData.user.firstName || prev.firstName,
+              lastName: statusData.user.lastName ?? prev.lastName,
+              username: statusData.user.username ?? prev.username,
+              phone: statusData.user.phone ?? prev.phone,
+              photoUrl: freshPhotoUrl,
+            };
+            try {
+              localStorage.setItem('tg_active_user', JSON.stringify(updated));
+            } catch {}
+            return updated;
+          });
+
+          setAccounts((prev) => {
+            const updatedAccs = prev.map((acc) =>
+              acc.id === targetAccountId || acc.sessionToken === activeToken
+                ? {
+                    ...acc,
+                    user: {
+                      ...acc.user,
+                      firstName: statusData.user.firstName || acc.user.firstName,
+                      lastName: statusData.user.lastName ?? acc.user.lastName,
+                      username: statusData.user.username ?? acc.user.username,
+                      phone: statusData.user.phone ?? acc.user.phone,
+                      photoUrl: freshPhotoUrl,
+                    },
+                  }
+                : acc
+            );
+            try {
+              localStorage.setItem('tg_multi_accounts', JSON.stringify(updatedAccs));
+            } catch {}
+            return updatedAccs;
+          });
+        }
+      }
+
+      // 2. Fetch & sync group, channel, and peer profile images
+      const dialogsRes = await fetch(`/api/telegram/dialogs?token=${encodeURIComponent(activeToken)}&limit=100`, { headers });
+      if (dialogsRes.ok) {
+        const data = await dialogsRes.json();
+        if (Array.isArray(data.dialogs) && data.dialogs.length > 0) {
+          const dialogMap = new Map<string, TelegramChat>();
+          for (const d of data.dialogs) {
+            dialogMap.set(String(d.id), d);
+          }
+
+          setChats((prev) =>
+            prev.map((chat) => {
+              const live = dialogMap.get(String(chat.id));
+              if (live) {
+                return {
+                  ...chat,
+                  title: live.title || chat.title,
+                  avatarUrl: live.avatarUrl || chat.avatarUrl,
+                  unreadCount: typeof live.unreadCount === 'number' ? live.unreadCount : chat.unreadCount,
+                  lastMessage: live.lastMessage || chat.lastMessage,
+                };
+              }
+              return chat;
+            })
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[syncProfiles] Error synchronizing profile and group images:', err);
+    }
+  }, [activeAccountId, accounts]);
+
   // Perform MTProto Gap Recovery (orchestrating Api.updates.GetDifference & sync_batch)
   const recoverGap = useCallback(async () => {
     if (!activeAccountId || isDemoMode || isRecoveringGapRef.current) return;
@@ -601,12 +696,19 @@ export default function App() {
         console.log(`[recoverGap] Successfully recovered ${allRecoveredMessages.length} missed messages across ${iteration} slices`);
         applySyncBatchMessages(allRecoveredMessages);
       }
+
+      // 5. Explicitly refresh profile images and group avatars upon session/gap recovery
+      const activeAcc = accounts.find((a) => a.id === activeAccountId);
+      const token = activeAcc?.sessionToken || localStorage.getItem('tg_active_session_token');
+      if (token) {
+        syncAccountAndSessionProfiles(token, activeAccountId);
+      }
     } catch (err) {
       console.warn('[recoverGap] Gap recovery encountered error:', err);
     } finally {
       isRecoveringGapRef.current = false;
     }
-  }, [activeAccountId, isDemoMode, applySyncBatchMessages]);
+  }, [activeAccountId, isDemoMode, applySyncBatchMessages, accounts, syncAccountAndSessionProfiles]);
 
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
@@ -754,11 +856,13 @@ export default function App() {
 
   const loadMtprotoDialogs = async (token?: string) => {
     try {
+      const activeToken = token || localStorage.getItem('tg_active_session_token');
       const headers: Record<string, string> = {};
-      if (token) {
-        headers['x-session-token'] = token;
+      if (activeToken) {
+        headers['x-session-token'] = activeToken;
       }
-      const res = await fetch('/api/telegram/dialogs', { headers });
+      const url = `/api/telegram/dialogs${activeToken ? `?token=${encodeURIComponent(activeToken)}` : ''}`;
+      const res = await fetch(url, { headers });
       if (res.ok) {
         const data = await res.json();
         if (data.dialogs && data.dialogs.length > 0) {
@@ -766,12 +870,32 @@ export default function App() {
             const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
             return [savedChat, ...data.dialogs.filter((d: any) => d.id !== 'saved_messages')];
           });
+          setSelectedChatId((curr) => {
+            if (!curr || curr === 'saved_messages') {
+              return data.dialogs[0]?.id || curr;
+            }
+            return curr;
+          });
+        }
+        if (activeToken) {
+          syncAccountAndSessionProfiles(activeToken);
         }
       }
     } catch (err) {
       console.error('Error loading MTProto dialogs:', err);
     }
   };
+
+  // Explicitly sync profile images whenever active account changes or session is refreshed
+  useEffect(() => {
+    if (activeAccountId && !isDemoMode) {
+      const activeAcc = accounts.find((a) => a.id === activeAccountId);
+      const token = activeAcc?.sessionToken || localStorage.getItem('tg_active_session_token');
+      if (token) {
+        syncAccountAndSessionProfiles(token, activeAccountId);
+      }
+    }
+  }, [activeAccountId, syncAccountAndSessionProfiles, isDemoMode, accounts]);
 
   const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false, authenticatedSessionToken?: string) => {
     const finalSessionToken =
@@ -797,6 +921,7 @@ export default function App() {
     localStorage.setItem('tg_active_user', JSON.stringify(user));
     if (!isDemo) {
       loadMtprotoDialogs(finalSessionToken);
+      syncAccountAndSessionProfiles(finalSessionToken, newAcc.id);
     }
   };
 
@@ -858,6 +983,7 @@ export default function App() {
     // 5. If it's a real MTProto cloud account, load its isolated dialogs
     if (!target.isDemo) {
       loadMtprotoDialogs(target.sessionToken);
+      syncAccountAndSessionProfiles(target.sessionToken, target.id);
     }
   };
 
@@ -902,6 +1028,7 @@ export default function App() {
       setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
       setSelectedChatId('saved_messages');
       loadMtprotoDialogs(newAccount.sessionToken);
+      syncAccountAndSessionProfiles(newAccount.sessionToken, newAccount.id);
     }
   };
 
@@ -956,6 +1083,7 @@ export default function App() {
   // Chat selection with real-time mark as read and dynamic channel loading
   const handleSelectChat = async (chat: TelegramChat) => {
     setSelectedChatId(chat.id);
+    setIsMobileChatOpen(true);
 
     // If chat is not in chats list yet, prepend it
     setChats((prev) => {
@@ -1019,6 +1147,9 @@ export default function App() {
       return prev;
     });
 
+    const activeAcc = accounts.find((a) => a.id === activeAccountId);
+    const token = activeAcc?.sessionToken || localStorage.getItem('tg_active_session_token');
+
     // Notify backend and peers via WebSocket and HTTP
     wsClient.send({
       type: 'mark_read',
@@ -1026,14 +1157,22 @@ export default function App() {
     });
     fetch('/api/telegram/mark-read', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ peerId: chat.id }),
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'x-session-token': token } : {}),
+      },
+      body: JSON.stringify({ peerId: chat.id, sessionToken: token }),
     }).catch(() => {});
 
     // If real MTProto session active, attempt loading live messages
     if (activeAccountId && !isDemoMode) {
       try {
-        const res = await fetch(`/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30`);
+        const headers: Record<string, string> = {};
+        if (token) headers['x-session-token'] = token;
+        const res = await fetch(
+          `/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30${token ? `&token=${encodeURIComponent(token)}` : ''}`,
+          { headers }
+        );
         if (res.ok) {
           const data = await res.json();
           if (data.messages && data.messages.length > 0) {
@@ -1116,8 +1255,19 @@ export default function App() {
     }
   };
 
-  const activeChat = chats.find((c) => c.id === selectedChatId) || chats[0] || null;
-  const currentMessages = selectedChatId ? messagesMap[selectedChatId] || [] : [];
+  const activeChat =
+    (selectedChatId
+      ? chats.find(
+          (c) =>
+            c.id === selectedChatId ||
+            String(c.id) === String(selectedChatId) ||
+            String(c.id).replace(/^-100/, '') === String(selectedChatId).replace(/^-100/, '') ||
+            (c.username && c.username.toLowerCase() === String(selectedChatId).toLowerCase())
+        )
+      : null) ||
+    chats[0] ||
+    null;
+  const currentMessages = activeChat ? messagesMap[activeChat.id] || messagesMap[selectedChatId] || [] : [];
 
   // Sending a message
   const handleSendMessage = async (text: string, replyTo?: TelegramMessage, media?: any) => {
@@ -1179,20 +1329,29 @@ export default function App() {
     // If connected via real MTProto, send to backend
     if (!isDemoMode && currentUser?.id !== 'demo_user') {
       try {
+        const activeAcc = accounts.find((a) => a.id === activeAccountId);
+        const token = activeAcc?.sessionToken || localStorage.getItem('tg_active_session_token');
         await fetch('/api/telegram/send-message', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'x-session-token': token } : {}),
+          },
           body: JSON.stringify({
             peerId: selectedChatId,
             text,
             replyTo: replyTo ? Number(replyTo.id) : undefined,
+            sessionToken: token,
           }),
         });
         // Also inform MTProto about action
         fetch('/api/telegram/set-typing', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ peerId: selectedChatId, action: 'typing' }),
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'x-session-token': token } : {}),
+          },
+          body: JSON.stringify({ peerId: selectedChatId, action: 'typing', sessionToken: token }),
         }).catch(() => {});
       } catch (err) {
         console.error('Failed to send MTProto message:', err);
@@ -1530,6 +1689,7 @@ export default function App() {
 
     setChats([chat, ...chats]);
     setSelectedChatId(id);
+    setIsMobileChatOpen(true);
     setMessagesMap((prev) => ({
       ...prev,
       [id]: [
@@ -1569,6 +1729,7 @@ export default function App() {
       setChats([newChat, ...chats]);
       setSelectedChatId(id);
     }
+    setIsMobileChatOpen(true);
   };
 
   if (isCheckingAuth) {
@@ -1642,54 +1803,70 @@ export default function App() {
       {/* Main App Layout */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Sidebar */}
-        <Sidebar
-          chats={chats}
-          selectedChatId={selectedChatId}
-          onSelectChat={handleSelectChat}
-          onOpenMenu={() => setIsSettingsOpen(true)}
-          onOpenNewChat={() => setIsNewChatOpen(true)}
-          activeFolder={activeFolder}
-          onChangeFolder={setActiveFolder}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          lang={themeConfig.language}
-          isDark={themeConfig.isDark}
-          currentUser={currentUser}
-          accounts={accounts}
-          onOpenAddAccount={() => setIsAddAccountOpen(true)}
-          onSwitchAccount={handleSwitchAccount}
-          typingMap={typingMap}
-          peerStoriesList={peerStoriesList}
-          onOpenStory={handleOpenStory}
-        />
+        <div
+          className={`h-full ${
+            isMobileChatOpen ? 'hidden md:flex' : 'flex w-full'
+          } md:w-80 lg:w-96 shrink-0`}
+        >
+          <Sidebar
+            chats={chats}
+            selectedChatId={selectedChatId}
+            onSelectChat={(c) => {
+              handleSelectChat(c);
+              setIsMobileChatOpen(true);
+            }}
+            onOpenMenu={() => setIsSettingsOpen(true)}
+            onOpenNewChat={() => setIsNewChatOpen(true)}
+            activeFolder={activeFolder}
+            onChangeFolder={setActiveFolder}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+            currentUser={currentUser}
+            accounts={accounts}
+            onOpenAddAccount={() => setIsAddAccountOpen(true)}
+            onSwitchAccount={handleSwitchAccount}
+            typingMap={typingMap}
+            peerStoriesList={peerStoriesList}
+            onOpenStory={handleOpenStory}
+          />
+        </div>
 
         {/* Center Chat Window */}
-        <ChatWindow
-          chat={activeChat}
-          messages={currentMessages}
-          currentUser={currentUser}
-          typingStatus={selectedChatId ? typingMap[selectedChatId] || null : null}
-          onSimulateTyping={handleSimulateTyping}
-          onSendMessage={handleSendMessage}
-          onReactMessage={handleReactMessage}
-          onPinMessage={handlePinMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onDeleteMultipleMessages={handleDeleteMultipleMessages}
-          onToggleChatInfo={() => setIsChatInfoOpen(!isChatInfoOpen)}
-          isChatInfoOpen={isChatInfoOpen}
-          onToggleMute={handleToggleMute}
-          onClearHistory={handleClearHistory}
-          onLeaveGroup={handleLeaveGroup}
-          onReportChat={handleReportChat}
-          onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
-          onOpenMiniApp={(url, appName) => handleOpenMiniApp(url, appName)}
-          onBotCallback={handleBotCallback}
-          onJoinChannel={handleJoinChannel}
-          isJoiningChannel={isJoiningChannel}
-          onToast={showToast}
-          lang={themeConfig.language}
-          isDark={themeConfig.isDark}
-        />
+        <div
+          className={`h-full flex-1 min-w-0 ${
+            !isMobileChatOpen ? 'hidden md:flex' : 'flex w-full'
+          }`}
+        >
+          <ChatWindow
+            chat={activeChat}
+            messages={currentMessages}
+            currentUser={currentUser}
+            typingStatus={selectedChatId ? typingMap[selectedChatId] || null : null}
+            onSimulateTyping={handleSimulateTyping}
+            onSendMessage={handleSendMessage}
+            onReactMessage={handleReactMessage}
+            onPinMessage={handlePinMessage}
+            onDeleteMessage={handleDeleteMessage}
+            onDeleteMultipleMessages={handleDeleteMultipleMessages}
+            onToggleChatInfo={() => setIsChatInfoOpen(!isChatInfoOpen)}
+            isChatInfoOpen={isChatInfoOpen}
+            onToggleMute={handleToggleMute}
+            onClearHistory={handleClearHistory}
+            onLeaveGroup={handleLeaveGroup}
+            onReportChat={handleReportChat}
+            onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
+            onOpenMiniApp={(url, appName) => handleOpenMiniApp(url, appName)}
+            onBotCallback={handleBotCallback}
+            onJoinChannel={handleJoinChannel}
+            isJoiningChannel={isJoiningChannel}
+            onToast={showToast}
+            onBack={() => setIsMobileChatOpen(false)}
+            lang={themeConfig.language}
+            isDark={themeConfig.isDark}
+          />
+        </div>
 
         {/* Right Chat Info Drawer */}
         {activeChat && (
@@ -1778,7 +1955,10 @@ export default function App() {
         themeConfig={themeConfig}
         onUpdateTheme={(up) => setThemeConfig((prev) => ({ ...prev, ...up }))}
         onLogout={handleLogout}
-        onOpenSavedMessages={() => setSelectedChatId('saved_messages')}
+        onOpenSavedMessages={() => {
+          setSelectedChatId('saved_messages');
+          setIsMobileChatOpen(true);
+        }}
         onOpenContacts={() => setIsContactsOpen(true)}
         accounts={accounts}
         activeAccountId={activeAccountId}
@@ -1786,7 +1966,10 @@ export default function App() {
         onOpenAddAccount={() => setIsAddAccountOpen(true)}
         onRemoveAccount={handleRemoveAccount}
         chats={chats}
-        onSelectChat={(id) => setSelectedChatId(id)}
+        onSelectChat={(id) => {
+          setSelectedChatId(id);
+          setIsMobileChatOpen(true);
+        }}
         onToggleArchive={handleToggleArchive}
       />
 

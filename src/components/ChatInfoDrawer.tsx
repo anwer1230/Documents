@@ -138,12 +138,25 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
         {/* Profile Avatar & Title */}
         <div className="flex flex-col items-center text-center">
           {chat.avatarUrl ? (
-            <img
-              src={chat.avatarUrl}
-              alt={chat.title}
-              referrerPolicy="no-referrer"
-              className="w-24 h-24 rounded-full object-cover shadow-lg mb-3 ring-2 ring-[#3390ec]/20"
-            />
+            <div className="relative w-24 h-24 mb-3">
+              <img
+                src={chat.avatarUrl}
+                alt={chat.title}
+                referrerPolicy="no-referrer"
+                className="w-24 h-24 rounded-full object-cover shadow-lg ring-2 ring-[#3390ec]/20"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                  const fallback = e.currentTarget.nextElementSibling as HTMLElement;
+                  if (fallback) fallback.style.display = 'flex';
+                }}
+              />
+              <div
+                className="w-24 h-24 rounded-full items-center justify-center text-white font-bold text-3xl shadow-lg hidden"
+                style={{ backgroundColor: chat.avatarColor || '#3390ec' }}
+              >
+                {chat.type === 'saved' ? <Bookmark className="w-10 h-10 fill-white" /> : chat.title.slice(0, 2)}
+              </div>
+            </div>
           ) : (
             <div
               className="w-24 h-24 rounded-full flex items-center justify-center text-white font-bold text-3xl shadow-lg mb-3"
