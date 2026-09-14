@@ -2799,7 +2799,6 @@ async function startServer() {
   const fetchRealTelegramData = async (client: TelegramClient, phoneHint?: string, isLight = false, lastMessageIds?: Record<string, string | number>) => {
     const authKeyHex = (client.session ? (client.session as any).authKey?.key?.toString('hex') : '') || '';
     const baseKey = `acc_${currentAccount}_${phoneHint || authKeyHex || 'default'}`;
-    const baseKey = phoneHint || (client.session ? (client.session as any).authKey?.key?.toString('hex') : 'default');
     const hasDeltaKeys = lastMessageIds && Object.keys(lastMessageIds).length > 0;
     const cacheKey = `${baseKey}_${isLight ? 'light' : 'full'}_${hasDeltaKeys ? 'delta' : 'all'}`;
     const cached = telegramDataCache.get(cacheKey);
