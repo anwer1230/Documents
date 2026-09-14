@@ -18,7 +18,7 @@ import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
 import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
 import { ShareLinkModal } from './components/modals/ShareLinkModal';
 import { ReportChatModal } from './components/modals/ReportChatModal';
-import { ShieldCheck, Loader2, Users, UserPlus, Sparkles } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { wsClient } from './utils/websocket';
 import { Api } from './services/api';
 
@@ -1760,46 +1760,6 @@ export default function App() {
       }`}
       dir={themeConfig.language === 'ar' ? 'rtl' : 'ltr'}
     >
-      {/* Top Embedded API Status Ribbon */}
-      <div className="bg-[#182533] text-gray-300 text-[11px] px-3 py-1 flex items-center justify-between border-b border-[#232e3c] shrink-0">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="font-semibold text-white">Telegram Web:</span>
-          <span>MTProto API_ID: <strong className="text-emerald-400 font-mono">22043994</strong> (مثبت في التطبيق)</span>
-          <span className="hidden sm:inline text-gray-500">•</span>
-          <span className="hidden sm:inline text-gray-400 font-mono">API_HASH: 56f64582...</span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Multi-Account Ribbon Indicator */}
-          <div className="flex items-center gap-1.5 bg-[#232e3c] px-2.5 py-0.5 rounded-full text-[11px] border border-gray-700/50">
-            <Users className="w-3 h-3 text-[#3390ec]" />
-            <span className="text-gray-300">
-              {currentUser?.firstName || 'مستخدم'}: <strong className="text-white">{accounts.length} من {MAX_TELEGRAM_ACCOUNTS}</strong>
-            </span>
-            {accounts.length < MAX_TELEGRAM_ACCOUNTS && (
-              <button
-                onClick={() => setIsAddAccountOpen(true)}
-                className="text-[#3390ec] hover:text-white font-bold ms-1 px-1.5 py-0.2 rounded-sm bg-[#3390ec]/20 hover:bg-[#3390ec] transition"
-                title="إضافة مستخدم جديد"
-              >
-                + إضافة
-              </button>
-            )}
-          </div>
-
-          {isDemoMode && (
-            <span className="bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-md text-[10px] font-bold border border-amber-500/30">
-              وضع المعاينة (Demo)
-            </span>
-          )}
-          <span className="text-emerald-400 flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="hidden sm:inline">متصل بسحابة تليجرام</span>
-          </span>
-        </div>
-      </div>
-
       {/* Main App Layout */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Sidebar */}
