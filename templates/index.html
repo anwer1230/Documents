@@ -4002,14 +4002,15 @@
           const safe = (value) => String(value || '').replace(/[&<>"']/g, (c) => ({
             '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
           }[c]));
-          const skipped = d && d.status === 'skipped';
+          const skipped = d && (d.status === 'skipped' || d.status === 'join_deferred');
+          const deferredJoin = d && d.status === 'join_deferred';
           const toast = document.createElement('div');
           toast.className = 'position-fixed';
           toast.style.cssText = 'bottom:80px;right:16px;z-index:10000;max-width:430px;width:calc(100vw - 32px);';
           toast.innerHTML = `
             <div class="alert alert-${skipped ? 'warning' : 'danger'} alert-dismissible shadow-lg fade show"
                  role="alert" style="font-size:0.86rem;direction:rtl;text-align:right;">
-              <strong>${skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال'}</strong><br>
+              <strong>${deferredJoin ? '⏳ تم تأجيل الانضمام/الإرسال' : (skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال')}</strong><br>
               <b>المجموعة:</b> ${safe(d && d.group)}<br>
               <b>السبب:</b> ${safe(d && d.reason)}<br>
               <small><b>تفاصيل Telegram:</b> ${safe(d && d.technical)}</small>
@@ -4017,7 +4018,7 @@
             </div>`;
           document.body.appendChild(toast);
           if (window.Notification && Notification.permission === 'granted') {
-            new Notification(skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال', {
+            new Notification(deferredJoin ? '⏳ تم تأجيل الانضمام/الإرسال' : (skipped ? '⏭️ تم تخطي الإرسال' : '❌ فشل الإرسال'), {
               body: `${d && d.group ? d.group : ''}: ${d && d.reason ? d.reason : 'سبب غير معروف'}`,
               icon: '/static/icons/icon-192.png'
             });

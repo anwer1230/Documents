@@ -2462,6 +2462,12 @@ class TelegramManager:
         self.client_managers = {}
         self.login_managers = {}
         self._smart_running = set()   # لمنع تشغيل عمليتين لنفس المجموعة: {user_id_group_id}
+        # حدود محافظة للانضمام التلقائي. حدود Telegram الفعلية متغيرة،
+        # لذلك نلتزم بسقف منخفض ونحترم FloodWait الذي يعيده الخادم.
+        self._join_rate_lock = Lock()
+        self._join_rate_state = {}
+        self._join_max_per_hour = 5
+        self._join_min_delay = 30
 
     def get_client_manager(self, user_id):
         if user_id not in self.client_managers:
@@ -2936,6 +2942,211 @@ class TelegramManager:
                 last_exc = e
 
         raise Exception(str(last_exc) if last_exc else f"لا يمكن الوصول إلى: {entity}")
+
+    def _reserve_join_slot(self, user_id):
+        """حجز محاولة انضمام واحدة دون تجاوز السقف المحلي المحافظ."""
+        now = time.time()
+        with self._join_rate_lock:
+            state = self._join_rate_state.setdefault(user_id, {
+                "window_started": now,
+                "attempts": 0,
+                "last_attempt": 0,
+            })
+            if now - state["window_started"] >= 3600:
+                state.update({"window_started": now, "attempts": 0, "last_attempt": 0})
+            if state["attempts"] >= self._join_max_per_hour:
+                return {
+                    "allowed": False,
+                    "reason": (
+                        f"تم تأجيل الانضمام احترامًا للحد المحلي "
+                        f"({self._join_max_per_hour} مجموعات في الساعة)"
+                    ),
+                    "wait_seconds": int(max(0, 3600 - (now - state["window_started"]))),
+                }
+            wait_seconds = max(
+                0,
+                self._join_min_delay - (now - state["last_attempt"])
+            )
+            if wait_seconds:
+                # لا نحتفظ بالقفل أثناء الانتظار حتى لا نوقف عمليات الحساب الأخرى.
+                pass
+
+        if wait_seconds:
+            time.sleep(wait_seconds)
+
+        with self._join_rate_lock:
+            state = self._join_rate_state.setdefault(user_id, {
+                "window_started": time.time(),
+                "attempts": 0,
+                "last_attempt": 0,
+            })
+            now = time.time()
+            if now - state["window_started"] >= 3600:
+                state.update({"window_started": now, "attempts": 0, "last_attempt": 0})
+            if state["attempts"] >= self._join_max_per_hour:
+                return {
+                    "allowed": False,
+                    "reason": (
+                        f"تم تأجيل الانضمام احترامًا للحد المحلي "
+                        f"({self._join_max_per_hour} مجموعات في الساعة)"
+                    ),
+                    "wait_seconds": int(max(0, 3600 - (now - state["window_started"]))),
+                }
+            state["attempts"] += 1
+            state["last_attempt"] = now
+            return {"allowed": True, "reason": None, "wait_seconds": 0}
+
+    def ensure_group_membership(self, user_id, client_manager, group):
+        """
+        فحص عضوية المجموعة والانضمام إليها عند الحاجة.
+        لا تُعاد المحاولة بلا حدود؛ النتيجة تحتوي على حالة واضحة لمرحلة الدورة.
+        """
+        import re as _re
+        from telethon.errors import UserAlreadyParticipantError as _Already
+        from telethon.errors import UserNotParticipantError as _NotParticipant
+        from telethon.tl.functions.channels import JoinChannelRequest
+        from telethon.tl.functions.messages import ImportChatInviteRequest
+        from telethon.tl.functions.channels import GetParticipantRequest
+
+        cleaned = _clean_group_entry(str(group))
+        invite_match = _re.search(
+            r'(?:t\.me|telegram\.me)/(?:\+|joinchat/)([A-Za-z0-9_\-]+)',
+            cleaned,
+            flags=_re.IGNORECASE,
+        )
+
+        async def _check_membership():
+            if invite_match:
+                # إذا كان الحساب منضمًا بالفعل فقد يستطيع Telethon حل الرابط.
+                # عند تعذر ذلك ننتقل لمحاولة استيراد الدعوة مرة واحدة.
+                try:
+                    entity_obj = await client_manager.client.get_entity(cleaned)
+                except Exception:
+                    return "needs_join", None
+            else:
+                entity_obj = await client_manager.client.get_entity(cleaned)
+            try:
+                # GetParticipantRequest هو الفحص الأدق للقنوات والمجموعات الكبيرة.
+                if hasattr(entity_obj, "megagroup") or hasattr(entity_obj, "broadcast"):
+                    await client_manager.client(
+                        GetParticipantRequest(entity_obj, "me")
+                    )
+                else:
+                    await client_manager.client.get_permissions(entity_obj, "me")
+                return "already_joined"
+            except _NotParticipant:
+                return "needs_join", entity_obj
+
+        def _join_entity(entity_obj=None):
+            async def _join():
+                if invite_match:
+                    try:
+                        await client_manager.client(
+                            ImportChatInviteRequest(invite_match.group(1))
+                        )
+                        return "joined"
+                    except _Already:
+                        return "already_joined"
+                try:
+                    await client_manager.client(JoinChannelRequest(entity_obj))
+                except _Already:
+                    return "already_joined"
+                return "joined"
+            return _join()
+
+        try:
+            membership_status, entity_obj = client_manager.run_coroutine(
+                _check_membership()
+            )
+            if membership_status == "already_joined":
+                return {
+                    "status": "already_joined",
+                    "group": str(group),
+                    "reason": "الحساب منضم مسبقًا",
+                }
+
+            slot = self._reserve_join_slot(user_id)
+            if not slot["allowed"]:
+                return {
+                    "status": "deferred",
+                    "group": str(group),
+                    "reason": slot["reason"],
+                    "technical": f"سيُعاد الفحص بعد نحو {slot['wait_seconds']} ثانية",
+                }
+
+            result = client_manager.run_coroutine(_join_entity(entity_obj))
+            return {
+                "status": result,
+                "group": str(group),
+                "reason": (
+                    "تم الانضمام بنجاح — سيبدأ الإرسال من الدورة التالية"
+                    if result == "joined"
+                    else "الحساب منضم مسبقًا"
+                ),
+            }
+        except Exception as error:
+            return {
+                "status": "failed",
+                "group": str(group),
+                "error": error,
+                "reason": _describe_send_failure(error)["reason"],
+                "technical": _describe_send_failure(error)["technical"],
+            }
+
+    def prepare_groups_for_send(self, user_id, client_manager, groups):
+        """
+        يجهز المجموعات قبل الدورة:
+        - المنضم إليها تبقى للإرسال الحالي.
+        - التي تم الانضمام إليها الآن تؤجل للدورة التالية.
+        - الفشل أو تجاوز حد الانضمام يؤجل أيضًا مع سبب واضح.
+        """
+        result = {
+            "send_now": [],
+            "deferred": [],
+            "joined": [],
+            "already_joined": [],
+            "failures": [],
+        }
+        if not client_manager or not getattr(client_manager, "client", None):
+            return result
+
+        for index, group in enumerate(groups):
+            # الدعوات الخاصة قد تنضم داخل ImportChatInviteRequest،
+            # والروابط العامة تمر عبر JoinChannelRequest.
+            membership = self.ensure_group_membership(user_id, client_manager, group)
+            status = membership.get("status")
+            if status == "already_joined":
+                result["send_now"].append(group)
+                result["already_joined"].append(group)
+                continue
+
+            if status == "joined":
+                result["deferred"].append(group)
+                result["joined"].append(group)
+                continue
+
+            result["deferred"].append(group)
+            result["failures"].append(membership)
+            if (
+                membership.get("error") is not None
+                and type(membership["error"]).__name__ == "FloodWaitError"
+            ):
+                # لا نواصل محاولات الانضمام بعد أن يفرض Telegram FloodWait.
+                # تُترك بقية المجموعات للدورة التالية.
+                for remaining_group in groups[index + 1:]:
+                    deferred = {
+                        "status": "deferred",
+                        "group": str(remaining_group),
+                        "reason": membership.get("reason")
+                        or "فرض Telegram مهلة انتظار قبل أي انضمام جديد",
+                        "technical": membership.get("technical")
+                        or "FloodWaitError",
+                    }
+                    result["deferred"].append(remaining_group)
+                    result["failures"].append(deferred)
+                break
+
+        return result
 
     def send_message_async(self, user_id, entity, message, forced_action=None):
         """
@@ -3952,66 +4163,67 @@ def execute_scheduled_messages(user_id, settings):
         except Exception:
             pass
 
-        # ── الدورة الأولى: فحص العضوية وإشعار المستخدم بروابط المجموعات غير المنضم إليها ──
+        # ── الدورة الأولى: فحص العضوية والانضمام الآمن قبل الإرسال ──
+        # المجموعة التي ينضم إليها الحساب الآن تؤجل للدورة التالية، حتى لا
+        # يتحول الانضمام والإرسال المتتابع إلى سلوك سريع يرفع احتمال FloodWait.
+        _sched_deferred_groups = set()
+        _sched_joined_groups = []
+        _sched_join_failures = []
+        _sched_join_details = []
         if _sched_client_mgr and getattr(_sched_client_mgr, 'client', None):
             socketio.emit('log_update', {
                 "message": f"🔍 فحص العضوية في {len(groups)} مجموعة..."
             }, to=user_id)
 
-            async def _check_memberships_sched(client, groups_to_check):
-                """فحص العضوية لمجموعات الإرسال المجدول دون الانضمام إليها"""
-                from telethon.tl.functions.channels import GetParticipantRequest
-                from telethon.errors import UserNotParticipantError as _UNPE
-                not_joined = []
-                for _g in groups_to_check:
-                    try:
-                        _ident = _g
-                        for _pfx in ['https://t.me/', 'https://telegram.me/']:
-                            if _g.startswith(_pfx):
-                                _ident = _g[len(_pfx):]
-                                break
-                        if _ident.startswith('@'):
-                            _ident = _ident[1:]
-                        _ent = await client.get_entity(_ident)
-                        if hasattr(_ent, 'megagroup') or hasattr(_ent, 'broadcast'):
-                            try:
-                                await client(GetParticipantRequest(_ent, 'me'))
-                            except _UNPE:
-                                not_joined.append(_g)
-                            except Exception:
-                                pass  # خطأ آخر — نفترض العضوية تفادياً للإشعار الخاطئ
-                        # مجموعة عادية — نفترض العضوية إذا تم حل الـ entity
-                    except Exception:
-                        not_joined.append(_g)
-                return not_joined
-
-            _sched_not_joined = []
             try:
-                _sched_not_joined = _sched_client_mgr.run_coroutine(
-                    _check_memberships_sched(_sched_client_mgr.client, groups)
+                _sched_membership = telegram_manager.prepare_groups_for_send(
+                    user_id, _sched_client_mgr, groups
                 )
+                _sched_deferred_groups = set(_sched_membership.get("deferred", []))
+                _sched_joined_groups = list(_sched_membership.get("joined", []))
+                _sched_join_failures = list(_sched_membership.get("failures", []))
             except Exception as _sched_check_err:
-                logger.debug(f"خطأ في فحص العضوية (المجدول): {_sched_check_err}")
+                logger.error(f"خطأ في تجهيز عضوية المجموعات (المجدول): {_sched_check_err}")
 
-            if _sched_not_joined:
+            if _sched_joined_groups:
                 socketio.emit('log_update', {
-                    "message": f"⚠️ أنت غير منضم إلى {len(_sched_not_joined)} مجموعة — سيتم إرسال إشعار بها"
-                }, to=user_id)
-                _notif_sched = (
-                    f"⚠️ إشعار — مجموعات غير منضم إليها (الإرسال المجدول)\n\n"
-                    f"تم اكتشاف أنك غير منضم إلى {len(_sched_not_joined)} مجموعة من قائمة الإرسال المجدول:\n\n" +
-                    "\n".join(f"• {_g}" for _g in _sched_not_joined) +
-                    "\n\nيرجى الانضمام إليها يدوياً ثم إعادة الإرسال."
-                )
-                try:
-                    _sched_client_mgr.run_coroutine(
-                        _sched_client_mgr.client.send_message('me', _notif_sched, link_preview=False)
+                    "message": (
+                        f"✅ تم الانضمام إلى {len(_sched_joined_groups)} مجموعة — "
+                        "سيبدأ الإرسال إليها من الدورة التالية"
                     )
-                except Exception as _sn_err:
-                    logger.debug(f"خطأ في إرسال إشعار المجدول غير المنضم: {_sn_err}")
+                }, to=user_id)
+                socketio.emit('log_update', {
+                    "message": "⏭️ تم تأجيل المجموعات المنضم إليها حديثًا لهذه الدورة"
+                }, to=user_id)
+
+            if _sched_join_failures:
+                for _join_failure in _sched_join_failures:
+                    _join_detail = _send_failure_detail(
+                        _join_failure.get("group", ""),
+                        error=_join_failure.get("error"),
+                        reason=_join_failure.get("reason"),
+                        status="join_deferred",
+                    )
+                    if _join_failure.get("technical"):
+                        _join_detail["technical"] = _join_failure["technical"]
+                    _sched_join_details.append(_join_detail)
+                    socketio.emit('log_update', {
+                        "message": (
+                            f"⏭️ تم تأجيل الانضمام إلى {_join_detail['group']}: "
+                            f"{_join_detail['reason']} — {_join_detail['technical']}"
+                        )
+                    }, to=user_id)
+                    _emit_send_failure_notification(
+                        user_id, _join_detail, "الانضمام قبل الإرسال"
+                    )
 
             socketio.emit('log_update', {
-                "message": "🚀 بدء الإرسال المجدول..."
+                "message": (
+                    f"🚀 بدء الإرسال المجدول... "
+                    f"({len(_sched_deferred_groups)} مؤجلة للدورة التالية)"
+                    if _sched_deferred_groups
+                    else "🚀 بدء الإرسال المجدول..."
+                )
             }, to=user_id)
 
         # ── الدورة الثانية: إرسال الرسائل إلى جميع المجموعات ──────────────
@@ -4023,6 +4235,10 @@ def execute_scheduled_messages(user_id, settings):
 
         for i, group in enumerate(groups, 1):
             try:
+                if group in _sched_deferred_groups:
+                    # تم الانضمام إليها الآن أو تعذر الانضمام؛ ستُفحص
+                    # تلقائيًا في الدورة التالية.
+                    continue
                 if _sched_image_files:
                     result = telegram_manager.send_message_with_media_async(
                         user_id, group, message, _sched_image_files
@@ -4104,8 +4320,9 @@ def execute_scheduled_messages(user_id, settings):
                     f"✅ نجح: {successful}",
                     f"❌ فشل: {failed}",
                     f"⏭️ تم تخطيه: {skipped}",
+                    f"🔗 انضمام جديد: {len(_sched_joined_groups)}",
+                    f"⏭️ مؤجل للدورة التالية: {len(_sched_deferred_groups)}",
                     f"🧠 دورات ذكية نشطة: {_smart_s}",
-                    f"🚫 غير منضم: {len(_sched_not_joined)}",
                     "",
                 ]
                 if successful_groups_sched:
@@ -4122,9 +4339,12 @@ def execute_scheduled_messages(user_id, settings):
                         _failure_report_lines("⏭️ أسباب تخطي المجموعات", skipped_details_sched)
                     )
                     _sched_report.append("")
-                if _sched_not_joined:
-                    _sched_report.append(f"🚫 غير منضم ({len(_sched_not_joined)}):")
-                    _sched_report.extend([f"  • {g}" for g in _sched_not_joined])
+                if _sched_join_details:
+                    _sched_report.extend(
+                        _failure_report_lines(
+                            "⏭️ أسباب تأجيل الانضمام", _sched_join_details
+                        )
+                    )
                 _sched_report_msg = "\n".join(_sched_report)
                 _sched_client_mgr.run_coroutine(
                     _sched_client_mgr.client.send_message('me', _sched_report_msg, link_preview=False)
@@ -5496,10 +5716,13 @@ def api_send_now():
             failed_groups = []
             failed_details = []
             skipped_details = []
+            deferred_groups = set()
+            joined_groups = []
+            join_failure_details = []
             batch_id = str(uuid.uuid4())
             batch_entries = []
 
-            # ── الدورة الأولى: فحص العضوية وإشعار المستخدم بروابط المجموعات غير المنضم إليها ──
+            # ── الدورة الأولى: فحص العضوية والانضمام الآمن ──
             try:
                 with USERS_LOCK:
                     _now_client_mgr = USERS.get(user_id, {}).get('client_manager')
@@ -5508,66 +5731,58 @@ def api_send_now():
                         "message": f"🔍 فحص العضوية في {len(groups_list)} مجموعة..."
                     }, to=user_id)
 
-                    async def _check_memberships_now(client, groups):
-                        """فحص العضوية لجميع المجموعات دون الانضمام إليها"""
-                        from telethon.tl.functions.channels import GetParticipantRequest
-                        from telethon.errors import UserNotParticipantError as _UNPE
-                        not_joined = []
-                        for _g in groups:
-                            try:
-                                _ident = _g
-                                for _pfx in ['https://t.me/', 'https://telegram.me/']:
-                                    if _g.startswith(_pfx):
-                                        _ident = _g[len(_pfx):]
-                                        break
-                                if _ident.startswith('@'):
-                                    _ident = _ident[1:]
-                                _ent = await client.get_entity(_ident)
-                                if hasattr(_ent, 'megagroup') or hasattr(_ent, 'broadcast'):
-                                    try:
-                                        await client(GetParticipantRequest(_ent, 'me'))
-                                    except _UNPE:
-                                        not_joined.append(_g)
-                                    except Exception:
-                                        pass  # خطأ آخر — نفترض العضوية تفادياً للإشعار الخاطئ
-                                # مجموعة عادية — نفترض العضوية إذا تم حل الـ entity
-                            except Exception:
-                                not_joined.append(_g)
-                        return not_joined
-
-                    _not_joined_groups = []
-                    try:
-                        _not_joined_groups = _now_client_mgr.run_coroutine(
-                            _check_memberships_now(_now_client_mgr.client, groups_list)
+                    _membership_now = telegram_manager.prepare_groups_for_send(
+                        user_id, _now_client_mgr, groups_list
+                    )
+                    deferred_groups = set(_membership_now.get("deferred", []))
+                    joined_groups = list(_membership_now.get("joined", []))
+                    for _join_failure in _membership_now.get("failures", []):
+                        _join_detail = _send_failure_detail(
+                            _join_failure.get("group", ""),
+                            error=_join_failure.get("error"),
+                            reason=_join_failure.get("reason"),
+                            status="join_deferred",
                         )
-                    except Exception as _cmn_err:
-                        logger.debug(f"خطأ في فحص العضوية (الإرسال الفوري): {_cmn_err}")
+                        if _join_failure.get("technical"):
+                            _join_detail["technical"] = _join_failure["technical"]
+                        join_failure_details.append(_join_detail)
 
-                    if _not_joined_groups:
+                    if joined_groups:
                         socketio.emit('log_update', {
-                            "message": f"⚠️ أنت غير منضم إلى {len(_not_joined_groups)} مجموعة — سيتم إرسال إشعار بها"
-                        }, to=user_id)
-                        _notif_not_joined = (
-                            f"⚠️ إشعار — مجموعات غير منضم إليها\n\n"
-                            f"تم اكتشاف أنك غير منضم إلى {len(_not_joined_groups)} مجموعة من قائمة الإرسال الفوري:\n\n" +
-                            "\n".join(f"• {_g}" for _g in _not_joined_groups) +
-                            "\n\nيرجى الانضمام إليها يدوياً ثم إعادة الإرسال."
-                        )
-                        try:
-                            _now_client_mgr.run_coroutine(
-                                _now_client_mgr.client.send_message('me', _notif_not_joined, link_preview=False)
+                            "message": (
+                                f"✅ تم الانضمام إلى {len(joined_groups)} مجموعة — "
+                                "سيتم تأجيل الإرسال إليها للدورة التالية"
                             )
-                        except Exception as _notif_err:
-                            logger.debug(f"خطأ في إرسال إشعار المجموعات غير المنضم إليها: {_notif_err}")
+                        }, to=user_id)
+                    for _join_detail in join_failure_details:
+                        socketio.emit('log_update', {
+                            "message": (
+                                f"⏭️ تم تأجيل الانضمام إلى {_join_detail['group']}: "
+                                f"{_join_detail['reason']} — {_join_detail['technical']}"
+                            )
+                        }, to=user_id)
+                        _emit_send_failure_notification(
+                            user_id, _join_detail, "الانضمام قبل الإرسال"
+                        )
+
                     socketio.emit('log_update', {
-                        "message": "🚀 بدء الإرسال الفوري..."
+                        "message": (
+                            f"🚀 بدء الإرسال الفوري... "
+                            f"({len(deferred_groups)} مؤجلة للدورة التالية)"
+                            if deferred_groups
+                            else "🚀 بدء الإرسال الفوري..."
+                        )
                     }, to=user_id)
             except Exception as _check_err:
-                logger.debug(f"خطأ في فحص العضوية (الإرسال الفوري): {_check_err}")
+                logger.error(f"خطأ في تجهيز عضوية المجموعات (الإرسال الفوري): {_check_err}")
 
             # ── الدورة الثانية: الإرسال الفعلي لجميع المجموعات مع الصورة دائماً ──
             for i, group in enumerate(groups_list, 1):
                 try:
+                    if group in deferred_groups:
+                        # تم الانضمام إليها الآن أو تعذر الانضمام؛ ستُفحص
+                        # تلقائيًا في دورة/محاولة الإرسال التالية.
+                        continue
                     if images and message:
                         # الصورة ترسل كجزء ثابت من الرسالة دائماً
                         result = telegram_manager.send_message_with_media_async(
@@ -5647,7 +5862,8 @@ def api_send_now():
             socketio.emit('log_update', {
                 "message": (
                     f"📊 انتهى الإرسال: ✅ {successful} نجح | "
-                    f"❌ {failed} فشل | ⏭️ {skipped} تخطي"
+                    f"❌ {failed} فشل | ⏭️ {skipped} تخطي | "
+                    f"🔗 {len(deferred_groups)} مؤجل للدورة التالية"
                 )
             }, to=user_id)
 
@@ -5667,8 +5883,9 @@ def api_send_now():
                         f"✅ نجح: {successful}",
                         f"❌ فشل: {failed}",
                         f"⏭️ تم تخطيه: {skipped}",
+                        f"🔗 انضمام جديد: {len(joined_groups)}",
+                        f"⏭️ مؤجل للدورة التالية: {len(deferred_groups)}",
                         f"🧠 دورات ذكية نشطة: {_smart_count}",
-                        f"🚫 غير منضم: {len(_not_joined_groups)}",
                         "",
                     ]
                     if successful_groups:
@@ -5685,9 +5902,12 @@ def api_send_now():
                             _failure_report_lines("⏭️ أسباب تخطي المجموعات", skipped_details)
                         )
                         _report_lines.append("")
-                    if _not_joined_groups:
-                        _report_lines.append(f"🚫 غير منضم ({len(_not_joined_groups)}):")
-                        _report_lines.extend([f"  • {g}" for g in _not_joined_groups])
+                    if join_failure_details:
+                        _report_lines.extend(
+                            _failure_report_lines(
+                                "⏭️ أسباب تأجيل الانضمام", join_failure_details
+                            )
+                        )
                     _report_msg = "\n".join(_report_lines)
                     _rpt_client_mgr.run_coroutine(
                         _rpt_client_mgr.client.send_message('me', _report_msg, link_preview=False)
