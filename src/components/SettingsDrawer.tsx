@@ -1,3 +1,5 @@
+import { PWAInstallButton } from "./PWAInstallButton";
+import { ttsService } from "../services/ttsService";
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -165,6 +167,13 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [notifyPrivate, setNotifyPrivate] = useState(() => localStorage.getItem('tg_notify_private') !== 'false');
   const [notifyGroups, setNotifyGroups] = useState(() => localStorage.getItem('tg_notify_groups') !== 'false');
   const [notifyChannels, setNotifyChannels] = useState(() => localStorage.getItem('tg_notify_channels') !== 'false');
+  const [ttsVoiceEnabled, setTtsVoiceEnabled] = useState(() => {
+    try {
+      return localStorage.getItem("tg_tts_enabled") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('tg_sound_enabled') !== 'false');
 
   const toggleNotifyPrivate = () => {
@@ -1168,6 +1177,10 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <span className="flex-1 text-start">{isAr ? 'بيانات API والاتصال' : 'Telegram MTProto API'}</span>
                 <ChevronRight className="w-4 h-4 text-gray-400 rtl:rotate-180" />
               </button>
+              {/* PWA Install Action */}
+              <div className="pt-2 px-2 flex justify-center">
+                <PWAInstallButton className="w-full justify-center" />
+              </div>
             </div>
           </div>
         )}
@@ -1978,6 +1991,27 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   <span className="text-sm font-medium">{isAr ? 'أصوات التنبيه' : 'Sound Effects'}</span>
                   <div className={`w-10 h-5 rounded-full transition-colors relative flex items-center p-0.5 ${soundEnabled ? 'bg-[#3390ec]' : 'bg-gray-400'}`}>
                     <div className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${soundEnabled ? (isAr ? '-translate-x-5' : 'translate-x-5') : 'translate-x-0'}`} />
+                  </div>
+                </div>
+
+                {/* Voice Readout TTS */}
+                <div
+                  onClick={() => {
+                    const next = !ttsVoiceEnabled;
+                    setTtsVoiceEnabled(next);
+                    localStorage.setItem("tg_tts_enabled", String(next));
+                    if (next) {
+                      ttsService.speak(isAr ? "تم تفعيل القراءة الصوتية" : "Text to speech enabled", isAr ? "ar-SA" : "en-US");
+                    }
+                  }}
+                  className="flex items-center justify-between cursor-pointer"
+                >
+                  <div>
+                    <span className="text-sm font-medium block">{isAr ? "قراءة الرسائل صوتياً (TTS)" : "Voice Readout (TTS)"}</span>
+                    <span className="text-xs text-gray-400 block">{isAr ? "نطق الرسائل الواردة تلقائياً" : "Speak incoming messages automatically"}</span>
+                  </div>
+                  <div className={`w-10 h-5 rounded-full transition-colors relative flex items-center p-0.5 shrink-0 ${ttsVoiceEnabled ? "bg-[#3390ec]" : "bg-gray-400"}`}>
+                    <div className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${ttsVoiceEnabled ? (isAr ? "-translate-x-5" : "translate-x-5") : "translate-x-0"}`} />
                   </div>
                 </div>
               </div>

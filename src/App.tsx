@@ -1,3 +1,5 @@
+import { ttsService } from "./services/ttsService";
+import { audioService } from "./services/audioService";
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
 import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
@@ -81,6 +83,12 @@ export default function App() {
   // Active User Auth State (Initialized from persistent local cache)
   const [currentUser, setCurrentUser] = useState<TelegramUser | null>(() => {
     try {
+      if (
+        localStorage.getItem("tg_explicitly_logged_out") === "true" ||
+        sessionStorage.getItem("tg_explicitly_logged_out") === "true"
+      ) {
+        return null;
+      }
       const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
       const activeId = localStorage.getItem('tg_active_account_id');
       if (savedAccountsStr) {
@@ -869,7 +877,17 @@ export default function App() {
         // Immediate Sound & Real-time Notification Dispatch for Incoming Messages
         if (!msg.isOut) {
           // 1. Play signature Telegram notification chime
-          playTelegramChime();
+          try {
+            audioService.playNotification("classic");
+          } catch {
+            playTelegramChime();
+          }
+          // Voice readout if enabled
+          try {
+            if (localStorage.getItem("tg_tts_enabled") === "true" && msg.text && !msg.text.startsWith("/")) {
+              ttsService.speakMessage(msg.text, themeConfig.language === "ar" ? "ar-SA" : "en-US");
+            }
+          } catch {}
 
           // Find chat details if available
           const currentChat = chats.find((c) => c.id === targetChatId);
@@ -1180,6 +1198,10 @@ export default function App() {
   }, [activeAccountId, syncAccountAndSessionProfiles, isDemoMode, accounts]);
 
   const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false, authenticatedSessionToken?: string) => {
+    try {
+      localStorage.removeItem("tg_explicitly_logged_out");
+      sessionStorage.removeItem("tg_explicitly_logged_out");
+    } catch {}
     const finalSessionToken =
       authenticatedSessionToken ||
       localStorage.getItem('tg_active_session_token') ||
@@ -1402,16 +1424,33 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    if (activeAccountId) {
-      await handleRemoveAccount(activeAccountId);
-    } else {
-      try {
-        await csrfFetch('/api/telegram/logout', { method: 'POST' });
-      } catch {}
-      localStorage.removeItem('tg_active_user');
-      setCurrentUser(null);
-      setIsDemoMode(false);
-    }
+    try {
+      localStorage.setItem("tg_explicitly_logged_out", "true");
+      sessionStorage.setItem("tg_explicitly_logged_out", "true");
+      localStorage.removeItem("tg_active_user");
+      localStorage.removeItem("tg_active_account_id");
+      localStorage.removeItem("tg_multi_accounts");
+      localStorage.removeItem("tg_active_session_token");
+      localStorage.removeItem("tg_session_string");
+      localStorage.removeItem("tg_phone");
+      localStorage.removeItem("tg_accounts_data_map");
+      wsClient.disconnect();
+      await csrfFetch("/api/telegram/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: activeAccountId,
+          allAccounts: accounts.length <= 1,
+        }),
+      }).catch(() => {});
+    } catch {}
+    setAccounts([]);
+    setCurrentUser(null);
+    setActiveAccountId("");
+    setChats([]);
+    setMessagesMap({});
+    setSelectedChatId(null);
+    setIsDemoMode(false);
   };
 
   // Chat selection with real-time mark as read and dynamic channel loading

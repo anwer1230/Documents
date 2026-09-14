@@ -1,3 +1,4 @@
+import { GoogleGenAI } from "@google/genai";
 import http from 'http';
 import express from 'express';
 import path from 'path';
@@ -1596,15 +1597,23 @@ async function startServer() {
   });
 
   app.post(['/api/telegram/logout', '/api/auth/logout'], async (req, res) => {
-    const token = (req as any).sessionToken;
+    const token = (req as any).sessionToken || req.body?.sessionToken || TelegramService.getActiveSessionToken();
     try {
       if (token) {
         destroySession(res, token);
         await TelegramService.logout(token).catch(() => {});
       }
-      res.json({ success: true });
+      const accounts = TelegramService.getAccounts();
+      if (req.body?.allAccounts && Array.isArray(accounts)) {
+        for (const acc of accounts) {
+          if (acc.sessionToken) {
+            await TelegramService.logout(acc.sessionToken).catch(() => {});
+          }
+        }
+      }
+      res.json({ success: true, message: "Logged out successfully" });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -1804,6 +1813,281 @@ async function startServer() {
       vapidSubject: VAPID_SUBJECT,
     });
   });
+
+  // ==========================================
+  // GEMINI AI SERVICE ENDPOINTS
+  // ==========================================
+
+  let geminiClientInstance: GoogleGenAI | null = null;
+  const getGeminiClient = (): GoogleGenAI => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not configured in server environment.");
+    }
+    if (!geminiClientInstance) {
+      geminiClientInstance = new GoogleGenAI({ apiKey });
+    }
+    return geminiClientInstance;
+  };
+
+  // Status & Model Availability Check
+  app.get(['/api/gemini/status', '/api/ai/status'], (req, res) => {
+    const hasKey = Boolean(process.env.GEMINI_API_KEY);
+    res.json({
+      success: true,
+      configured: hasKey,
+      hasGeminiApiKey: hasKey,
+      defaultModel: "gemini-3.8-flash",
+      availableModels: [
+        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-pro-preview",
+      ],
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Text / Prompt Content Generation
+  app.post(['/api/gemini/generate', '/api/ai/generate'], async (req, res) => {
+    try {
+      const {
+        prompt,
+        systemInstruction,
+        model = "gemini-3.8-flash",
+        temperature,
+        maxOutputTokens,
+      } = req.body || {};
+
+      if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "MISSING_PROMPT",
+          message: "A valid text prompt is required.",
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({
+          success: false,
+          error: "GEMINI_API_KEY_NOT_CONFIGURED",
+          message: "Gemini API key is not configured in the environment.",
+        });
+      }
+
+      const ai = getGeminiClient();
+      const selectedModel = model || "gemini-3.8-flash";
+      const config: any = {};
+      if (systemInstruction) config.systemInstruction = systemInstruction;
+      if (typeof temperature === "number") config.temperature = temperature;
+      if (typeof maxOutputTokens === "number") config.maxOutputTokens = maxOutputTokens;
+
+      const response = await ai.models.generateContent({
+        model: selectedModel,
+        contents: prompt,
+        ...(Object.keys(config).length > 0 ? { config } : {}),
+      });
+
+      return res.json({
+        success: true,
+        text: response.text || "",
+        model: selectedModel,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.warn("[Gemini API] Generation error:", err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || "Failed to generate content with Gemini AI",
+      });
+    }
+  });
+
+  // Conversation Thread Summarizer
+  app.post(['/api/gemini/summarize', '/api/telegram/chat/summarize', '/api/chat/summarize'], async (req, res) => {
+    try {
+      const {
+        chatId,
+        chatTitle = "Telegram Chat",
+        messages = [],
+        language = "ar",
+      } = req.body || {};
+
+      let thread = Array.isArray(messages) ? [...messages] : [];
+      if (thread.length === 0 && chatId) {
+        const token = (req as any).sessionToken || TelegramService.getActiveSessionToken();
+        if (token) {
+          try {
+            const hist = await TelegramService.getMessages(token, chatId, 50);
+            if (hist && Array.isArray(hist.messages)) {
+              thread = hist.messages.map((m: any) => ({
+                id: m.id,
+                senderName: m.sender?.title || m.sender?.firstName || "المستخدم",
+                text: m.message || (m.media ? "[وسائط]" : ""),
+                timestamp: m.date ? new Date(m.date * 1000).toLocaleTimeString() : "",
+              }));
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (thread.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "NO_MESSAGES",
+          message: "No messages available to summarize.",
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({
+          success: false,
+          error: "GEMINI_API_KEY_NOT_CONFIGURED",
+          message: "Gemini API key is not configured.",
+        });
+      }
+
+      const isArabic = language === "ar";
+      const conversationText = thread
+        .slice(-50)
+        .map((m: any) => `${m.senderName || "User"}: ${m.text || ""}`)
+        .join("\n");
+
+      const prompt = isArabic
+        ? `يرجى تلخيص هذه المحادثة في تيليجرام (${chatTitle}) بدقة وإيجاز على شكل نقاط رئيسية واضحة:
+
+${conversationText}`
+        : `Please summarize this Telegram chat (${chatTitle}) concisely into clear key bullet points:
+
+${conversationText}`;
+
+      const ai = getGeminiClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: isArabic
+            ? "أنت مساعد ذكي لتلخيص المحادثات بدقة واحترافية وإيجاز."
+            : "You are an AI assistant that summarizes Telegram conversations concisely into key points.",
+          temperature: 0.3,
+        },
+      });
+
+      return res.json({
+        success: true,
+        summary: response.text || "",
+        messageCount: thread.length,
+        chatTitle,
+        model: "gemini-3.8-flash",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err: any) {
+      console.warn("[Gemini API] Chat summarize error:", err?.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || "Failed to summarize chat conversation",
+      });
+    }
+  });
+
+  // Smart Contextual Reply Suggestions
+  app.post('/api/ai/suggest-replies', async (req, res) => {
+    try {
+      const { lastMessage, chatContext, language = "ar" } = req.body || {};
+      if (!lastMessage || typeof lastMessage !== "string") {
+        return res.status(400).json({ success: false, error: "MISSING_MESSAGE" });
+      }
+
+      const isArabic = language === "ar";
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.json({
+          success: true,
+          replies: isArabic
+            ? ["تمام، شكراً لك!", "سأراجع ذلك قريباً.", "حسناً، متفقين."]
+            : ["Sounds good, thanks!", "I will check it soon.", "Got it, agreed!"],
+        });
+      }
+
+      const prompt = isArabic
+        ? `بناءً على الرسالة الأخيرة في محادثة تيليجرام: "${lastMessage}"${chatContext ? `\nسياق المحادثة: "${chatContext}"` : ""}
+اقترح 3 ردود سريعة ومناسبة (كل رد جملة قصيرة واحدة).
+أرجع الردود بصيغة قائمة مفصولة بأسطر جديدة فقط بدون أرقام أو رموز.`
+        : `Based on the latest Telegram message: "${lastMessage}"${chatContext ? `\nContext: "${chatContext}"` : ""}
+Suggest 3 concise, natural quick replies (one short sentence each).
+Return the replies as a plain line-separated list only.`;
+
+      const ai = getGeminiClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "You are a smart chat assistant generating quick, contextual reply suggestions. Return only the 3 suggestions, one per line.",
+          temperature: 0.4,
+        },
+      });
+
+      const lines = (response.text || "")
+        .split("\n")
+        .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
+        .filter((l) => l.length > 0 && l.length < 120);
+
+      return res.json({
+        success: true,
+        replies: lines.slice(0, 3),
+      });
+    } catch (err: any) {
+      const isArabic = req.body?.language === "ar";
+      return res.json({
+        success: true,
+        replies: isArabic
+          ? ["تمام، شكراً لك!", "سأراجع ذلك قريباً.", "حسناً، متفقين."]
+          : ["Sounds good, thanks!", "I will check it soon.", "Got it, agreed!"],
+      });
+    }
+  });
+
+  // Tone Rewrite Endpoint
+  app.post('/api/ai/tone-rewrite', async (req, res) => {
+    try {
+      const { text, tone = "professional", language = "ar" } = req.body || {};
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({ success: false, error: "MISSING_TEXT" });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.json({ success: true, text });
+      }
+
+      const isArabic = language === "ar";
+      const prompt = isArabic
+        ? `أعد صياغة هذا النص بأسلوب (${tone === "professional" ? "رسمي واحترافي" : tone === "friendly" ? "ودي ولطيف" : "مختصر ومباشر"}):
+"${text}"
+أرجع النص المُعاد صياغته فقط بدون مقدمات أو شرح.`
+        : `Rewrite this text in a ${tone} tone:
+"${text}"
+Return only the rewritten text with no extra commentary.`;
+
+      const ai = getGeminiClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+        config: { temperature: 0.4 },
+      });
+
+      return res.json({
+        success: true,
+        text: (response.text || "").trim(),
+        original: text,
+        tone,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || "Tone rewrite failed" });
+    }
+  });
+
 
   // Vite Middleware Setup
   if (process.env.NODE_ENV !== 'production') {

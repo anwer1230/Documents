@@ -13,6 +13,26 @@ ensureTelegramPatch();
 /**
  * FloodWaitQueue: Resilient rate-limiter and exponential backoff queue for MTProto FLOOD_WAIT
  */
+/**
+ * Detects if an error indicates that an MTProto session is revoked, unregistered, duplicated or expired
+ */
+export function isSessionRevokedOrDuplicatedError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message || err?.errorMessage || err || "").toUpperCase();
+  return (
+    msg.includes("SESSION_REVOKED") ||
+    msg.includes("AUTH_KEY_UNREGISTERED") ||
+    msg.includes("AUTH_KEY_DUPLICATED") ||
+    msg.includes("SESSION_EXPIRED") ||
+    msg.includes("USER_DEACTIVATED") ||
+    msg.includes("401") ||
+    err?.code === 401 ||
+    err?.errorMessage === "SESSION_REVOKED" ||
+    err?.errorMessage === "AUTH_KEY_UNREGISTERED" ||
+    err?.errorMessage === "AUTH_KEY_DUPLICATED"
+  );
+}
+
 export class FloodWaitQueue {
   public static async executeWithFloodRetry<T>(
     key: string,
@@ -403,11 +423,7 @@ export class TelegramService {
         }
       } catch (err: any) {
         console.warn(`[MTProto Updates Engine] Warning restoring session ${token}:`, err?.message || err);
-        if (
-          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-          err?.code === 401
-        ) {
+        if (isSessionRevokedOrDuplicatedError(err)) {
           this.purgeStaleSession(token);
         }
       }
@@ -1232,11 +1248,7 @@ export class TelegramService {
           return { isLoggedIn: true, user: sanitized };
         }
       } catch (err: any) {
-        if (
-          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-          err?.code === 401
-        ) {
+        if (isSessionRevokedOrDuplicatedError(err)) {
           console.warn(`[TelegramService] Auth key unregistered for session ${sessionToken}, purging.`);
           this.purgeStaleSession(sessionToken);
           return { isLoggedIn: false, user: null };
@@ -1516,11 +1528,7 @@ export class TelegramService {
         };
       });
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getDialogs] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -1650,11 +1658,7 @@ export class TelegramService {
         };
       });
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getMessages] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2140,11 +2144,7 @@ export class TelegramService {
         unreadCount: state.unreadCount || 0,
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getUpdatesState] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2264,11 +2264,7 @@ export class TelegramService {
         isIntermediate: diff.className === 'updates.DifferenceSlice',
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2355,11 +2351,7 @@ export class TelegramService {
         isFinal: diff.className === 'updates.ChannelDifference',
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getChannelDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2409,11 +2401,7 @@ export class TelegramService {
 
       return { buffer, mimeType, fileName };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         this.purgeStaleSession(sessionToken);
       }
       return null;

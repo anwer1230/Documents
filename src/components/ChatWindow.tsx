@@ -1,3 +1,5 @@
+import { AiSummaryModal } from "./modals/AiSummaryModal";
+import { geminiApi } from "../services/api";
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Search,
@@ -125,6 +127,41 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   isDark,
 }) => {
   const isAr = lang === 'ar';
+  const [isAiSummaryOpen, setIsAiSummaryOpen] = useState(false);
+  const [aiSummaryText, setAiSummaryText] = useState("");
+  const [isAiSummarizing, setIsAiSummarizing] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const [smartReplies, setSmartReplies] = useState<string[]>([
+    "تمام، شكراً لك!",
+    "سأراجع ذلك قريباً.",
+    "حسناً، متفقين.",
+  ]);
+
+  const handleOpenAiSummary = async () => {
+    setIsAiSummaryOpen(true);
+    if (aiSummaryText) return;
+    setIsAiSummarizing(true);
+    setAiSummaryError(null);
+    try {
+      const recent = messages.slice(-40).map((m) => ({
+        id: m.id,
+        senderName: m.isOut ? (lang === "ar" ? "أنا" : "Me") : (m.sender?.title || m.sender?.firstName || chat.name),
+        text: m.text,
+      }));
+      const res = await geminiApi.summarizeChat({
+        chatId: chat.id,
+        chatTitle: chat.name,
+        messages: recent,
+        language: lang,
+      });
+      setAiSummaryText(res.summary || "");
+    } catch (err: any) {
+      setAiSummaryError(err?.message || (lang === "ar" ? "تعذر تلخيص المحادثة" : "Failed to summarize conversation"));
+    } finally {
+      setIsAiSummarizing(false);
+    }
+  };
+
   const [replyingMessage, setReplyingMessage] = useState<TelegramMessage | null>(null);
   const [inChatSearch, setInChatSearch] = useState(false);
   const [searchWord, setSearchWord] = useState('');
@@ -746,6 +783,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       isDark ? 'bg-[#242f3d]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
                     }`}
                   >
+                    <button
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        handleOpenAiSummary();
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? "hover:bg-[#2b394a] text-[#3390ec]" : "hover:bg-gray-100 text-[#3390ec]"
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4 text-[#3390ec]" />
+                      <span className="font-semibold">{isAr ? "تلخيص المحادثة (Gemini AI)" : "Summarize Chat (Gemini AI)"}</span>
+                    </button>
                     {/* Search */}
                     <button
                       onClick={() => {
@@ -1719,7 +1768,32 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           </span>
         </div>
       ) : (
-        /* Bottom Message Input Bar */
+        <>
+          {/* Smart Quick Replies Bar (AI Suggestions) */}
+        {messages.length > 0 && !messages[messages.length - 1].isOut && (
+          <div className={`px-4 py-1.5 flex items-center gap-2 overflow-x-auto no-scrollbar border-t shrink-0 select-none ${
+            isDark ? "bg-[#17212b]/95 border-[#242f3d]" : "bg-white/95 border-gray-100"
+          }`}>
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#3390ec] shrink-0">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isAr ? "ردود ذكية:" : "Quick Replies:"}</span>
+            </div>
+            {smartReplies.map((replyText, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSendMessageWithTopic(replyText)}
+                className={`px-3 py-1 rounded-full text-xs font-medium shrink-0 transition active:scale-95 border ${
+                  isDark
+                    ? "bg-[#242f3d] hover:bg-[#2b394a] text-gray-200 border-[#2f3f50]"
+                    : "bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-200"
+                }`}
+              >
+                {replyText}
+              </button>
+            ))}
+          </div>
+        )}
         <MessageInput
           onSendMessage={handleSendMessageWithTopic}
           replyToMessage={replyingMessage}
@@ -1734,6 +1808,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           lang={lang}
           isDark={isDark}
         />
+        </>
       )}
 
       {/* Modals */}
@@ -1857,6 +1932,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           onComplete={() => setActiveReactionAnimation(null)}
         />
       )}
+      {/* 9. Gemini AI Chat Summary Modal */}
+      <AiSummaryModal
+        isOpen={isAiSummaryOpen}
+        onClose={() => setIsAiSummaryOpen(false)}
+        chatTitle={chat.name}
+        summary={aiSummaryText}
+        isLoading={isAiSummarizing}
+        error={aiSummaryError}
+        onRefresh={() => {
+          setAiSummaryText("");
+          handleOpenAiSummary();
+        }}
+        isDark={isDark}
+        lang={lang}
+      />
     </div>
   );
 };
