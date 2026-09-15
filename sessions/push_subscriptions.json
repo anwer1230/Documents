@@ -1,0 +1,39 @@
+{
+    "user_1": {
+        "endpoint": "https://fcm.googleapis.com/fcm/send/funjQ976ZJ0:APA91bEO5Nr4EqZeQlFs24i3JMqfpwgvdPE2uFKaKHFrnyL1HH52aO9Gu1xfW299Dot0WpT63xP_GNxDX3dxrN2odaX_ewvnFFujpcOu3I2xMToUuc4ilmtunCUPauGzQzh1bkC3CstT",
+        "expirationTime": null,
+        "keys": {
+            "p256dh": "BHv30JJbd_SgB4zRpQxuPc96S5HKivLPkd24F3QftPKs0IGXd3tiEw2HYXIv0KrfeWjDrMyPXvrlOkeELO3F5qg",
+            "auth": "M1X6pEx4pGHRMQ9mJ30Dvw"
+        }
+    },
+    "watch_words": [
+        "اريد مساعدة",
+        "ابي مساعدة",
+        "من يسوي تكليف",
+        "من يحل",
+        "عندي بحث",
+        "معي واجب",
+        "عندي اسايمنت",
+        "من يسوي اسايمنت",
+        "ابي سكليف",
+        "ابي عذر",
+        "من يسوي سكليف",
+        "ابي شخص مضمون",
+        "ابي مختص",
+        "هيليب",
+        "من يستطيع",
+        "تعرفون احد",
+        "تعرفون شخص",
+        "من يساعدني",
+        "من يعرف مختص",
+        "مين يعرف يحل واجب",
+        "من يحل واجبات الجامعه",
+        "أحتاج مساعدتكم",
+        "ابي احد يسوي بحث",
+        "مين يعرف مختص",
+        "من يعرف احد كويس"
+    ],
+    "monitoring_disabled_by_user": false,
+    "monitoring_persistent": true
+}

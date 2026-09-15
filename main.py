@@ -1,0 +1,53 @@
+"""Entry point - runs the Abu_Malk-Services app."""
+import os
+import sys
+
+# Ensure essential dependencies if container environment is refreshed
+try:
+    import flask
+    import flask_socketio
+    import telethon
+except ImportError:
+    import subprocess
+    print("Installing required Python dependencies...")
+    try:
+        subprocess.run(["curl", "-sS", "https://bootstrap.pypa.io/get-pip.py", "-o", "/tmp/get-pip.py"], check=True)
+        subprocess.run([sys.executable, "/tmp/get-pip.py"], check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--no-warn-script-location"], check=True)
+    except Exception as e:
+        print(f"Dependency auto-install warning: {e}")
+
+from app import app, socketio
+import signal
+import logging
+
+def free_port(port):
+    """تحرير المنفذ إذا كان مشغولاً (للبيئات المحلية فقط)"""
+    try:
+        if os.environ.get('RENDER'):
+            return
+            
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        result = s.connect_ex(('127.0.0.1', port))
+        s.close()
+        if result == 0:
+            import subprocess
+            subprocess.run(['fuser', '-k', f'{port}/tcp'], capture_output=True)
+            import time
+            time.sleep(1)
+    except Exception:
+        pass
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 3000))
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    if os.environ.get('RENDER'):
+        print(f"🌐 تشغيل Abu_Malk-Services على المنفذ {port} في بيئة Render")
+        socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+    else:
+        free_port(port)
+        print(f"🌐 تشغيل Abu_Malk-Services على المنفذ {port}")
+        socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

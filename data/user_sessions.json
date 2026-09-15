@@ -1,0 +1,281 @@
+{
+  "installations": [
+    {
+      "install_id": "fp-5e7612b74cee7ca1b3bcd6ec",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "Go-http-client/1.1",
+      "cookies": "{}",
+      "timestamp": "2026-09-15T10:54:04.062261",
+      "last_seen": "2026-09-15T10:54:04.062261",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-8b8a0d29ad2a57d652480a39",
+      "user_id": "user_1",
+      "ip": "145.224.125.238",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+      "cookies": "{\"__SECURE-aistudio_auth_flow_may_set_cookies\": \"true\", \"__SECURE-aistudio_auth_token\": \"yhuDqJeERS1CZnOvcG4-8ubN0lv2G-Qzp6vehzjkcyw=\"}",
+      "timestamp": "2026-09-15T10:53:40.679412",
+      "last_seen": "2026-09-15T10:54:15.462759",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-b07a760ab58004d32a703839",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "غير معروف",
+      "cookies": "{}",
+      "timestamp": "2026-09-15T10:53:38.067414",
+      "last_seen": "2026-09-15T10:54:03.847874",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-20035900f3cd5f580c767f8e",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "curl/7.88.1",
+      "cookies": "{}",
+      "timestamp": "2026-09-15T10:53:05.453749",
+      "last_seen": "2026-09-15T10:53:41.102173",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-2bc9aa0a5a30dd54234f3a4e",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "Werkzeug/3.1.8",
+      "cookies": "{}",
+      "timestamp": "2026-09-15T10:42:42.507353",
+      "last_seen": "2026-09-15T10:42:42.507353",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": false,
+          "connected": false,
+          "is_running": false,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": false,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-5afd3fb0ef13e4c10d269f63",
+      "user_id": "user_1",
+      "ip": "150.228.11.x",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{\"install_id\": \"fp-5afd3fb0ef13e4c10d269f63\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSrISSxJyy_Kjc_JT09PTYnPzIPJlBanFsVnpihZQViGSrUACbcXXg.aqBmDg.usTRf4J3ZNUq_c2RRp63kFheCKc\"}",
+      "timestamp": "2026-09-08T19:37:07.374464",
+      "last_seen": "2026-09-08T19:55:29.864230",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-efd07a843806cc47f4160939",
+      "user_id": "user_1",
+      "ip": "209.198.132.x",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{\"install_id\": \"fp-efd07a843806cc47f4160939\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.alvgfg.jQrKmFuBMzlZAFfUu4cMiNQRVOU\"}",
+      "timestamp": "2026-07-18T20:21:26.818421",
+      "last_seen": "2026-07-18T20:25:12.253447",
+      "is_active": true,
+      "users_state": {}
+    },
+    {
+      "install_id": "fp-52be329c62a08c2330be646d",
+      "user_id": "user_1",
+      "ip": "50.203.166.x",
+      "geo": {
+        "country": "United States",
+        "region": "Colorado",
+        "city": "Denver",
+        "timezone": "America/Denver",
+        "isp": "Google LLC",
+        "lat": 39.74,
+        "lon": -104.98
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{}",
+      "timestamp": "2026-07-14T17:48:59.349698",
+      "last_seen": "2026-07-14T17:48:59.349698",
+      "is_active": true,
+      "users_state": {}
+    },
+    {
+      "install_id": "fp-7eb6505f69e869f4155f159c",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "curl/8.14.1",
+      "cookies": "{}",
+      "timestamp": "2026-07-14T17:20:02.123017",
+      "last_seen": "2026-09-08T19:51:21.496141",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": true,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
+      "install_id": "fp-6c96beb0938a412560868e7a",
+      "user_id": "user_1",
+      "ip": "209.198.132.x",
+      "geo": {
+        "country": "Yemen",
+        "region": "Aden",
+        "city": "Aden",
+        "timezone": "Asia/Aden",
+        "isp": "Space Exploration Technologies Corporation",
+        "lat": 12.79,
+        "lon": 45.02
+      },
+      "user_agent": "Mozilla/5.0 (Linux; Android 10…",
+      "cookies": "{\"install_id\": \"fp-6c96beb0938a412560868e7a\", \"session\": \".eJyrVoovSC3KTcxLzStRsiopKk3VUSotTi2Kz0xRsoKwDJV0lMoyizNL8qGiJsaJqYbmxkbJpkmpJokWFpam5mmmqSYmZkkWxsmmlqZKtQD1oRsm.ancgrA.Q23ZzOJKNskjMxrfOBo3rx0Yk7g\"}",
+      "timestamp": "2026-07-14T17:10:51.241752",
+      "last_seen": "2026-08-08T12:27:24.668930",
+      "is_active": true,
+      "users_state": {}
+    },
+    {
+      "install_id": "fp-366ba966721f531bcc9316cc",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "Mozilla/5.0 (X11; Linux x86_64…",
+      "cookies": "{\"install_id\": \"fp-366ba966721f531bcc9316cc\", \"session\": \"eyJfcGVybWFuZW50Ijp0cnVlLCJ1c2VyX2lkIjoidXNlcl8xIn0.ald3VA.0Wen1hvCo-6ZlRK2YyZdDZd7ltI\"}",
+      "timestamp": "2026-07-14T17:10:24.534710",
+      "last_seen": "2026-07-15T12:04:37.018192",
+      "is_active": true,
+      "users_state": {}
+    }
+  ]
+}
