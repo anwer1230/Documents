@@ -871,8 +871,8 @@ GROQ_API_KEY  = os.environ.get('GROQ_API_KEY', '').strip()
 os.environ.setdefault('GROQ_API_KEY', GROQ_API_KEY)
 
 GITHUB_TOKEN  = os.environ.get('GITHUB_TOKEN', '').strip()
-GITHUB_REPO   = os.environ.get('GITHUB_REPO', 'anwer1230/Abu_Mlk').strip()
-GITHUB_BRANCH = os.environ.get('GITHUB_BRANCH', 'main')
+GITHUB_REPO   = os.environ.get('GITHUB_REPO', 'anwer1230/Documents').strip()
+GITHUB_BRANCH = os.environ.get('GITHUB_BRANCH', 'import/abu-malik-project-2026-09-08')
 
 # ─── ملف إعدادات التحديث ──────────────────────────────────────────────
 UPDATE_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'data', 'update_settings.json')
@@ -2253,18 +2253,20 @@ class TelegramLogin:
             )
             if _ConnType is not None:
                 client_kwargs['connection'] = _ConnType
+            saved_str = load_string_session(self.user_id)
             self.client = TelegramClient(
-                StringSession(), int(API_ID), API_HASH,
+                StringSession(saved_str or ''), int(API_ID), API_HASH,
                 **client_kwargs,
             )
 
-            # DC1 (91.108.4.0) محظور على بعض استضافات السحابة (Render/Heroku) — نبدأ من DC2
-            # Telethon سيحوّل تلقائياً للـ DC الصحيح بعد المصادقة
-            try:
-                self.client.session.set_dc(2, '149.154.167.51', 443)
-                logger.info(f"[{self.user_id}] 🔀 تم تعيين DC2 كنقطة بداية للاتصال")
-            except Exception as _dc_err:
-                logger.warning(f"[{self.user_id}] تعذّر تعيين DC2: {_dc_err}")
+            # لا نغيّر DC لجلسة محفوظة؛ مفتاح الجلسة مرتبط بمركز البيانات
+            # الذي أُنشئ فيه. استخدم DC2 فقط عند بدء جلسة جديدة.
+            if not saved_str:
+                try:
+                    self.client.session.set_dc(2, '149.154.167.51', 443)
+                    logger.info(f"[{self.user_id}] 🔀 تم تعيين DC2 كنقطة بداية للاتصال")
+                except Exception as _dc_err:
+                    logger.warning(f"[{self.user_id}] تعذّر تعيين DC2: {_dc_err}")
 
             # الانتظار: 3 محاولات × 15 ثانية + فواصل قصيرة؛ لا تتجاوز
             # المهلة الكلية كي لا نترك مهمة اتصال قديمة تعمل بعد الفشل.
@@ -2473,9 +2475,12 @@ class TelegramLogin:
             if self.client and self.loop and self.client.is_connected():
                 future = asyncio.run_coroutine_threadsafe(self.client.log_out(), self.loop)
                 future.result(timeout=30)
-            session_file = os.path.join(SESSIONS_DIR, f"{self.user_id}_session.session")
-            if os.path.exists(session_file):
-                os.remove(session_file)
+            for session_suffix in ("_session.session", "_string.txt"):
+                session_file = os.path.join(
+                    SESSIONS_DIR, f"{self.user_id}{session_suffix}"
+                )
+                if os.path.exists(session_file):
+                    os.remove(session_file)
             self.authenticated = False
             self.awaiting_code = False
             self.awaiting_password = False
@@ -4922,13 +4927,19 @@ def api_save_login():
                     try: cm.stop()
                     except Exception: pass
                 del USERS[user_id]
-        # حذف ملف الجلسة القديم
-        old_session_file = os.path.join(SESSIONS_DIR, f"{user_id}_session.session")
-        if os.path.exists(old_session_file):
-            try:
-                os.remove(old_session_file)
-            except Exception as e:
-                logger.warning(f"Could not remove old session file: {e}")
+        # حذف ملفات الجلسة القديمة، بما فيها StringSession، حتى لا يُعاد
+        # تسجيل الدخول إلى الحساب السابق بعد تغيير رقم الهاتف.
+        for session_suffix in ("_session.session", "_string.txt"):
+            old_session_file = os.path.join(
+                SESSIONS_DIR, f"{user_id}{session_suffix}"
+            )
+            if os.path.exists(old_session_file):
+                try:
+                    os.remove(old_session_file)
+                except Exception as e:
+                    logger.warning(
+                        f"Could not remove old session file {session_suffix}: {e}"
+                    )
         _old_uname = PREDEFINED_USERS.get(user_id, {}).get('name', user_id)
         socketio.emit('log_update', {
             "message": f"🔄 تم مسح الجلسة القديمة لـ {_old_uname}"
@@ -6063,8 +6074,11 @@ def api_get_login_status():
             connected = user_data.get('connected', False)
 
             if not authenticated and 'settings' in user_data and 'phone' in user_data['settings']:
-                session_file = os.path.join(SESSIONS_DIR, f"{user_id}_session.session")
-                if os.path.exists(session_file):
+                session_files = (
+                    os.path.join(SESSIONS_DIR, f"{user_id}_session.session"),
+                    os.path.join(SESSIONS_DIR, f"{user_id}_string.txt"),
+                )
+                if any(os.path.exists(path) for path in session_files):
                     authenticated = True
                     connected = True
                     USERS[user_id]['authenticated'] = True
@@ -6162,13 +6176,21 @@ def api_reset_login():
                 del USERS[user_id]
                 logger.info(f"User data removed from memory for {user_id}")
 
-        session_file = os.path.join(SESSIONS_DIR, f"{user_id}_session.session")
-        if os.path.exists(session_file):
-            try:
-                os.remove(session_file)
-                logger.info(f"Session file removed for {user_id}")
-            except Exception as e:
-                logger.error(f"Failed to remove session file for {user_id}: {str(e)}")
+        for session_suffix in ("_session.session", "_string.txt"):
+            session_file = os.path.join(
+                SESSIONS_DIR, f"{user_id}{session_suffix}"
+            )
+            if os.path.exists(session_file):
+                try:
+                    os.remove(session_file)
+                    logger.info(
+                        f"Session file {session_suffix} removed for user {user_id}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to remove session file {session_suffix} "
+                        f"for {user_id}: {str(e)}"
+                    )
 
         socketio.emit('log_update', {
             "message": f"🔄 تم إعادة تعيين جلسة تسجيل الدخول لـ {PREDEFINED_USERS[user_id]['name']}"
