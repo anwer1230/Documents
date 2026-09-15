@@ -29,8 +29,10 @@ import requests as _req
 logger = logging.getLogger(__name__)
 
 # ── إعدادات المستودع ────────────────────────────────────────
-_REPO   = "anwer1230/Web-browser"
-_BRANCH = "main"
+_REPO   = os.environ.get("GITHUB_REPO", "anwer1230/Documents")
+_BRANCH = os.environ.get(
+    "GITHUB_BRANCH", "import/abu-malik-project-2026-09-08"
+)
 
 def _token():
     return os.environ.get("GITHUB_TOKEN", "")
