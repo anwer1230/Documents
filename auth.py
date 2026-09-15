@@ -156,7 +156,8 @@ class TelegramLogin:
     def _run_loop(self):
         """تشغيل حلقة asyncio في OS thread حقيقي — تبقى حية للأبد"""
         self.loop   = asyncio.new_event_loop()
-        self.client = TelegramClient(StringSession(), int(API_ID), API_HASH)
+        saved_str = load_string_session(self.user_id)
+        self.client = TelegramClient(StringSession(saved_str or ''), int(API_ID), API_HASH)
         self.loop.run_until_complete(self._connect())
         try:
             self.loop.run_forever()
@@ -357,9 +358,12 @@ class TelegramLogin:
                     self.client.log_out(), self.loop
                 )
                 future.result(timeout=30)
-            session_file = os.path.join(SESSIONS_DIR, f"{self.user_id}_session.session")
-            if os.path.exists(session_file):
-                os.remove(session_file)
+            for session_suffix in ("_session.session", "_string.txt"):
+                session_file = os.path.join(
+                    SESSIONS_DIR, f"{self.user_id}{session_suffix}"
+                )
+                if os.path.exists(session_file):
+                    os.remove(session_file)
             self.authenticated     = False
             self.awaiting_code     = False
             self.awaiting_password = False
@@ -433,8 +437,10 @@ def _dyn_download_github(file_path, token, repo, branch):
 
 def _dyn_github_params():
     token  = os.environ.get("GITHUB_TOKEN", "")
-    repo   = os.environ.get("GITHUB_REPO", "anwer1230/Web-browser")
-    branch = os.environ.get("GITHUB_BRANCH", "main")
+    repo   = os.environ.get("GITHUB_REPO", "anwer1230/Documents")
+    branch = os.environ.get(
+        "GITHUB_BRANCH", "import/abu-malik-project-2026-09-08"
+    )
     return token, repo, branch
 
 # ── المستخدمون الثابتون الافتراضيون ──────────────────────────
