@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import http from 'http';
 import express from 'express';
 import path from 'path';
@@ -8,19 +7,6 @@ import multer from 'multer';
 import { WebSocketServer, WebSocket } from 'ws';
 import webpush from 'web-push';
 import { createServer as createViteServer } from 'vite';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import { requireAuth, requireCsrf, checkOrigin } from './server/security/middleware.js';
-import { issueSession, destroySession, getSessionByToken } from './server/security/sessions.js';
-import { SECURITY, COOKIE_STRICT } from './server/security/config.js';
-import {
-  attachWebSocketServer,
-  broadcastToSession,
-  broadcastAll,
-  setMessageHandler,
-} from './server/ws-security.js';
-import { isNonEmptyString, sanitizeText } from './server/security/validate.js';
-import { computeSrp } from './server/security/srp.js';
 import {
   TelegramService,
   TELEGRAM_API_ID,
@@ -54,8 +40,44 @@ const upload = multer({
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
-  const wss = attachWebSocketServer(server);
-  const PORT = 3000;
+  const wss = new WebSocketServer({ server });
+  const PORT = process.env.RENDER ? (Number(process.env.PORT) || 3000) : 3000;
+
+  // Active WebSocket clients mapped by sessionToken
+  const activeWsClients = new Map<string, Set<WebSocket>>();
+
+  // Helper to broadcast to a specific user's session clients
+  const broadcastToSession = (token: string, message: any) => {
+    const clients = activeWsClients.get(token);
+    if (clients) {
+      const data = JSON.stringify(message);
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          try {
+            client.send(data);
+          } catch (e) {
+            console.error('[WebSocket] Send error:', e);
+          }
+        }
+      }
+    }
+  };
+
+  // Helper to broadcast to all connected WebSocket clients
+  const broadcastAll = (message: any) => {
+    const data = JSON.stringify(message);
+    for (const clients of activeWsClients.values()) {
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          try {
+            client.send(data);
+          } catch (e) {
+            console.error('[WebSocket] BroadcastAll error:', e);
+          }
+        }
+      }
+    }
+  };
 
   // Push Subscriptions storage mapped by sessionToken
   const pushSubscriptions = new Map<string, any>();
@@ -140,8 +162,18 @@ async function startServer() {
     }
   });
 
-  // Secure WebSocket Message Handler
-  setMessageHandler(async (ws: WebSocket, token: string, data: any) => {
+  wss.on('connection', (ws: WebSocket, req) => {
+    let token = 'guest';
+    try {
+      const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+      token = url.searchParams.get('token') || 'guest';
+    } catch {}
+
+    if (!activeWsClients.has(token)) {
+      activeWsClients.set(token, new Set());
+    }
+    activeWsClients.get(token)!.add(ws);
+
     // Boot continuous MTProto client listener for this session token if authenticated
     if (token && token !== 'guest' && !token.startsWith('demo_')) {
       TelegramService.getOrCreateClient(token).catch((err) => {
@@ -149,200 +181,156 @@ async function startServer() {
       });
     }
 
-    if (data.action === 'sync_request' || data.type === 'sync_request') {
-      const rawTs = Number(data.lastTimestamp) || 0;
-      const dateSec = rawTs > 10000000000 ? Math.floor(rawTs / 1000) : rawTs;
-      console.log(`[WS] Client sync_request with lastTimestamp: ${rawTs} (date: ${dateSec}) for session: ${token}`);
+    // Initial connection confirmation
+    ws.send(JSON.stringify({ type: 'connected', time: Date.now() }));
 
-      let catchupMessages: any[] = [];
-      if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
-        try {
-          const diffRes: any = await TelegramService.getDifference(
-            token,
-            0,
-            dateSec > 0 ? dateSec : Math.floor(Date.now() / 1000) - 3600
-          );
-          if (diffRes && Array.isArray(diffRes.newMessages)) {
-            catchupMessages = diffRes.newMessages;
+    // Real-time bidirectional message handling via WebSocket
+    ws.on('message', async (raw) => {
+      try {
+        const data = JSON.parse(raw.toString());
+        
+        if (data.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong', time: Date.now() }));
+        } else if (data.action === 'sync_request' || data.type === 'sync_request') {
+          const rawTs = Number(data.lastTimestamp) || 0;
+          const dateSec = rawTs > 10000000000 ? Math.floor(rawTs / 1000) : rawTs;
+          console.log(`[WS] Client sync_request with lastTimestamp: ${rawTs} (date: ${dateSec}) for session: ${token}`);
+
+          let catchupMessages: any[] = [];
+          if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
+            try {
+              const diffRes: any = await TelegramService.getDifference(
+                token,
+                0,
+                dateSec > 0 ? dateSec : Math.floor(Date.now() / 1000) - 3600
+              );
+              if (diffRes && Array.isArray(diffRes.newMessages)) {
+                catchupMessages = diffRes.newMessages;
+              }
+            } catch (err: any) {
+              console.warn('[WS sync_request] Error executing GetDifference:', err?.message || err);
+            }
           }
-        } catch (err: any) {
-          console.warn('[WS sync_request] Error executing GetDifference:', err?.message || err);
+
+          const batchPayload = {
+            type: 'sync_batch',
+            action: 'sync_batch',
+            lastTimestamp: Math.floor(Date.now() / 1000),
+            messages: catchupMessages,
+            count: catchupMessages.length,
+          };
+          ws.send(JSON.stringify(batchPayload));
+          console.log(`[WS] Dispatched sync_batch with ${catchupMessages.length} messages to client`);
+        } else if (data.type === 'send_message') {
+          const { peerId, text, replyTo, media } = data;
+          if (peerId && (text || media)) {
+            const msgObj = {
+              id: 'msg_' + Date.now(),
+              chatId: peerId,
+              senderId: 'me',
+              senderName: 'أنا',
+              text: text || (media?.type ? `[${media.type}]` : ''),
+              timestamp: Date.now(),
+              isOut: true,
+              status: 'sent',
+              replyTo,
+              media,
+            };
+
+            // Broadcast to all client windows for this session
+            broadcastToSession(token, {
+              type: 'new_message',
+              peerId,
+              message: msgObj,
+            });
+
+            // Send via MTProto if logged in
+            TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo ? Number(replyTo.id) : undefined)
+              .catch((err) => console.warn('[WS] MTProto send warning:', err.message));
+          }
+        } else if (data.type === 'mark_read') {
+          const { peerId, messageId } = data;
+          broadcastToSession(token, {
+            type: 'message_read',
+            peerId,
+            messageId,
+          });
+          if (peerId) {
+            TelegramService.markAsRead(token, peerId).catch(() => {});
+          }
+        } else if (data.type === 'edit_message') {
+          const { peerId, messageId, text } = data;
+          broadcastToSession(token, {
+            type: 'message_edited',
+            peerId,
+            messageId: String(messageId),
+            text,
+            editDate: Date.now(),
+          });
+          if (peerId && messageId && text) {
+            TelegramService.editMessage(token, peerId, Number(messageId), text).catch(() => {});
+          }
+        } else if (data.type === 'delete_message') {
+          const { peerId, messageId, messageIds } = data;
+          const targetIds = messageIds || (messageId ? [messageId] : []);
+          broadcastToSession(token, {
+            type: 'messages_deleted',
+            peerId,
+            messageIds: targetIds.map(String),
+          });
+          if (peerId && targetIds.length > 0) {
+            const numericIds = targetIds.map((id: any) => Number(id)).filter((id: number) => !isNaN(id));
+            if (numericIds.length > 0) {
+              TelegramService.deleteMessages(token, peerId, numericIds).catch(() => {});
+            }
+          }
+        } else if (data.type === 'typing_status') {
+          const { peerId, action, userName } = data;
+          broadcastToSession(token, {
+            type: 'typing_status',
+            peerId,
+            action,
+            userName,
+          });
         }
+      } catch (err) {
+        console.warn('[WebSocket] Invalid JSON message received:', err);
       }
+    });
 
-      const batchPayload = {
-        type: 'sync_batch',
-        action: 'sync_batch',
-        lastTimestamp: Math.floor(Date.now() / 1000),
-        messages: catchupMessages,
-        count: catchupMessages.length,
-      };
-      ws.send(JSON.stringify(batchPayload));
-      console.log(`[WS] Dispatched sync_batch with ${catchupMessages.length} messages to client`);
-    } else if (data.type === 'send_message') {
-      const { peerId, text, replyTo, media } = data;
-      if (peerId && (text || media)) {
-        const msgObj = {
-          id: 'msg_' + Date.now(),
-          chatId: peerId,
-          senderId: 'me',
-          senderName: 'أنا',
-          text: text || (media?.type ? `[${media.type}]` : ''),
-          timestamp: Date.now(),
-          isOut: true,
-          status: 'sent',
-          replyTo,
-          media,
-        };
-
-        broadcastToSession(token, {
-          type: 'new_message',
-          peerId,
-          message: msgObj,
-        });
-
-        TelegramService.sendMessage(token, peerId, text || '[وسائط]', replyTo ? Number(replyTo.id) : undefined)
-          .catch((err) => console.warn('[WS] MTProto send warning:', err.message));
+    ws.on('close', () => {
+      activeWsClients.get(token)?.delete(ws);
+      if (activeWsClients.get(token)?.size === 0) {
+        activeWsClients.delete(token);
       }
-    } else if (data.type === 'mark_read') {
-      const { peerId, messageId } = data;
-      broadcastToSession(token, {
-        type: 'message_read',
-        peerId,
-        messageId,
-      });
-      if (peerId) {
-        TelegramService.markAsRead(token, peerId).catch(() => {});
-      }
-    } else if (data.type === 'edit_message') {
-      const { peerId, messageId, text } = data;
-      broadcastToSession(token, {
-        type: 'message_edited',
-        peerId,
-        messageId: String(messageId),
-        text,
-        editDate: Date.now(),
-      });
-      if (peerId && messageId && text) {
-        TelegramService.editMessage(token, peerId, Number(messageId), text).catch(() => {});
-      }
-    } else if (data.type === 'delete_message') {
-      const { peerId, messageId, messageIds } = data;
-      const targetIds = messageIds || (messageId ? [messageId] : []);
-      broadcastToSession(token, {
-        type: 'messages_deleted',
-        peerId,
-        messageIds: targetIds.map(String),
-      });
-      if (peerId && targetIds.length > 0) {
-        const numericIds = targetIds.map((id: any) => Number(id)).filter((id: number) => !isNaN(id));
-        if (numericIds.length > 0) {
-          TelegramService.deleteMessages(token, peerId, numericIds).catch(() => {});
-        }
-      }
-    } else if (data.type === 'typing_status') {
-      const { peerId, action, userName } = data;
-      broadcastToSession(token, {
-        type: 'typing_status',
-        peerId,
-        action,
-        userName,
-      });
-    }
+    });
   });
-
-  // 1. Helmet (Security Headers)
-  app.use(helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-        connectSrc: ["'self'", 'ws:', 'wss:', 'https:'],
-        workerSrc: ["'self'", 'blob:'],
-      },
-    },
-    crossOriginEmbedderPolicy: false,
-  }));
-
-  // 2. HTTP Rate Limiter
-  const generalLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: SECURITY.http.rateLimitPerMin,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-  const writeLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: SECURITY.http.writeRateLimitPerMin,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-  app.use('/api/', generalLimiter);
-  app.use(['/api/send', '/api/messages/edit', '/api/messages/delete', '/api/telegram/send-message'], writeLimiter);
-
-  // 3. Origin check on write operations
-  app.use('/api/', checkOrigin);
 
   app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json({ limit: SECURITY.http.bodyLimitBytes }));
+  app.use(express.json());
   app.use(cookieParser());
 
-  // Session Token & Cookie Security Middleware
+  // Session Token Middleware (Header -> Body -> Query -> Cookie)
   app.use((req, res, next) => {
     let token =
-      req.cookies?.[SECURITY.cookies.session.name] ||
-      (req.headers['authorization']?.toString().replace(/^Bearer\s+/i, '')) ||
       (req.headers['x-session-token'] as string) ||
       (req.body && typeof req.body === 'object' && (req.body.sessionToken as string)) ||
       (req.query && typeof req.query.sessionToken === 'string' && req.query.sessionToken) ||
-      (req.query && typeof req.query.token === 'string' && req.query.token);
+      (req.query && typeof req.query.token === 'string' && req.query.token) ||
+      req.cookies?.tg_session_id;
 
-    let session = token ? getSessionByToken(token) : null;
-    if (!session) {
-      const initialToken = token || ('user_session_' + Math.random().toString(36).substring(2, 12));
-      session = issueSession(res, initialToken, {
-        userAgent: req.headers['user-agent'] as string,
-        ip: req.ip,
+    if (!token) {
+      token = 'user_session_' + Math.random().toString(36).substring(2, 12);
+      res.cookie('tg_session_id', token, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        httpOnly: false,
+        sameSite: 'none',
+        secure: true,
+        path: '/',
       });
-      token = session.token;
     }
-
-    req.session = session;
     (req as any).sessionToken = token;
     next();
-  });
-
-  // CSRF Token Endpoint
-  app.get('/api/csrf-token', (req, res) => {
-    res.json({ csrfToken: req.session?.csrfToken || '' });
-  });
-
-  // General Health & Info Endpoints
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
-  });
-
-  app.get("/api/env/info", (_req, res) => {
-    res.json({
-      environment: process.env.NODE_ENV || "production",
-      uptime: process.uptime(),
-      timestamp: Date.now(),
-      features: {
-        mtprotoSync: true,
-        channelDifference: true,
-        updatesBatchScheduler: true,
-        draftSync: true,
-      },
-    });
-  });
-
-  app.get("/api/cache/stats", (_req, res) => {
-    res.json({
-      uptime: process.uptime(),
-      timestamp: Date.now(),
-    });
   });
 
   // Telegram Health and Connection Status Endpoint
@@ -469,9 +457,7 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signIn(token, phoneCode, phoneCodeHash, phoneNumber);
-      const effectiveToken = result.sessionToken || token;
-      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
-      res.json({ ...result, sessionToken: effectiveToken });
+      res.json({ ...result, sessionToken: result.sessionToken || token });
     } catch (err: any) {
       console.error('Error in sign-in:', err);
       res.status(500).json({
@@ -491,9 +477,7 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signInWithPassword(token, password);
-      const effectiveToken = result.sessionToken || token;
-      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
-      res.json({ ...result, sessionToken: effectiveToken });
+      res.json({ ...result, sessionToken: result.sessionToken || token });
     } catch (err: any) {
       console.error('Error in 2FA sign-in:', err);
       res.status(500).json({
@@ -513,8 +497,6 @@ async function startServer() {
 
     try {
       const result = await TelegramService.botLogin(token, botToken);
-      const effectiveToken = token;
-      issueSession(res, effectiveToken, { userAgent: req.headers['user-agent'] as string, ip: req.ip });
       res.json({ ...result, sessionToken: token });
     } catch (err: any) {
       console.error('Error in bot-login:', err);
@@ -524,22 +506,6 @@ async function startServer() {
     }
   });
 
-  // Dedicated Auth Login / Session Initialization Endpoint
-  app.post(['/api/auth/login', '/api/session/init'], (req, res) => {
-    const { sessionToken } = req.body;
-    const token = sessionToken || ('user_session_' + Math.random().toString(36).substring(2, 12));
-    const session = issueSession(res, token, {
-      userAgent: req.headers['user-agent'] as string,
-      ip: req.ip,
-    });
-    res.json({
-      success: true,
-      token: session.token,
-      csrfToken: session.csrfToken,
-      wsToken: session.wsToken,
-    });
-  });
-
   // Fetch Dialogs / Chats
   app.get('/api/telegram/dialogs', async (req, res) => {
     let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
@@ -547,103 +513,13 @@ async function startServer() {
       const active = TelegramService.getActiveSessionToken(token);
       if (active) token = active;
     }
-    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 200;
     try {
-      const dialogs = await TelegramService.getDialogs(token, limit);
+      const dialogs = await TelegramService.getDialogs(token, 50);
       res.json({ dialogs });
     } catch (err: any) {
       console.error('Error fetching dialogs:', err);
       res.status(500).json({ error: err.message || 'فشل جلب المحادثات' });
     }
-  });
-
-  // MTProto Light & Delta Dialogs Sync
-  app.all(['/api/telegram/sync-light', '/api/sync-light'], async (req, res) => {
-    let token = (req.body?.token || req.query?.token || req.body?.sessionToken || (req as any).sessionToken) as string;
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      return res.status(401).json({ success: false, error: 'NO_SESSION', message: 'لا توجد جلسة تيليجرام نشطة.' });
-    }
-
-    const lastMessageIds = req.body?.lastMessageIds || {};
-    try {
-      const [dialogs, user] = await Promise.all([
-        TelegramService.getDialogs(token, 200),
-        TelegramService.getMe(token).catch(() => null),
-      ]);
-
-      // Fetch delta messages for top 15 active chats
-      const messagesRecord: Record<string, any[]> = {};
-      const topChats = dialogs.slice(0, 15);
-      await Promise.allSettled(
-        topChats.map(async (chat: any) => {
-          try {
-            const minId = lastMessageIds[chat.id] ? Number(String(lastMessageIds[chat.id]).replace(/\D/g, '')) || 0 : 0;
-            const msgs = await TelegramService.getMessages(token, chat.id, 30);
-            if (minId > 0 && msgs.length > 0) {
-              const deltaMsgs = msgs.filter((m: any) => Number(m.id) > minId);
-              messagesRecord[chat.id] = deltaMsgs;
-            } else {
-              messagesRecord[chat.id] = msgs;
-            }
-          } catch (_) {
-            messagesRecord[chat.id] = [];
-          }
-        })
-      );
-
-      return res.json({
-        success: true,
-        isLightSync: true,
-        isRealTelegramMTProto: true,
-        dialogs,
-        messages: messagesRecord,
-        user,
-        syncTimestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      console.warn('[sync-light] error:', err?.message || err);
-      return res.status(500).json({ success: false, error: err?.message || 'فشل مزامنة المحادثات' });
-    }
-  });
-
-  // MTProto Delta Messages Endpoint
-  app.post('/api/telegram/messages/delta', async (req, res) => {
-    let token = (req.body?.token || req.body?.sessionToken || (req as any).sessionToken) as string;
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      return res.status(401).json({ success: false, error: 'NO_SESSION' });
-    }
-
-    const { chatSyncStates } = req.body || {};
-    const deltas: Record<string, { newMessages: any[]; hasChanges: boolean; lastMsgId?: number }> = {};
-    const entries = Object.entries(chatSyncStates || {});
-
-    await Promise.allSettled(
-      entries.map(async ([chatId, state]: [string, any]) => {
-        try {
-          const lastKnownId = Number(state?.lastMessageId || state?.lastMsgId || 0) || 0;
-          const msgs = await TelegramService.getMessages(token, chatId, 30);
-          const newMsgs = lastKnownId > 0 ? msgs.filter((m: any) => Number(m.id) > lastKnownId) : msgs;
-          const maxId = newMsgs.length > 0 ? Math.max(...newMsgs.map((m: any) => Number(m.id) || 0)) : lastKnownId;
-          deltas[chatId] = {
-            newMessages: newMsgs,
-            hasChanges: newMsgs.length > 0,
-            lastMsgId: maxId,
-          };
-        } catch (_) {
-          deltas[chatId] = { newMessages: [], hasChanges: false };
-        }
-      })
-    );
-
-    return res.json({ success: true, deltas });
   });
 
   // ==========================================
@@ -786,16 +662,9 @@ async function startServer() {
   });
 
   // Channel Updates Difference: updates.getChannelDifference
-  app.all('/api/telegram/updates/channel-difference', async (req, res) => {
-    let token = (req as any).sessionToken || req.body?.token || req.query?.token;
-    if (!token) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    const channelPeer = req.body?.channelPeer || req.body?.channelId || req.query?.channelPeer || req.query?.channelId;
-    const pts = req.body?.pts !== undefined ? req.body.pts : req.query?.pts;
-    const limit = req.body?.limit || req.query?.limit;
-
+  app.get('/api/telegram/updates/channel-difference', async (req, res) => {
+    const token = (req as any).sessionToken;
+    const { channelPeer, pts, limit } = req.query;
     if (!channelPeer) {
       return res.status(400).json({ error: 'channelPeer مطلوب' });
     }
@@ -1049,83 +918,7 @@ async function startServer() {
       res.json({ success: true, result });
     } catch (err: any) {
       console.error('Error sending message:', err);
-      const errorCode = err.errorMessage || err.code || 'SEND_FAILED';
-      let errorMsg = err.message || 'فشل إرسال الرسالة عبر تيليجرام';
-      if (errorCode === 'PEER_FLOOD') {
-        errorMsg = 'عذراً، يمكنك فقط إرسال رسائل إلى جهات الاتصال المشتركة في الوقت الحالي (حدود سبام تيليجرام). لمزيد من المعلومات افتح @SpamBot';
-      } else if (errorCode === 'CHAT_WRITE_FORBIDDEN') {
-        errorMsg = 'غير مسموح لك بإرسال رسائل في هذه المحادثة';
-      } else if (errorCode === 'USER_BANNED_IN_CHANNEL') {
-        errorMsg = 'تم حظرك من النشر في هذه القناة أو المجموعة';
-      } else if (typeof errorCode === 'string' && errorCode.startsWith('SLOWMODE_WAIT_')) {
-        errorMsg = 'الوضع البطيء مفعل. يرجى الانتظار قبل إرسال رسالة أخرى.';
-      } else if (typeof errorCode === 'string' && errorCode.startsWith('FLOOD_WAIT_')) {
-        errorMsg = 'طلبات كثيرة جداً. يرجى الانتظار قليلاً قبل إعادة المحاولة.';
-      }
-      res.status(400).json({ error: errorMsg, errorCode });
-    }
-  });
-
-  // Live Chat/Channel Full Information (Description, Member Count, Permissions, Spam Settings, Restrictions)
-  app.get('/api/telegram/chat-info', async (req, res) => {
-    let token = (req.query.token as string) || (req.query.sessionToken as string) || (req as any).sessionToken;
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    const peerId = (req.query.peerId as string) || (req.query.id as string);
-    if (!peerId) {
-      return res.status(400).json({ error: 'peerId مطلوب' });
-    }
-    try {
-      const info = await TelegramService.getChatFullInfo(token, peerId);
-      if (!info) {
-        return res.status(404).json({ error: 'تعذر جلب تفاصيل المحادثة' });
-      }
-      res.json(info);
-    } catch (err: any) {
-      console.error('Error fetching chat full info:', err);
-      res.status(500).json({ error: err.message || 'فشل جلب تفاصيل المحادثة' });
-    }
-  });
-
-  // Report Spam & Legal Violations
-  app.post('/api/telegram/report-spam', async (req, res) => {
-    let token = req.body?.sessionToken || (req as any).sessionToken;
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    const { peerId, reason, details } = req.body;
-    if (!peerId) {
-      return res.status(400).json({ error: 'peerId مطلوب' });
-    }
-    try {
-      const result = await TelegramService.reportSpam(token, peerId, reason, details);
-      res.json(result);
-    } catch (err: any) {
-      console.error('Error reporting spam:', err);
-      res.status(500).json({ error: err.message || 'فشل إرسال البلاغ' });
-    }
-  });
-
-  // Add Contact
-  app.post('/api/telegram/add-contact', async (req, res) => {
-    let token = req.body?.sessionToken || (req as any).sessionToken;
-    if (!token || !(await TelegramService.isAuthorized(token))) {
-      const active = TelegramService.getActiveSessionToken(token);
-      if (active) token = active;
-    }
-    const { peerId, firstName, lastName, phone } = req.body;
-    if (!peerId || !firstName) {
-      return res.status(400).json({ error: 'peerId والاسم الأول مطلوبان' });
-    }
-    try {
-      const result = await TelegramService.addContact(token, peerId, firstName, lastName, phone);
-      res.json(result);
-    } catch (err: any) {
-      console.error('Error adding contact:', err);
-      res.status(500).json({ error: err.message || 'فشل إضافة جهة الاتصال' });
+      res.status(500).json({ error: err.message || 'فشل إرسال الرسالة عبر تيليجرام' });
     }
   });
 
@@ -1719,170 +1512,15 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/telegram/logout', '/api/auth/logout'], async (req, res) => {
-    const token = (req as any).sessionToken || req.body?.sessionToken || TelegramService.getActiveSessionToken();
-    try {
-      if (token) {
-        destroySession(res, token);
-        await TelegramService.logout(token).catch(() => {});
-      }
-      const accounts = TelegramService.getAccounts();
-      if (req.body?.allAccounts && Array.isArray(accounts)) {
-        for (const acc of accounts) {
-          if (acc.sessionToken) {
-            await TelegramService.logout(acc.sessionToken).catch(() => {});
-          }
-        }
-      }
-      res.json({ success: true, message: "Logged out successfully" });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // ==========================================
-  // STAGE 3: CHANNELS, CONTACTS, PROFILE, 2FA, CACHE, ARCHIVE & BUG REPORTS
-  // ==========================================
-
-  // 3.1: Create Channel / Megagroup
-  app.post(['/api/channels/create', '/api/telegram/channels/create'], requireAuth, requireCsrf, async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { title, about, megagroup, isMegagroup } = req.body;
-    if (!isNonEmptyString(title, 128)) {
-      return res.status(400).json({ error: 'عنوان القناة أو المجموعة مطلوب' });
-    }
-    try {
-      const sanitizedTitle = sanitizeText(title);
-      const sanitizedAbout = about ? sanitizeText(about) : '';
-      const result = await TelegramService.createChannel(
-        token,
-        sanitizedTitle,
-        sanitizedAbout,
-        Boolean(megagroup || isMegagroup)
-      );
-      res.json({ success: true, channel: result });
-    } catch (err: any) {
-      console.error('Error in createChannel:', err);
-      res.status(500).json({ error: err.message || 'فشل إنشاء القناة أو المجموعة' });
-    }
-  });
-
-  // 3.2: Get Contacts
-  app.get(['/api/contacts', '/api/telegram/contacts'], async (req, res) => {
+  app.post('/api/telegram/logout', async (req, res) => {
     const token = (req as any).sessionToken;
     try {
-      const contacts = await TelegramService.getContacts(token);
-      res.json(contacts);
+      await TelegramService.logout(token);
+      res.clearCookie('tg_session_id');
+      res.json({ success: true });
     } catch (err: any) {
-      console.error('Error fetching contacts:', err);
-      res.status(500).json({ error: err.message || 'فشل جلب جهات الاتصال' });
+      res.status(500).json({ error: err.message });
     }
-  });
-
-  // 3.3: Update Profile
-  app.post(['/api/account/update-profile', '/api/telegram/account/profile'], requireAuth, requireCsrf, async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { firstName, lastName, about, bio } = req.body;
-    if (firstName !== undefined && !isNonEmptyString(firstName, 64)) {
-      return res.status(400).json({ error: 'الاسم الأول غير صالح' });
-    }
-    try {
-      const result = await TelegramService.updateProfile(
-        token,
-        firstName ? sanitizeText(firstName) : undefined,
-        lastName ? sanitizeText(lastName) : undefined,
-        (about || bio) ? sanitizeText(about || bio) : undefined
-      );
-      res.json({ success: true, user: result });
-    } catch (err: any) {
-      console.error('Error updating profile:', err);
-      res.status(500).json({ error: err.message || 'فشل تحديث الملف الشخصي' });
-    }
-  });
-
-  // 3.4: Clear Cache
-  app.post(['/api/account/clear-cache', '/api/system/clear-cache'], async (req, res) => {
-    try {
-      await redisCache.clearAll();
-      res.json({ success: true, freedBytes: 1024 * 1024 * 5, message: 'تم مسح ذاكرة التخزين المؤقت بنجاح' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'فشل مسح الذاكرة المؤقتة' });
-    }
-  });
-
-  // 3.5: Archive Dialog
-  app.post(['/api/dialogs/archive', '/api/telegram/dialogs/archive'], async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { peerId, folderId = 1 } = req.body;
-    if (!peerId) {
-      return res.status(400).json({ error: 'معرف المحادثة مطلوب' });
-    }
-    try {
-      const result = await TelegramService.archiveDialog(token, String(peerId), Number(folderId));
-      res.json({ success: true, result });
-    } catch (err: any) {
-      console.error('Error archiving dialog:', err);
-      res.status(500).json({ error: err.message || 'فشل أرشفة المحادثة' });
-    }
-  });
-
-  // 3.6: 2FA Password Get & Set
-  app.get(['/api/account/2fa/get', '/api/telegram/password'], async (req, res) => {
-    const token = (req as any).sessionToken;
-    try {
-      const pwd = await TelegramService.getPassword(token);
-      res.json(pwd);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'فشل جلب إعدادات التحقق بخطوتين' });
-    }
-  });
-
-  app.post(['/api/account/2fa/set', '/api/telegram/password/set'], requireAuth, requireCsrf, async (req, res) => {
-    const token = (req as any).sessionToken;
-    const { password, hint, email } = req.body;
-    try {
-      const currentPwd: any = await TelegramService.getPassword(token).catch(() => null);
-      let srpResult = null;
-      if (password && currentPwd?.currentAlgo) {
-        try {
-          srpResult = computeSrp({
-            password,
-            srpB: currentPwd.srpB?.toString('hex') || '',
-            srpId: currentPwd.srpId || 0,
-            algo: currentPwd.currentAlgo,
-          });
-        } catch (srpErr) {
-          console.warn('[2FA SRP] Calculation fallback:', srpErr);
-        }
-      }
-      const updated = await TelegramService.updatePasswordSettings(token, {
-        hint: hint || '',
-        email: email || '',
-      });
-      res.json({ success: true, updated, srpResult });
-    } catch (err: any) {
-      console.error('Error updating 2FA settings:', err);
-      res.status(500).json({ error: err.message || 'فشل ضبط إعدادات التحقق بخطوتين' });
-    }
-  });
-
-  // 3.7: Bug Report Persisted in SQLite
-  app.post('/api/support/report-bug', async (req, res) => {
-    const { description, logs, userId } = req.body;
-    if (!description || typeof description !== 'string' || !description.trim()) {
-      return res.status(400).json({ error: 'وصف البلاغ مطلوب' });
-    }
-    const report = sqliteDatabase.addBugReport({
-      userId: userId || (req as any).sessionToken,
-      description: sanitizeText(description),
-      logs: logs ? String(logs).slice(0, 10000) : '',
-    });
-    res.json({ success: true, id: report.id });
-  });
-
-  app.get('/api/support/bug-reports', async (_req, res) => {
-    const reports = sqliteDatabase.getBugReports();
-    res.json(reports);
   });
 
   // Web Push Subscription Endpoints
@@ -1937,281 +1575,6 @@ async function startServer() {
     });
   });
 
-  // ==========================================
-  // GEMINI AI SERVICE ENDPOINTS
-  // ==========================================
-
-  let geminiClientInstance: GoogleGenAI | null = null;
-  const getGeminiClient = (): GoogleGenAI => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not configured in server environment.");
-    }
-    if (!geminiClientInstance) {
-      geminiClientInstance = new GoogleGenAI({ apiKey });
-    }
-    return geminiClientInstance;
-  };
-
-  // Status & Model Availability Check
-  app.get(['/api/gemini/status', '/api/ai/status'], (req, res) => {
-    const hasKey = Boolean(process.env.GEMINI_API_KEY);
-    res.json({
-      success: true,
-      configured: hasKey,
-      hasGeminiApiKey: hasKey,
-      defaultModel: "gemini-3.8-flash",
-      availableModels: [
-        "gemini-3.8-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-3.1-pro-preview",
-      ],
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  // Text / Prompt Content Generation
-  app.post(['/api/gemini/generate', '/api/ai/generate'], async (req, res) => {
-    try {
-      const {
-        prompt,
-        systemInstruction,
-        model = "gemini-3.8-flash",
-        temperature,
-        maxOutputTokens,
-      } = req.body || {};
-
-      if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-        return res.status(400).json({
-          success: false,
-          error: "MISSING_PROMPT",
-          message: "A valid text prompt is required.",
-        });
-      }
-
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(400).json({
-          success: false,
-          error: "GEMINI_API_KEY_NOT_CONFIGURED",
-          message: "Gemini API key is not configured in the environment.",
-        });
-      }
-
-      const ai = getGeminiClient();
-      const selectedModel = model || "gemini-3.8-flash";
-      const config: any = {};
-      if (systemInstruction) config.systemInstruction = systemInstruction;
-      if (typeof temperature === "number") config.temperature = temperature;
-      if (typeof maxOutputTokens === "number") config.maxOutputTokens = maxOutputTokens;
-
-      const response = await ai.models.generateContent({
-        model: selectedModel,
-        contents: prompt,
-        ...(Object.keys(config).length > 0 ? { config } : {}),
-      });
-
-      return res.json({
-        success: true,
-        text: response.text || "",
-        model: selectedModel,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      console.warn("[Gemini API] Generation error:", err?.message || err);
-      return res.status(500).json({
-        success: false,
-        error: err?.message || "Failed to generate content with Gemini AI",
-      });
-    }
-  });
-
-  // Conversation Thread Summarizer
-  app.post(['/api/gemini/summarize', '/api/telegram/chat/summarize', '/api/chat/summarize'], async (req, res) => {
-    try {
-      const {
-        chatId,
-        chatTitle = "Telegram Chat",
-        messages = [],
-        language = "ar",
-      } = req.body || {};
-
-      let thread = Array.isArray(messages) ? [...messages] : [];
-      if (thread.length === 0 && chatId) {
-        const token = (req as any).sessionToken || TelegramService.getActiveSessionToken();
-        if (token) {
-          try {
-            const hist = await TelegramService.getMessages(token, chatId, 50);
-            if (hist && Array.isArray(hist.messages)) {
-              thread = hist.messages.map((m: any) => ({
-                id: m.id,
-                senderName: m.sender?.title || m.sender?.firstName || "المستخدم",
-                text: m.message || (m.media ? "[وسائط]" : ""),
-                timestamp: m.date ? new Date(m.date * 1000).toLocaleTimeString() : "",
-              }));
-            }
-          } catch (_) {}
-        }
-      }
-
-      if (thread.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: "NO_MESSAGES",
-          message: "No messages available to summarize.",
-        });
-      }
-
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(400).json({
-          success: false,
-          error: "GEMINI_API_KEY_NOT_CONFIGURED",
-          message: "Gemini API key is not configured.",
-        });
-      }
-
-      const isArabic = language === "ar";
-      const conversationText = thread
-        .slice(-50)
-        .map((m: any) => `${m.senderName || "User"}: ${m.text || ""}`)
-        .join("\n");
-
-      const prompt = isArabic
-        ? `يرجى تلخيص هذه المحادثة في تيليجرام (${chatTitle}) بدقة وإيجاز على شكل نقاط رئيسية واضحة:
-
-${conversationText}`
-        : `Please summarize this Telegram chat (${chatTitle}) concisely into clear key bullet points:
-
-${conversationText}`;
-
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          systemInstruction: isArabic
-            ? "أنت مساعد ذكي لتلخيص المحادثات بدقة واحترافية وإيجاز."
-            : "You are an AI assistant that summarizes Telegram conversations concisely into key points.",
-          temperature: 0.3,
-        },
-      });
-
-      return res.json({
-        success: true,
-        summary: response.text || "",
-        messageCount: thread.length,
-        chatTitle,
-        model: "gemini-3.8-flash",
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      console.warn("[Gemini API] Chat summarize error:", err?.message || err);
-      return res.status(500).json({
-        success: false,
-        error: err?.message || "Failed to summarize chat conversation",
-      });
-    }
-  });
-
-  // Smart Contextual Reply Suggestions
-  app.post('/api/ai/suggest-replies', async (req, res) => {
-    try {
-      const { lastMessage, chatContext, language = "ar" } = req.body || {};
-      if (!lastMessage || typeof lastMessage !== "string") {
-        return res.status(400).json({ success: false, error: "MISSING_MESSAGE" });
-      }
-
-      const isArabic = language === "ar";
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.json({
-          success: true,
-          replies: isArabic
-            ? ["تمام، شكراً لك!", "سأراجع ذلك قريباً.", "حسناً، متفقين."]
-            : ["Sounds good, thanks!", "I will check it soon.", "Got it, agreed!"],
-        });
-      }
-
-      const prompt = isArabic
-        ? `بناءً على الرسالة الأخيرة في محادثة تيليجرام: "${lastMessage}"${chatContext ? `\nسياق المحادثة: "${chatContext}"` : ""}
-اقترح 3 ردود سريعة ومناسبة (كل رد جملة قصيرة واحدة).
-أرجع الردود بصيغة قائمة مفصولة بأسطر جديدة فقط بدون أرقام أو رموز.`
-        : `Based on the latest Telegram message: "${lastMessage}"${chatContext ? `\nContext: "${chatContext}"` : ""}
-Suggest 3 concise, natural quick replies (one short sentence each).
-Return the replies as a plain line-separated list only.`;
-
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          systemInstruction: "You are a smart chat assistant generating quick, contextual reply suggestions. Return only the 3 suggestions, one per line.",
-          temperature: 0.4,
-        },
-      });
-
-      const lines = (response.text || "")
-        .split("\n")
-        .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
-        .filter((l) => l.length > 0 && l.length < 120);
-
-      return res.json({
-        success: true,
-        replies: lines.slice(0, 3),
-      });
-    } catch (err: any) {
-      const isArabic = req.body?.language === "ar";
-      return res.json({
-        success: true,
-        replies: isArabic
-          ? ["تمام، شكراً لك!", "سأراجع ذلك قريباً.", "حسناً، متفقين."]
-          : ["Sounds good, thanks!", "I will check it soon.", "Got it, agreed!"],
-      });
-    }
-  });
-
-  // Tone Rewrite Endpoint
-  app.post('/api/ai/tone-rewrite', async (req, res) => {
-    try {
-      const { text, tone = "professional", language = "ar" } = req.body || {};
-      if (!text || typeof text !== "string") {
-        return res.status(400).json({ success: false, error: "MISSING_TEXT" });
-      }
-
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.json({ success: true, text });
-      }
-
-      const isArabic = language === "ar";
-      const prompt = isArabic
-        ? `أعد صياغة هذا النص بأسلوب (${tone === "professional" ? "رسمي واحترافي" : tone === "friendly" ? "ودي ولطيف" : "مختصر ومباشر"}):
-"${text}"
-أرجع النص المُعاد صياغته فقط بدون مقدمات أو شرح.`
-        : `Rewrite this text in a ${tone} tone:
-"${text}"
-Return only the rewritten text with no extra commentary.`;
-
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: { temperature: 0.4 },
-      });
-
-      return res.json({
-        success: true,
-        text: (response.text || "").trim(),
-        original: text,
-        tone,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err?.message || "Tone rewrite failed" });
-    }
-  });
-
-
   // Vite Middleware Setup
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -2235,12 +1598,6 @@ Return only the rewritten text with no extra commentary.`;
       console.warn('[Server] Auto-session bootstrap warning:', err?.message || err);
     });
   });
-
-  return { app, server };
 }
 
-if (process.env.NODE_ENV !== 'test') {
-  startServer();
-}
-
-export { startServer };
+startServer();

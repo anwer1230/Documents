@@ -19,7 +19,6 @@ import {
   Globe,
 } from 'lucide-react';
 import { TelegramUser } from '../types';
-import { PasswordStrengthIndicator } from './PasswordStrengthIndicator';
 
 interface LoginViewProps {
   onLoginSuccess: (user: TelegramUser, isDemo?: boolean, sessionToken?: string) => void;
@@ -610,9 +609,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, lang }) =>
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-
-                {/* Real-time Password Strength Validation Visualizer */}
-                <PasswordStrengthIndicator password={password2FA} lang={lang} />
 
                 <button
                   type="submit"

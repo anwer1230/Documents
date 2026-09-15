@@ -1,6 +1,0 @@
-project_id       = "documents-prod-project"
-primary_region   = "us-central1"
-secondary_region = "europe-west1"
-app_name         = "telegram-web"
-image_tag        = "v1.0.0"
-domain           = "telegram.example.com"

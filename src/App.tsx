@@ -1,5 +1,3 @@
-import { ttsService } from "./services/ttsService";
-import { audioService } from "./services/audioService";
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
 import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
@@ -16,9 +14,6 @@ import { TelegramPeerStories } from './types';
 import { AddAccountModal } from './components/AddAccountModal';
 import { MiniAppModal } from './components/MiniAppModal';
 import { Toast, ToastData } from './components/Toast';
-import { playTelegramChime } from './utils/notificationSound';
-import { requestNotificationPermission, showDesktopNotification } from './utils/desktopNotifications';
-import { NotificationBanner, InAppNotification } from './components/NotificationBanner';
 import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
 import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
 import { ShareLinkModal } from './components/modals/ShareLinkModal';
@@ -26,11 +21,6 @@ import { ReportChatModal } from './components/modals/ReportChatModal';
 import { Loader2 } from 'lucide-react';
 import { wsClient } from './utils/websocket';
 import { Api } from './services/api';
-import { csrfFetch } from './services/csrfFetch';
-import { initTelegramWeb } from './index';
-import { updatesBatchScheduler } from './services/UpdatesBatchScheduler';
-import { channelDifferenceService } from './services/ChannelDifferenceService';
-import { draftSyncService } from './services/DraftSyncService';
 
 const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -51,10 +41,6 @@ export default function App() {
     };
   });
 
-  // Official Telegram Web RootScope lifecycle initialization
-  useEffect(() => {
-    initTelegramWeb().catch((e) => console.warn('[TelegramWeb] RootScope init:', e));
-  }, []);
   // Multi-Accounts State (Support up to 6 isolated users)
   const [accounts, setAccounts] = useState<TelegramAccount[]>(() => {
     const saved = localStorage.getItem('tg_multi_accounts');
@@ -83,98 +69,15 @@ export default function App() {
     return {};
   });
 
-  // Active User Auth State (Initialized from persistent local cache)
-  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(() => {
-    try {
-      if (
-        localStorage.getItem("tg_explicitly_logged_out") === "true" ||
-        sessionStorage.getItem("tg_explicitly_logged_out") === "true"
-      ) {
-        return null;
-      }
-      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
-      const activeId = localStorage.getItem('tg_active_account_id');
-      if (savedAccountsStr) {
-        const accs = JSON.parse(savedAccountsStr);
-        const active = accs.find((a: any) => a.id === activeId) || accs[0];
-        if (active?.user) return active.user;
-      }
-      const savedUser = localStorage.getItem('tg_active_user');
-      if (savedUser) return JSON.parse(savedUser);
-    } catch {}
-    return null;
-  });
-
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => {
-    try {
-      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
-      const activeId = localStorage.getItem('tg_active_account_id');
-      if (savedAccountsStr) {
-        const accs = JSON.parse(savedAccountsStr);
-        const active = accs.find((a: any) => a.id === activeId) || accs[0];
-        if (active) return !!active.isDemo;
-      }
-    } catch {}
-    return false;
-  });
-
+  // Active User Auth State
+  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
-  // Chat Data State (Instantly restores real account chats without demo mock data)
-  const [chats, setChats] = useState<TelegramChat[]>(() => {
-    try {
-      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
-      const activeId = localStorage.getItem('tg_active_account_id');
-      if (savedAccountsStr) {
-        const accs = JSON.parse(savedAccountsStr);
-        const active = accs.find((a: any) => a.id === activeId) || accs[0];
-        if (active && !active.isDemo) {
-          const cached = localStorage.getItem('tg_real_chats_' + active.id);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-          }
-          const accountsData = localStorage.getItem('tg_accounts_data_map');
-          if (accountsData) {
-            const parsedData = JSON.parse(accountsData);
-            if (parsedData[active.id]?.chats?.length > 0) return parsedData[active.id].chats;
-          }
-          return [{
-            id: 'saved_messages',
-            title: 'الرسائل المحفوظة',
-            type: 'saved',
-            unreadCount: 0,
-            avatarColor: '#3390ec',
-            isPinned: true,
-            description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
-          }];
-        }
-      }
-    } catch {}
-    return [];
-  });
-
+  // Chat Data State (for currently active user)
+  const [chats, setChats] = useState<TelegramChat[]>(INITIAL_CHATS);
   const [selectedChatId, setSelectedChatId] = useState<string>('saved_messages');
-
-  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(() => {
-    try {
-      const savedAccountsStr = localStorage.getItem('tg_multi_accounts');
-      const activeId = localStorage.getItem('tg_active_account_id');
-      if (savedAccountsStr) {
-        const accs = JSON.parse(savedAccountsStr);
-        const active = accs.find((a: any) => a.id === activeId) || accs[0];
-        if (active && !active.isDemo) {
-          const accountsData = localStorage.getItem('tg_accounts_data_map');
-          if (accountsData) {
-            const parsedData = JSON.parse(accountsData);
-            if (parsedData[active.id]?.messagesMap) return parsedData[active.id].messagesMap;
-          }
-          return { saved_messages: [] };
-        }
-      }
-    } catch {}
-    return {};
-  });
+  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(INITIAL_MESSAGES);
   
   // UI & Navigation State
   const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
@@ -304,31 +207,6 @@ export default function App() {
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     setToast({ id: String(Date.now()), message, type });
   };
-
-  // In-app Notification Banner state
-  const [inAppNotification, setInAppNotification] = useState<InAppNotification | null>(null);
-
-  // Dynamic Unread Counter in Document Title
-  useEffect(() => {
-    const totalUnread = chats.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
-    if (totalUnread > 0) {
-      document.title = `(${totalUnread}) Telegram Web`;
-    } else {
-      document.title = 'Telegram Web';
-    }
-  }, [chats]);
-
-  // Request desktop notification permission smoothly upon login
-  useEffect(() => {
-    if (currentUser && typeof window !== 'undefined' && 'Notification' in window) {
-      if (Notification.permission === 'default') {
-        const timer = setTimeout(() => {
-          requestNotificationPermission().catch(() => {});
-        }, 2500);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [currentUser]);
 
   // Bot Mini App opener
   const handleOpenMiniApp = (url?: string, appName?: string) => {
@@ -525,20 +403,8 @@ export default function App() {
           // Use locally saved accounts
           const currentAcc = accounts.find(a => a.id === activeAccountId) || accounts[0];
           setActiveAccountId(currentAcc.id);
-          localStorage.setItem('tg_active_account_id', currentAcc.id);
           setCurrentUser(currentAcc.user);
           setIsDemoMode(!!currentAcc.isDemo);
-          if (!currentAcc.isDemo) {
-            const cachedReal = localStorage.getItem('tg_real_chats_' + currentAcc.id);
-            if (cachedReal) {
-              try {
-                const parsed = JSON.parse(cachedReal);
-                if (Array.isArray(parsed) && parsed.length > 0) setChats(parsed);
-              } catch {}
-            }
-            loadMtprotoDialogs(currentAcc.sessionToken);
-            syncAccountAndSessionProfiles(currentAcc.sessionToken, currentAcc.id);
-          }
         } else {
           // Check single stored session fallback
           const savedSession = localStorage.getItem('tg_active_user');
@@ -723,16 +589,9 @@ export default function App() {
                 return {
                   ...chat,
                   title: live.title || chat.title,
-                  type: live.type || chat.type,
                   avatarUrl: live.avatarUrl || chat.avatarUrl,
                   unreadCount: typeof live.unreadCount === 'number' ? live.unreadCount : chat.unreadCount,
                   lastMessage: live.lastMessage || chat.lastMessage,
-                  canSendMessages: live.canSendMessages !== undefined ? live.canSendMessages : chat.canSendMessages,
-                  isBroadcast: live.isBroadcast !== undefined ? live.isBroadcast : chat.isBroadcast,
-                  description: live.description || chat.description,
-                  membersCount: live.membersCount || chat.membersCount,
-                  restrictionReason: live.restrictionReason || chat.restrictionReason,
-                  peerSettings: live.peerSettings || chat.peerSettings,
                 };
               }
               return chat;
@@ -851,113 +710,6 @@ export default function App() {
     }
   }, [activeAccountId, isDemoMode, applySyncBatchMessages, accounts, syncAccountAndSessionProfiles]);
 
-  // UpdatesBatchScheduler subscription for silky-smooth 60fps message updates
-  useEffect(() => {
-    const unsubscribe = updatesBatchScheduler.subscribe((batchUpdates) => {
-      setMessagesMap((prev) => {
-        let updated = { ...prev };
-        let hasChanges = false;
-
-        for (const update of batchUpdates) {
-          const targetChatId = update.chatId;
-          if (update.type === 'message') {
-            const currentList = updated[targetChatId] || [];
-            const msg = update.data;
-            if (msg && msg.id && !currentList.some((m) => m.id === msg.id)) {
-              updated[targetChatId] = [...currentList, msg];
-              hasChanges = true;
-            }
-          } else if (update.type === 'message_edit') {
-            const currentList = updated[targetChatId];
-            if (currentList) {
-              const editData = update.data;
-              const idx = currentList.findIndex((m) => m.id === String(editData.id));
-              if (idx >= 0) {
-                const copy = [...currentList];
-                copy[idx] = { ...copy[idx], text: editData.text, isEdited: true };
-                updated[targetChatId] = copy;
-                hasChanges = true;
-              }
-            }
-          } else if (update.type === 'message_delete') {
-            const currentList = updated[targetChatId];
-            if (currentList && update.data?.ids) {
-              const deleteIds = new Set(update.data.ids.map(String));
-              updated[targetChatId] = currentList.filter((m) => !deleteIds.has(m.id));
-              hasChanges = true;
-            }
-          }
-        }
-        return hasChanges ? updated : prev;
-      });
-
-      setChats((prev) => {
-        let updatedChats = [...prev];
-        let chatsChanged = false;
-
-        for (const update of batchUpdates) {
-          if (update.type === 'message') {
-            const msg = update.data;
-            const targetChatId = update.chatId;
-            const idx = updatedChats.findIndex((c) => c.id === targetChatId);
-            if (idx >= 0) {
-              const chat = updatedChats[idx];
-              const isSelected = selectedChatId === targetChatId;
-              const updatedChat = {
-                ...chat,
-                unreadCount: isSelected || msg.isOut ? 0 : (chat.unreadCount || 0) + 1,
-                lastMessage: {
-                  id: msg.id,
-                  text: msg.text || (msg.media?.type ? `[${msg.media.type}]` : ''),
-                  timestamp: msg.timestamp || Date.now(),
-                  isOut: !!msg.isOut,
-                  senderId: msg.senderId,
-                  senderName: msg.senderName,
-                  senderAvatar: msg.senderAvatar,
-                },
-              };
-              updatedChats.splice(idx, 1);
-              updatedChats.unshift(updatedChat);
-              chatsChanged = true;
-            }
-          }
-        }
-        return chatsChanged ? updatedChats : prev;
-      });
-    });
-
-    return () => unsubscribe();
-  }, [selectedChatId]);
-
-  // Channel difference recovery subscription
-  useEffect(() => {
-    const unsub = channelDifferenceService.subscribe((channelId, newMessages) => {
-      setMessagesMap((prev) => {
-        const current = prev[channelId] || [];
-        const merged = [...current];
-        let hasNew = false;
-        for (const m of newMessages) {
-          if (!merged.some((exist) => exist.id === m.id)) {
-            merged.push(m);
-            hasNew = true;
-          }
-        }
-        return hasNew ? { ...prev, [channelId]: merged } : prev;
-      });
-    });
-    return () => unsub();
-  }, []);
-
-  // Sync active supergroup / channel difference when selected
-  useEffect(() => {
-    if (selectedChatId && !isDemoMode) {
-      const activeChat = chats.find((c) => c.id === selectedChatId);
-      if (activeChat && channelDifferenceService.isSupergroupOrChannel(activeChat)) {
-        channelDifferenceService.getChannelDifference(selectedChatId, false, 'chat_selected');
-      }
-    }
-  }, [selectedChatId, chats, isDemoMode]);
-
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
     const activeAcc = accounts.find((a) => a.id === activeAccountId);
@@ -974,72 +726,15 @@ export default function App() {
         if ((event as any).lastTimestamp) {
           wsClient.setLastTimestamp((event as any).lastTimestamp);
         }
-      } else if ((event.type === 'new_message' || event.type === 'UpdateNewMessage' || event.type === 'UpdateNewChannelMessage') && event.message) {
-        const msg = event.message;
-        const targetChatId = String(event.peerId || msg.chatId || selectedChatId);
+      } else if (event.type === 'new_message' && event.message) {
         if ((event as any).pts) {
           syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
-          channelDifferenceService.checkChannelPtsGap(targetChatId, (event as any).pts, (event as any).pts_count || 1);
         }
+        const msg = event.message;
         if (msg.timestamp) {
           wsClient.setLastTimestamp(msg.timestamp);
         }
-
-        // Immediate Sound & Real-time Notification Dispatch for Incoming Messages
-        if (!msg.isOut) {
-          // 1. Play signature Telegram notification chime
-          try {
-            audioService.playNotification("classic");
-          } catch {
-            playTelegramChime();
-          }
-          // Voice readout if enabled
-          try {
-            if (localStorage.getItem("tg_tts_enabled") === "true" && msg.text && !msg.text.startsWith("/")) {
-              ttsService.speakMessage(msg.text, themeConfig.language === "ar" ? "ar-SA" : "en-US");
-            }
-          } catch {}
-
-          // Find chat details if available
-          const currentChat = chats.find((c) => c.id === targetChatId);
-          const senderDisplayName =
-            msg.senderName || currentChat?.title || (themeConfig.language === 'ar' ? 'مستخدم' : 'User');
-          const previewText =
-            msg.text ||
-            (msg.media?.type
-              ? `[${msg.media.type}]`
-              : themeConfig.language === 'ar'
-              ? 'رسالة جديدة'
-              : 'New message');
-
-          // 2. Desktop notification if page is hidden or different chat
-          if (document.hidden || targetChatId !== selectedChatId) {
-            showDesktopNotification({
-              title:
-                currentChat && currentChat.title !== senderDisplayName
-                  ? `${senderDisplayName} (${currentChat.title})`
-                  : senderDisplayName,
-              body: previewText,
-              icon: msg.senderAvatar || currentChat?.avatarUrl,
-              tag: `tg_msg_${targetChatId}`,
-              onClick: () => {
-                setSelectedChatId(targetChatId);
-                setIsMobileChatOpen(true);
-              },
-            });
-
-            // 3. In-app floating notification banner
-            setInAppNotification({
-              id: msg.id || 'notif_' + Date.now(),
-              chatId: targetChatId,
-              senderName: senderDisplayName,
-              senderAvatar: msg.senderAvatar || currentChat?.avatarUrl,
-              chatTitle: currentChat?.title,
-              text: previewText,
-              timestamp: msg.timestamp || Date.now(),
-            });
-          }
-        }
+        const targetChatId = event.peerId || msg.chatId || selectedChatId;
 
         setMessagesMap((prev) => {
           const currentList = prev[targetChatId] || [];
@@ -1052,75 +747,30 @@ export default function App() {
           };
         });
 
-        setChats((prev) => {
-          const existingIdx = prev.findIndex((c) => c.id === targetChatId);
-          if (existingIdx >= 0) {
-            const listCopy = [...prev];
-            const chatToUpdate = {
-              ...listCopy[existingIdx],
-              unreadCount:
-                listCopy[existingIdx].id === selectedChatId ? 0 : (listCopy[existingIdx].unreadCount || 0) + 1,
-              lastMessage: {
-                text:
-                  msg.text ||
-                  (msg.media?.type
-                    ? `[${msg.media.type}]`
-                    : themeConfig.language === 'ar'
-                    ? '[وسائط]'
-                    : '[Media]'),
-                timestamp: msg.timestamp || Date.now(),
-                isOut: !!msg.isOut,
-                senderName: msg.senderName,
-                senderAvatar: msg.senderAvatar,
-              },
-            };
-            listCopy.splice(existingIdx, 1);
-            return [chatToUpdate, ...listCopy];
-          } else {
-            // New incoming chat not previously in list: dynamically prepend
-            const newChat: TelegramChat = {
-              id: targetChatId,
-              title: msg.senderName || (themeConfig.language === 'ar' ? 'محادثة جديدة' : 'New Chat'),
-              type: targetChatId.startsWith('-100')
-                ? 'supergroup'
-                : targetChatId.startsWith('-')
-                ? 'group'
-                : 'private',
-              avatarUrl: msg.senderAvatar,
-              unreadCount: targetChatId === selectedChatId ? 0 : 1,
-              lastMessage: {
-                text:
-                  msg.text ||
-                  (msg.media?.type
-                    ? `[${msg.media.type}]`
-                    : themeConfig.language === 'ar'
-                    ? '[وسائط]'
-                    : '[Media]'),
-                timestamp: msg.timestamp || Date.now(),
-                isOut: !!msg.isOut,
-                senderName: msg.senderName,
-                senderAvatar: msg.senderAvatar,
-              },
-            };
-            return [newChat, ...prev];
-          }
-        });
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === targetChatId
+              ? {
+                  ...c,
+                  unreadCount: c.id === selectedChatId ? 0 : (c.unreadCount || 0) + 1,
+                  lastMessage: {
+                    text: msg.text || '[وسائط]',
+                    timestamp: msg.timestamp || Date.now(),
+                    isOut: !!msg.isOut,
+                  },
+                }
+              : c
+          )
+        );
       } else if (event.type === 'message_read' && event.peerId) {
         const targetChatId = event.peerId;
-        const readerId = (event as any).readerId || (event as any).userId || targetChatId;
         setMessagesMap((prev) => {
           const list = prev[targetChatId];
           if (!list) return prev;
           return {
             ...prev,
             [targetChatId]: list.map((m) =>
-              m.isOut
-                ? {
-                    ...m,
-                    status: 'read' as const,
-                    seenBy: Array.from(new Set([...(m.seenBy || []), readerId])),
-                  }
-                : m
+              m.isOut ? { ...m, status: 'read' as const } : m
             ),
           };
         });
@@ -1129,14 +779,8 @@ export default function App() {
             c.id === targetChatId ? { ...c, unreadCount: 0 } : c
           )
         );
-      } else if ((event.type as any === 'message_edited' || event.type as any === 'edit_message' || (event as any).type === 'UpdateEditMessage' || (event as any).type === 'UpdateEditChannelMessage') && ((event as any).peerId || (event as any).chatId) && ((event as any).messageId || (event as any).id)) {
-        const targetChatId = (event as any).peerId || (event as any).chatId;
-        const msgId = (event as any).messageId || (event as any).id;
-        updatesBatchScheduler.enqueue({
-          type: 'message_edit',
-          chatId: targetChatId,
-          data: { id: msgId, text: (event as any).text || (event as any).message?.text || '' }
-        });
+      } else if (event.type === 'message_edited' && event.peerId && event.messageId) {
+        const targetChatId = event.peerId;
         setMessagesMap((prev) => {
           const list = prev[targetChatId];
           if (!list) return prev;
@@ -1159,14 +803,7 @@ export default function App() {
               : c
           )
         );
-      } else if ((event.type as any === 'messages_deleted' || event.type as any === 'delete_messages' || (event as any).type === 'UpdateDeleteMessages' || (event as any).type === 'UpdateDeleteChannelMessages') && ((event as any).messageIds || (event as any).ids || (event as any).messages)) {
-        const rawIds = (event as any).messageIds || (event as any).ids || (event as any).messages || [];
-        const targetChatId = (event as any).peerId || (event as any).chatId || selectedChatId;
-        updatesBatchScheduler.enqueue({
-          type: 'message_delete',
-          chatId: targetChatId,
-          data: { ids: rawIds }
-        });
+      } else if (event.type === 'messages_deleted' && event.messageIds) {
         const delIds = new Set(event.messageIds);
         setMessagesMap((prev) => {
           const updated: Record<string, TelegramMessage[]> = {};
@@ -1205,25 +842,6 @@ export default function App() {
     };
   }, [activeAccountId, accounts, selectedChatId]);
 
-  // Automatically persist real account chats and messages to local storage
-  useEffect(() => {
-    if (activeAccountId && !isDemoMode && chats.length > 0) {
-      localStorage.setItem('tg_real_chats_' + activeAccountId, JSON.stringify(chats));
-      setAccountsDataMap((prev) => {
-        const updated = {
-          ...prev,
-          [activeAccountId]: {
-            chats,
-            messagesMap,
-            selectedChatId,
-          },
-        };
-        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
-        return updated;
-      });
-    }
-  }, [chats, messagesMap, selectedChatId, activeAccountId, isDemoMode]);
-
   // Auto-sync gap recovery when switching back to tab
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -1236,94 +854,25 @@ export default function App() {
   }, [recoverGap]);
 
 
-  const loadMtprotoDialogs = async (token?: string, retryCount = 0) => {
+  const loadMtprotoDialogs = async (token?: string) => {
     try {
       const activeToken = token || localStorage.getItem('tg_active_session_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {};
       if (activeToken) {
         headers['x-session-token'] = activeToken;
       }
-
-      // Collect known last message IDs per chat for delta sync
-      const lastMessageIds: Record<string, string | number> = {};
-      (Object.entries(messagesMap) as [string, TelegramMessage[]][]).forEach(([cId, mList]) => {
-        if (mList && mList.length > 0) {
-          const lastMsg = mList[mList.length - 1];
-          if (lastMsg && lastMsg.id) lastMessageIds[cId] = lastMsg.id;
-        }
-      });
-
-      // Try light MTProto sync first for fast responsive update
-      let data: any = null;
-      try {
-        const syncRes = await fetch('/api/telegram/sync-light', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ token: activeToken, lastMessageIds }),
-        });
-        if (syncRes.ok) {
-          const syncData = await syncRes.json();
-          if (syncData.success && Array.isArray(syncData.dialogs)) {
-            data = syncData;
-          }
-        }
-      } catch (_) {}
-
-      // Fallback to /api/telegram/dialogs if sync-light unavailable
-      if (!data) {
-        const url = `/api/telegram/dialogs${activeToken ? `?token=${encodeURIComponent(activeToken)}` : ''}`;
-        const res = await fetch(url, { headers });
-        if (res.ok) {
-          data = await res.json();
-        }
-      }
-
-      if (data) {
-        if (data.dialogs && Array.isArray(data.dialogs) && data.dialogs.length > 0) {
-          const realDialogs: TelegramChat[] = data.dialogs;
+      const url = `/api/telegram/dialogs${activeToken ? `?token=${encodeURIComponent(activeToken)}` : ''}`;
+      const res = await fetch(url, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.dialogs && data.dialogs.length > 0) {
           setChats((prev) => {
-            const savedChat: TelegramChat = prev.find((p) => p.id === 'saved_messages') || {
-              id: 'saved_messages',
-              title: 'الرسائل المحفوظة',
-              type: 'saved',
-              unreadCount: 0,
-              avatarColor: '#3390ec',
-              isPinned: true,
-              description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
-            };
-            const finalChatList = [savedChat, ...realDialogs.filter((d) => d.id !== 'saved_messages')];
-            const currentAccId = activeAccountId || localStorage.getItem('tg_active_account_id');
-            if (currentAccId) {
-              localStorage.setItem('tg_real_chats_' + currentAccId, JSON.stringify(finalChatList));
-            }
-            return finalChatList;
+            const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
+            return [savedChat, ...data.dialogs.filter((d: any) => d.id !== 'saved_messages')];
           });
-
-          setMessagesMap((prev) => {
-            let updated = { ...prev };
-            for (const d of realDialogs) {
-              if (d.lastMessage && (!updated[d.id] || updated[d.id].length === 0)) {
-                updated[d.id] = [
-                  {
-                    id: `dialog_last_${d.id}`,
-                    chatId: d.id,
-                    senderId: d.lastMessage.senderId || (d.lastMessage.isOut ? 'me' : d.id),
-                    senderName: d.lastMessage.senderName || (d.lastMessage.isOut ? 'أنا' : d.title),
-                    senderAvatar: d.lastMessage.senderAvatar || (d.lastMessage.isOut ? undefined : d.avatarUrl),
-                    text: d.lastMessage.text || '',
-                    timestamp: d.lastMessage.timestamp || Date.now(),
-                    isOut: !!d.lastMessage.isOut,
-                    status: d.lastMessage.isOut ? 'read' : 'sent',
-                  },
-                ];
-              }
-            }
-            return updated;
-          });
-
           setSelectedChatId((curr) => {
             if (!curr || curr === 'saved_messages') {
-              return realDialogs[0]?.id || curr || 'saved_messages';
+              return data.dialogs[0]?.id || curr;
             }
             return curr;
           });
@@ -1331,14 +880,9 @@ export default function App() {
         if (activeToken) {
           syncAccountAndSessionProfiles(activeToken);
         }
-      } else if (retryCount < 4) {
-        setTimeout(() => loadMtprotoDialogs(token, retryCount + 1), 1500 * (retryCount + 1));
       }
     } catch (err) {
       console.error('Error loading MTProto dialogs:', err);
-      if (retryCount < 4) {
-        setTimeout(() => loadMtprotoDialogs(token, retryCount + 1), 2000 * (retryCount + 1));
-      }
     }
   };
 
@@ -1354,10 +898,6 @@ export default function App() {
   }, [activeAccountId, syncAccountAndSessionProfiles, isDemoMode, accounts]);
 
   const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false, authenticatedSessionToken?: string) => {
-    try {
-      localStorage.removeItem("tg_explicitly_logged_out");
-      sessionStorage.removeItem("tg_explicitly_logged_out");
-    } catch {}
     const finalSessionToken =
       authenticatedSessionToken ||
       localStorage.getItem('tg_active_session_token') ||
@@ -1380,17 +920,6 @@ export default function App() {
     setIsDemoMode(isDemo);
     localStorage.setItem('tg_active_user', JSON.stringify(user));
     if (!isDemo) {
-      const initialSaved: TelegramChat[] = [{
-        id: 'saved_messages',
-        title: 'الرسائل المحفوظة',
-        type: 'saved',
-        unreadCount: 0,
-        avatarColor: '#3390ec',
-        isPinned: true,
-        description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
-      }];
-      setChats(initialSaved);
-      setMessagesMap({});
       loadMtprotoDialogs(finalSessionToken);
       syncAccountAndSessionProfiles(finalSessionToken, newAcc.id);
     }
@@ -1435,22 +964,10 @@ export default function App() {
 
     // 4. Restore target account's isolated chats and messages
     const restored = accountsDataMap[target.id];
-    let targetChats: TelegramChat[] = [];
-    const cachedReal = localStorage.getItem('tg_real_chats_' + target.id);
-    if (cachedReal) {
-      try {
-        const parsed = JSON.parse(cachedReal);
-        if (Array.isArray(parsed) && parsed.length > 0) targetChats = parsed;
-      } catch {}
-    }
-    if (targetChats.length === 0 && restored?.chats?.length) {
-      targetChats = restored.chats;
-    }
-
-    if (targetChats.length > 0) {
-      setChats(targetChats);
-      setMessagesMap(restored?.messagesMap || {});
-      setSelectedChatId(restored?.selectedChatId || targetChats[0]?.id || 'saved_messages');
+    if (restored && restored.chats && restored.chats.length > 0) {
+      setChats(restored.chats);
+      setMessagesMap(restored.messagesMap);
+      setSelectedChatId(restored.selectedChatId || restored.chats[0]?.id || 'saved_messages');
     } else {
       // Clean isolated initial chat list for new user
       if (target.isDemo) {
@@ -1458,16 +975,7 @@ export default function App() {
         setMessagesMap(INITIAL_MESSAGES);
         setSelectedChatId('saved_messages');
       } else {
-        const initialSaved: TelegramChat[] = [{
-          id: 'saved_messages',
-          title: 'الرسائل المحفوظة',
-          type: 'saved',
-          unreadCount: 0,
-          avatarColor: '#3390ec',
-          isPinned: true,
-          description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
-        }];
-        setChats(initialSaved);
+        setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
         setSelectedChatId('saved_messages');
       }
     }
@@ -1517,16 +1025,7 @@ export default function App() {
       setMessagesMap(INITIAL_MESSAGES);
       setSelectedChatId('saved_messages');
     } else {
-      const initialSaved: TelegramChat[] = [{
-        id: 'saved_messages',
-        title: 'الرسائل المحفوظة',
-        type: 'saved',
-        unreadCount: 0,
-        avatarColor: '#3390ec',
-        isPinned: true,
-        description: 'مساحتك السحابية الخاصة لتخزين الروابط والملاحظات والملفات.',
-      }];
-      setChats(initialSaved);
+      setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
       setSelectedChatId('saved_messages');
       loadMtprotoDialogs(newAccount.sessionToken);
       syncAccountAndSessionProfiles(newAccount.sessionToken, newAccount.id);
@@ -1562,51 +1061,23 @@ export default function App() {
     }
   };
 
-  const handleToggleArchive = async (chatId: string) => {
-    const targetChat = chats.find((c) => c.id === chatId);
-    const newArchived = !targetChat?.isArchived;
+  const handleToggleArchive = (chatId: string) => {
     setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, isArchived: newArchived } : c))
+      prev.map((c) => (c.id === chatId ? { ...c, isArchived: !c.isArchived } : c))
     );
-    try {
-      await csrfFetch('/api/dialogs/archive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ peerId: chatId, folderId: newArchived ? 1 : 0 }),
-      });
-    } catch (err) {
-      console.warn('Failed to sync archive status to cloud:', err);
-    }
   };
 
   const handleLogout = async () => {
-    try {
-      localStorage.setItem("tg_explicitly_logged_out", "true");
-      sessionStorage.setItem("tg_explicitly_logged_out", "true");
-      localStorage.removeItem("tg_active_user");
-      localStorage.removeItem("tg_active_account_id");
-      localStorage.removeItem("tg_multi_accounts");
-      localStorage.removeItem("tg_active_session_token");
-      localStorage.removeItem("tg_session_string");
-      localStorage.removeItem("tg_phone");
-      localStorage.removeItem("tg_accounts_data_map");
-      wsClient.disconnect();
-      await csrfFetch("/api/telegram/logout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accountId: activeAccountId,
-          allAccounts: accounts.length <= 1,
-        }),
-      }).catch(() => {});
-    } catch {}
-    setAccounts([]);
-    setCurrentUser(null);
-    setActiveAccountId("");
-    setChats([]);
-    setMessagesMap({});
-    setSelectedChatId(null);
-    setIsDemoMode(false);
+    if (activeAccountId) {
+      await handleRemoveAccount(activeAccountId);
+    } else {
+      try {
+        await fetch('/api/telegram/logout', { method: 'POST' });
+      } catch {}
+      localStorage.removeItem('tg_active_user');
+      setCurrentUser(null);
+      setIsDemoMode(false);
+    }
   };
 
   // Chat selection with real-time mark as read and dynamic channel loading
@@ -1625,23 +1096,54 @@ export default function App() {
       return prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
     });
 
-    // Mark unread as read in UI
+    // Populate messages if none exist yet (e.g. for channels selected from Global Search)
     setMessagesMap((prev) => {
       if (prev[chat.id] && prev[chat.id].length > 0) {
-        const myId = currentUser?.id || 'me';
         return {
           ...prev,
-          [chat.id]: prev[chat.id].map((m) =>
-            !m.isOut
-              ? {
-                  ...m,
-                  status: 'read' as const,
-                  seenBy: Array.from(new Set([...(m.seenBy || []), myId])),
-                }
-              : m
-          ),
+          [chat.id]: prev[chat.id].map((m) => (!m.isOut ? { ...m, status: 'read' as const } : m)),
         };
       }
+
+      // Generate initial channel announcements and updates
+      if (chat.type === 'channel') {
+        const initialChannelPosts: TelegramMessage[] = [
+          {
+            id: `post_1_${chat.id}`,
+            chatId: chat.id,
+            senderId: chat.id,
+            senderName: chat.title,
+            text: `📢 مرحباً بكم في قناة (${chat.title}) على تيليجرام!\n\n${chat.description || 'هنا ننشر أحدث الأخبار، التحديثات التقنية، والبيانات الحصرية لمتابعينا.'}\n\nانقر على زر "الانضمام إلى القناة" بالأسفل لتلقي كل جديد مباشرة.`,
+            timestamp: Date.now() - 3600 * 24 * 1000,
+            isOut: false,
+            status: 'read',
+            reactions: [
+              { emoji: '🔥', count: 1840 },
+              { emoji: '❤️', count: 2950 },
+              { emoji: '👏', count: 980 },
+            ],
+          },
+          {
+            id: `post_2_${chat.id}`,
+            chatId: chat.id,
+            senderId: chat.id,
+            senderName: chat.title,
+            text: `🚀 تحديث هام:\nتم إطلاق الميزات الجديدة وتحسين سرعة الأداء والاستجابة على منصة تيليجرام مع دعم قنوات البث والبحث العام الفوري. يسعدنا دائماً تفاعلكم المستمر!`,
+            timestamp: Date.now() - 3600 * 5 * 1000,
+            isOut: false,
+            status: 'read',
+            reactions: [
+              { emoji: '⚡', count: 1420 },
+              { emoji: '🎉', count: 2130 },
+            ],
+          },
+        ];
+        return {
+          ...prev,
+          [chat.id]: initialChannelPosts,
+        };
+      }
+
       return prev;
     });
 
@@ -1662,15 +1164,13 @@ export default function App() {
       body: JSON.stringify({ peerId: chat.id, sessionToken: token }),
     }).catch(() => {});
 
-    // If real MTProto session active, attempt loading live messages & metadata
+    // If real MTProto session active, attempt loading live messages
     if (activeAccountId && !isDemoMode) {
       try {
         const headers: Record<string, string> = {};
         if (token) headers['x-session-token'] = token;
-
-        // Fetch live messages with real sender details
         const res = await fetch(
-          `/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=50${token ? `&token=${encodeURIComponent(token)}` : ''}`,
+          `/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30${token ? `&token=${encodeURIComponent(token)}` : ''}`,
           { headers }
         );
         if (res.ok) {
@@ -1682,23 +1182,8 @@ export default function App() {
             }));
           }
         }
-
-        // Fetch live chat metadata (permissions, broadcast flags, restrictions, peer settings)
-        fetch(
-          `/api/telegram/chat-info?peerId=${encodeURIComponent(chat.id)}${token ? `&token=${encodeURIComponent(token)}` : ''}`,
-          { headers }
-        )
-          .then((r) => r.json())
-          .then((infoData) => {
-            if (infoData.chat) {
-              setChats((prev) =>
-                prev.map((c) => (c.id === chat.id ? { ...c, ...infoData.chat } : c))
-              );
-            }
-          })
-          .catch(() => {});
       } catch {
-        // Continue
+        // Fallback already rendered
       }
     }
   };
@@ -1798,7 +1283,6 @@ export default function App() {
       timestamp: Date.now(),
       isOut: true,
       status: 'sent',
-      seenBy: [],
       replyTo: replyTo
         ? {
             id: replyTo.id,
@@ -2023,22 +1507,10 @@ export default function App() {
           reactions: [{ emoji: emojiReaction, count: 1, userReacted: false }],
         };
 
-        setMessagesMap((prev) => {
-          const currentList = prev[selectedChatId] || [];
-          const updatedList = currentList.map((m) =>
-            m.isOut
-              ? {
-                  ...m,
-                  status: 'read' as const,
-                  seenBy: Array.from(new Set([...(m.seenBy || []), senderId])),
-                }
-              : m
-          );
-          return {
-            ...prev,
-            [selectedChatId]: [...updatedList, autoReply],
-          };
-        });
+        setMessagesMap((prev) => ({
+          ...prev,
+          [selectedChatId]: [...(prev[selectedChatId] || []), autoReply],
+        }));
 
         setChats((prev) =>
           prev.map((c) => {
@@ -2201,35 +1673,11 @@ export default function App() {
   };
 
   // Create new channel / group
-  const handleCreateChat = async (newChatData: Partial<TelegramChat>) => {
-    let id = 'custom_' + Date.now();
-    let createdTitle = newChatData.title || 'محادثة جديدة';
-    
-    // Call server endpoint to create real channel on Telegram if logged in
-    if (newChatData.type === 'channel' || newChatData.type === 'group') {
-      try {
-        const res = await csrfFetch('/api/channels/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: createdTitle,
-            about: newChatData.description || '',
-            megagroup: newChatData.type === 'group',
-          }),
-        });
-        const data = await res.json();
-        if (data?.channel?.id) {
-          id = String(data.channel.id);
-          createdTitle = data.channel.title || createdTitle;
-        }
-      } catch (err) {
-        console.warn('Could not create channel via MTProto, falling back to local chat:', err);
-      }
-    }
-
+  const handleCreateChat = (newChatData: Partial<TelegramChat>) => {
+    const id = 'custom_' + Date.now();
     const chat: TelegramChat = {
       id,
-      title: createdTitle,
+      title: newChatData.title || 'محادثة جديدة',
       username: newChatData.username,
       type: newChatData.type || 'channel',
       avatarColor: newChatData.avatarColor || '#3390ec',
@@ -2455,18 +1903,6 @@ export default function App() {
 
       {/* Toast Notification */}
       <Toast toast={toast} onClose={() => setToast(null)} />
-
-      {/* In-App Floating Notification Banner */}
-      <NotificationBanner
-        notification={inAppNotification}
-        onDismiss={() => setInAppNotification(null)}
-        onOpenChat={(chatId) => {
-          setSelectedChatId(chatId);
-          setIsMobileChatOpen(true);
-        }}
-        isDark={themeConfig.isDark}
-        isAr={themeConfig.language === 'ar'}
-      />
 
       {/* Settings & Main Menu Drawer */}
       <SettingsDrawer

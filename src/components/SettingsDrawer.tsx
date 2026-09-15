@@ -1,5 +1,3 @@
-import { PWAInstallButton } from "./PWAInstallButton";
-import { ttsService } from "../services/ttsService";
 import React, { useState, useEffect } from 'react';
 import {
   X,
@@ -56,10 +54,7 @@ import {
   getPushSubscription,
 } from '../utils/pushNotifications';
 import api, { Api } from '../services/api';
-import { csrfFetch } from '../services/csrfFetch';
 import { PrivacySettings } from './PrivacySettings';
-import { PasswordStrengthIndicator } from './PasswordStrengthIndicator';
-import { VAPID_SUBJECT } from '../config';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -163,50 +158,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const [animationsEnabled, setAnimationsEnabled] = useState(themeConfig.animations ?? true);
   const [autoplayMedia, setAutoplayMedia] = useState(true);
 
-  // Notifications state (Persisted in localStorage)
-  const [notifyPrivate, setNotifyPrivate] = useState(() => localStorage.getItem('tg_notify_private') !== 'false');
-  const [notifyGroups, setNotifyGroups] = useState(() => localStorage.getItem('tg_notify_groups') !== 'false');
-  const [notifyChannels, setNotifyChannels] = useState(() => localStorage.getItem('tg_notify_channels') !== 'false');
-  const [ttsVoiceEnabled, setTtsVoiceEnabled] = useState(() => {
-    try {
-      return localStorage.getItem("tg_tts_enabled") === "true";
-    } catch {
-      return false;
-    }
-  });
-  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('tg_sound_enabled') !== 'false');
-
-  const toggleNotifyPrivate = () => {
-    setNotifyPrivate((prev) => {
-      const next = !prev;
-      localStorage.setItem('tg_notify_private', String(next));
-      return next;
-    });
-  };
-
-  const toggleNotifyGroups = () => {
-    setNotifyGroups((prev) => {
-      const next = !prev;
-      localStorage.setItem('tg_notify_groups', String(next));
-      return next;
-    });
-  };
-
-  const toggleNotifyChannels = () => {
-    setNotifyChannels((prev) => {
-      const next = !prev;
-      localStorage.setItem('tg_notify_channels', String(next));
-      return next;
-    });
-  };
-
-  const toggleSoundEnabled = () => {
-    setSoundEnabled((prev) => {
-      const next = !prev;
-      localStorage.setItem('tg_sound_enabled', String(next));
-      return next;
-    });
-  };
+  // Notifications state
+  const [notifyPrivate, setNotifyPrivate] = useState(true);
+  const [notifyGroups, setNotifyGroups] = useState(true);
+  const [notifyChannels, setNotifyChannels] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   // Web Push state
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -317,8 +273,9 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   const fetchCloud2FA = async () => {
     setTwoStepLoading(true);
     try {
-      const res = await csrfFetch('/api/account/2fa/get');
-      const data = await res.json();
+      // Direct call to Api.account.GetPassword as requested
+      const res: any = await Api.account.GetPassword();
+      const data = res?.result || res;
       if (data) {
         setTwoStepEnabled(Boolean(data.hasPassword));
         setTwoStepHint(data.hint || '');
@@ -331,7 +288,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
         });
       }
     } catch (err: any) {
-      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password:', err);
+      console.warn('[SettingsDrawer] Failed to fetch cloud 2FA password via Api.account.GetPassword:', err);
     } finally {
       setTwoStepLoading(false);
     }
@@ -524,7 +481,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     setPushLoading(false);
   };
 
-  const handleSaveProfile = async (e: React.FormEvent) => {
+  const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdateUser({
       firstName,
@@ -533,19 +490,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
       username: username.replace(/^@/, ''),
       photoUrl: photoUrl.trim() || undefined,
     });
-    try {
-      await csrfFetch('/api/account/update-profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName,
-          lastName,
-          about: bio,
-        }),
-      });
-    } catch (err) {
-      console.warn('Could not sync profile to cloud:', err);
-    }
     setProfileSavedToast(true);
     setTimeout(() => {
       setProfileSavedToast(false);
@@ -559,19 +503,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
     onUpdateTheme({ fontSize: sizeCategory });
   };
 
-  const handleClearCache = async () => {
+  const handleClearCache = () => {
     setIsClearingCache(true);
-    try {
-      await csrfFetch('/api/account/clear-cache', { method: 'POST' });
-    } catch (err) {
-      console.warn('Error clearing backend cache:', err);
-    }
     setTimeout(() => {
       setCacheSize('0.0 KB');
       setIsClearingCache(false);
       setCacheCleared(true);
       setTimeout(() => setCacheCleared(false), 2500);
-    }, 600);
+    }, 1200);
   };
 
   const handleCreateFolder = () => {
@@ -1177,10 +1116,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <span className="flex-1 text-start">{isAr ? 'بيانات API والاتصال' : 'Telegram MTProto API'}</span>
                 <ChevronRight className="w-4 h-4 text-gray-400 rtl:rotate-180" />
               </button>
-              {/* PWA Install Action */}
-              <div className="pt-2 px-2 flex justify-center">
-                <PWAInstallButton className="w-full justify-center" />
-              </div>
             </div>
           </div>
         )}
@@ -1839,8 +1774,6 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                       {show2faPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
-                  {/* Real-time Password Strength Visualizer */}
-                  <PasswordStrengthIndicator password={twoStepPassword} lang={isAr ? 'ar' : 'en'} />
                 </div>
 
                 <div className="space-y-1.5">
@@ -1866,13 +1799,11 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                       setIsSaving2FA(true);
                       setTwoStepSuccessMsg(null);
                       try {
-                        await csrfFetch('/api/account/2fa/set', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            password: twoStepPassword || undefined,
+                        await api.mtproto.invoke('account.updatePasswordSettings', {
+                          password: twoStepPassword || undefined,
+                          newSettings: {
                             hint: newTwoStepHint || undefined,
-                          }),
+                          },
                         });
                         setTwoStepHint(newTwoStepHint);
                         setTwoStepEnabled(true);
@@ -1955,7 +1886,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               {/* Chats notifications */}
               <div className="space-y-3">
                 <div
-                  onClick={toggleNotifyPrivate}
+                  onClick={() => setNotifyPrivate(!notifyPrivate)}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'المحادثات الخاصة' : 'Private Chats'}</span>
@@ -1965,7 +1896,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={toggleNotifyGroups}
+                  onClick={() => setNotifyGroups(!notifyGroups)}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'المجموعات' : 'Groups'}</span>
@@ -1975,7 +1906,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={toggleNotifyChannels}
+                  onClick={() => setNotifyChannels(!notifyChannels)}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'القنوات' : 'Channels'}</span>
@@ -1985,33 +1916,12 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </div>
 
                 <div
-                  onClick={toggleSoundEnabled}
+                  onClick={() => setSoundEnabled(!soundEnabled)}
                   className="flex items-center justify-between cursor-pointer"
                 >
                   <span className="text-sm font-medium">{isAr ? 'أصوات التنبيه' : 'Sound Effects'}</span>
                   <div className={`w-10 h-5 rounded-full transition-colors relative flex items-center p-0.5 ${soundEnabled ? 'bg-[#3390ec]' : 'bg-gray-400'}`}>
                     <div className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${soundEnabled ? (isAr ? '-translate-x-5' : 'translate-x-5') : 'translate-x-0'}`} />
-                  </div>
-                </div>
-
-                {/* Voice Readout TTS */}
-                <div
-                  onClick={() => {
-                    const next = !ttsVoiceEnabled;
-                    setTtsVoiceEnabled(next);
-                    localStorage.setItem("tg_tts_enabled", String(next));
-                    if (next) {
-                      ttsService.speak(isAr ? "تم تفعيل القراءة الصوتية" : "Text to speech enabled", isAr ? "ar-SA" : "en-US");
-                    }
-                  }}
-                  className="flex items-center justify-between cursor-pointer"
-                >
-                  <div>
-                    <span className="text-sm font-medium block">{isAr ? "قراءة الرسائل صوتياً (TTS)" : "Voice Readout (TTS)"}</span>
-                    <span className="text-xs text-gray-400 block">{isAr ? "نطق الرسائل الواردة تلقائياً" : "Speak incoming messages automatically"}</span>
-                  </div>
-                  <div className={`w-10 h-5 rounded-full transition-colors relative flex items-center p-0.5 shrink-0 ${ttsVoiceEnabled ? "bg-[#3390ec]" : "bg-gray-400"}`}>
-                    <div className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${ttsVoiceEnabled ? (isAr ? "-translate-x-5" : "translate-x-5") : "translate-x-0"}`} />
                   </div>
                 </div>
               </div>
@@ -2049,7 +1959,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </p>
 
                 <div className="text-[11px] font-mono text-gray-500 bg-gray-500/10 p-2 rounded-lg truncate">
-                  {VAPID_SUBJECT}
+                  mailto:anwrfwad178@gmail.com
                 </div>
 
                 {pushStatusText && (
@@ -2561,7 +2471,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 <div className={`p-3 rounded-xl border ${themeConfig.isDark ? 'bg-[#0e1621] border-gray-700' : 'bg-gray-50 border-gray-300'}`}>
                   <div className="text-gray-400 text-[10px] uppercase">{isAr ? 'بريد VAPID المعتمد' : 'VAPID SUBJECT'}</div>
                   <div className="font-bold text-white text-xs mt-0.5 select-all">
-                    {VAPID_SUBJECT}
+                    mailto:anwrfwad178@gmail.com
                   </div>
                 </div>
 

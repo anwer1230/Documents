@@ -204,7 +204,6 @@ export const INITIAL_MESSAGES: Record<string, TelegramMessage[]> = {
       timestamp: Date.now() - 1000 * 60 * 60 * 3,
       isOut: true,
       status: 'read',
-      seenBy: ['user_me'],
       reactions: [{ emoji: '📌', count: 1, userReacted: true }],
     },
     {
@@ -216,7 +215,6 @@ export const INITIAL_MESSAGES: Record<string, TelegramMessage[]> = {
       timestamp: Date.now() - 1000 * 60 * 15,
       isOut: true,
       status: 'read',
-      seenBy: ['user_me'],
     },
   ],
   chat_ahmed: [
@@ -239,7 +237,6 @@ export const INITIAL_MESSAGES: Record<string, TelegramMessage[]> = {
       timestamp: Date.now() - 1000 * 60 * 20,
       isOut: true,
       status: 'read',
-      seenBy: ['ahmed_mansour'],
       reactions: [{ emoji: '👍', count: 1, userReacted: false }],
     },
     {
