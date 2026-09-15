@@ -3143,15 +3143,56 @@
 
     <script>
       // ============== Helpers ==============
-      async function apiCall(url, method = 'GET', body = null) {
-        const opts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
-        if (body) opts.body = JSON.stringify(body);
-        try {
-          const res = await fetch(url, opts);
-          const txt = await res.text();
-          if (!txt || !txt.trim()) return { success: false, message: `الخادم لم يُرجع بياناً (HTTP ${res.status})` };
-          try { return JSON.parse(txt); } catch(e) { return { success: false, message: `استجابة غير صالحة (HTTP ${res.status})` }; }
-        } catch(e) { return { success: false, message: 'تعذر الاتصال بالخادم: ' + (e.message || e) }; }
+      async function apiCall(url, method = 'GET', body = null, retries = 2) {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+          const opts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
+          if (body) opts.body = JSON.stringify(body);
+          try {
+            const res = await fetch(url, opts);
+            const txt = await res.text();
+            if (!txt || !txt.trim()) {
+              if (attempt < retries && (res.status === 502 || res.status === 503 || res.status === 504)) {
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+              }
+              return { success: false, message: `الخادم لم يُرجع بياناً (HTTP ${res.status})` };
+            }
+            const trimmed = txt.trim();
+            if (trimmed.startsWith('<') || trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype')) {
+              if (trimmed.includes("403. That’s an error") || trimmed.includes("That's an error") || res.status === 403) {
+                return {
+                  success: false,
+                  message: 'خطأ 403 (غير مصرح): تعذر الوصول إلى الخادم. يرجى التأكد من تسجيل الدخول أو استخدام الرابط المشارك المعتمد.'
+                };
+              }
+              if (attempt < retries) {
+                await new Promise(r => setTimeout(r, 1200));
+                continue;
+              }
+              return { success: false, message: `الخادم قيد الإقلاع أو التحديث (HTTP ${res.status}). يرجى الانتظار ثوانٍ والمحاولة ثانية.` };
+            }
+            try {
+              const parsed = JSON.parse(txt);
+              if (res.status === 503 && attempt < retries) {
+                await new Promise(r => setTimeout(r, 1500));
+                continue;
+              }
+              return parsed;
+            } catch(e) {
+              if (attempt < retries) {
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+              }
+              return { success: false, message: `استجابة غير صالحة (HTTP ${res.status})` };
+            }
+          } catch(e) {
+            if (attempt < retries) {
+              await new Promise(r => setTimeout(r, 1000));
+              continue;
+            }
+            return { success: false, message: 'تعذر الاتصال بالخادم: ' + (e.message || e) };
+          }
+        }
       }
       function escapeHtml(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 

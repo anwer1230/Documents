@@ -58,6 +58,33 @@ import threading as _pre_patch_threading
 _OSThread = _pre_patch_threading.Thread
 
 import os
+import sys
+import subprocess
+
+def _ensure_runtime_dependencies():
+    deps = [
+        ('flask', 'Flask==3.1.3'),
+        ('flask_socketio', 'Flask-SocketIO==5.6.1'),
+        ('telethon', 'Telethon==1.45.0'),
+        ('requests', 'requests==2.32.3'),
+        ('dotenv', 'python-dotenv==1.2.2'),
+        ('werkzeug', 'Werkzeug==3.1.8')
+    ]
+    missing = []
+    for mod, pkg in deps:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
+        print(f'📦 [Auto-Install] Installing missing python packages: {missing}...')
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', *missing, '--no-warn-script-location'], check=True)
+            print('✅ Packages installed successfully.')
+        except Exception as e:
+            print(f'⚠️ Warning during auto-install: {e}')
+
+_ensure_runtime_dependencies()
 import json
 import uuid
 import time
@@ -394,7 +421,26 @@ def _get_user_logs(user_id: str, level_filter=None) -> list:
 
 # إنشاء التطبيق
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", os.urandom(24))
+app.secret_key = os.environ.get("SESSION_SECRET", "abu_malk_services_stable_key_2026")
+app.config.update(
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_HTTPONLY=True,
+)
+
+try:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+except Exception:
+    pass
+
+@app.after_request
+def _handle_cors_and_security(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range"
+    if "X-Frame-Options" in response.headers:
+        del response.headers["X-Frame-Options"]
+    return response
 
 # إعداد SocketIO — threading mode لتجنب تعارض asyncio/gevent
 socketio = SocketIO(

@@ -10,25 +10,61 @@ document.addEventListener('click', (e) => {
 }, true);
 
 // ============== Helpers ==============
-async function postJSON(url, body) {
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify(body || {})
-    });
-    const txt = await res.text();
-    if (!txt || !txt.trim()) {
-      return { success: false, message: `الخادم لم يُرجع بياناً (HTTP ${res.status})` };
-    }
+async function postJSON(url, body, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return JSON.parse(txt);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body || {})
+      });
+      const txt = await res.text();
+      if (!txt || !txt.trim()) {
+        if (attempt < retries && (res.status === 502 || res.status === 503 || res.status === 504)) {
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        return { success: false, message: `الخادم لم يُرجع بياناً (HTTP ${res.status})` };
+      }
+      const trimmed = txt.trim();
+      if (trimmed.startsWith('<') || trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype')) {
+        if (trimmed.includes("403. That’s an error") || trimmed.includes("That's an error") || res.status === 403) {
+          return {
+            success: false,
+            message: 'خطأ 403 (غير مصرح): تعذر الوصول إلى الخادم. يرجى التأكد من تسجيل الدخول أو استخدام الرابط المشارك المعتمد للمنصة.'
+          };
+        }
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1200));
+          continue;
+        }
+        return {
+          success: false,
+          message: `الخادم قيد الإقلاع أو التحديث (HTTP ${res.status}). يرجى الانتظار ثوانٍ والمحاولة مجدداً.`
+        };
+      }
+      try {
+        const parsed = JSON.parse(txt);
+        if (res.status === 503 && attempt < retries) {
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+        return parsed;
+      } catch (e) {
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        return { success: false, message: `استجابة غير صالحة من الخادم (HTTP ${res.status})` };
+      }
     } catch (e) {
-      return { success: false, message: `استجابة غير صالحة من الخادم (HTTP ${res.status})` };
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+      return { success: false, message: 'تعذر الاتصال بالخادم: ' + (e.message || e) };
     }
-  } catch (e) {
-    return { success: false, message: 'تعذر الاتصال بالخادم: ' + (e.message || e) };
   }
 }
 
