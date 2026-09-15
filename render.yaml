@@ -22,9 +22,9 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_REPO
-        value: anwer1230/Abu_Mlk
+        value: anwer1230/Documents
       - key: GITHUB_BRANCH
-        value: main
+        value: import/abu-malik-project-2026-09-08
       - key: VAPID_PUBLIC_KEY
         sync: false
       - key: VAPID_PRIVATE_B64
