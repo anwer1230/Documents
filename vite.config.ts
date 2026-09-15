@@ -98,7 +98,7 @@ function flaskIntegrationPlugin(): Plugin {
     name: 'flask-integration',
     configureServer(server) {
       ensureFlask();
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         const url = req.url || '/';
         if (
           url.startsWith('/@') ||
@@ -110,7 +110,7 @@ function flaskIntegrationPlugin(): Plugin {
           return next();
         }
 
-        ensureFlask();
+        await ensureFlask();
 
         const forwardHeaders = filterHopByHop(req.headers);
         forwardHeaders.host = '127.0.0.1:5000';

@@ -79,10 +79,15 @@ def _ensure_runtime_dependencies():
     if missing:
         print(f'📦 [Auto-Install] Installing missing python packages: {missing}...')
         try:
-            subprocess.run([sys.executable, '-m', 'pip', 'install', *missing, '--no-warn-script-location'], check=True)
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--break-system-packages', *missing, '--no-warn-script-location'], check=True)
             print('✅ Packages installed successfully.')
         except Exception as e:
-            print(f'⚠️ Warning during auto-install: {e}')
+            print(f'⚠️ Warning during auto-install via pip: {e}')
+            try:
+                subprocess.run(['apt-get', 'update'], check=False)
+                subprocess.run(['apt-get', 'install', '-y', 'python3-requests', 'python3-pip'], check=False)
+            except Exception as e2:
+                print(f'⚠️ Warning during apt fallback: {e2}')
 
 _ensure_runtime_dependencies()
 import json
