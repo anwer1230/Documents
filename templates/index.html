@@ -6136,8 +6136,13 @@
     const _isStandalone = window.matchMedia('(display-mode: standalone)').matches
                        || window.navigator.standalone === true;
 
-    // تسجيل Service Worker
-    if ('serviceWorker' in navigator) {
+    // إلغاء Service Worker فوراً إذا كان التطبيق يعمل داخل iFrame لتجنب حظر الجلسات أو الكوكيز
+    const _isInIframe = window.self !== window.top;
+    if (_isInIframe && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+            for (let reg of regs) { reg.unregister(); }
+        }).catch(function() {});
+    } else if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
             navigator.serviceWorker.register('/sw.js', {scope:'/'})
                 .then(function(reg) {
@@ -6238,7 +6243,7 @@
                 navigator.serviceWorker.getRegistration().then(function(registration) {
                     if (registration && registration.waiting) {
                         registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-                        window.location.reload();
+                        if (typeof showAlert === 'function') showAlert('✅ تم تحديث كاش التطبيق بنجاح', 'success');
                     }
                 });
             }
@@ -7590,7 +7595,9 @@ async function executeResetAll() {
         bootstrap.Modal.getInstance(document.getElementById('resetAllModal')).hide();
         if (data.success) {
             showAlert('success', '✅ ' + (data.message || 'تم إعادة تعيين جميع الجلسات'));
-            setTimeout(() => location.reload(), 1800);
+            if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
+            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         } else {
             showAlert('danger', '❌ ' + (data.message || 'حدث خطأ'));
         }
@@ -7614,7 +7621,9 @@ async function executeResetSingle() {
         bootstrap.Modal.getInstance(document.getElementById('resetSingleModal')).hide();
         if (data.success) {
             showAlert('success', '✅ ' + (data.message || 'تم إعادة تعيين الحساب'));
-            setTimeout(() => location.reload(), 1500);
+            if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
+            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         } else {
             showAlert('danger', '❌ ' + (data.message || 'حدث خطأ'));
         }
@@ -7733,10 +7742,14 @@ async function executeResetSingle() {
         s.on('force_full_reset', function(data) {
             if (typeof showAlert === 'function')
                 showAlert('warning', '🔄 ' + (data.message || 'تم إعادة تعيين الجلسات'));
-            setTimeout(() => location.reload(), 1500);
+            if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
+            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         });
         s.on('user_reset_done', function() {
-            setTimeout(() => location.reload(), 1200);
+            if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
+            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         });
 
         // ── دفع السجلات الحية إلى نافذة سجلات النظام ──
@@ -8935,14 +8948,13 @@ async function adminCheckForUpdate() {
         }
         await reg.update();
         if (reg.waiting) {
-            if (typeof showAlert === 'function') showAlert('✅ تحديث جديد متاح — سيتم التطبيق الآن', 'success');
-            setTimeout(() => { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); setTimeout(() => location.reload(), 500); }, 1000);
+            if (typeof showAlert === 'function') showAlert('✅ تحديث جديد متاح — تم تفعيل التحديث بنجاح', 'success');
+            reg.waiting.postMessage({ type: 'SKIP_WAITING' });
         } else if (reg.installing) {
             if (typeof showAlert === 'function') showAlert('🔄 جارٍ تثبيت التحديث...', 'info');
             reg.installing.addEventListener('statechange', function(e) {
                 if (e.target.state === 'installed') {
-                    if (typeof showAlert === 'function') showAlert('✅ تم تثبيت التحديث — سيتم إعادة التحميل', 'success');
-                    setTimeout(() => location.reload(), 1500);
+                    if (typeof showAlert === 'function') showAlert('✅ تم تثبيت التحديث بنجاح', 'success');
                 }
             });
         } else {
@@ -10949,7 +10961,11 @@ async function deleteDynUser(user_id) {
             body: JSON.stringify({user_id})
         });
         const d = await r.json();
-        if (d.success) { showToast('✅ ' + d.message); setTimeout(() => location.reload(), 800); }
+        if (d.success) {
+            showToast('✅ ' + d.message);
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
+            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+        }
         else showToast('❌ ' + d.message);
     } catch(e) { showToast('❌ خطأ في الاتصال'); }
 }

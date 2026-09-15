@@ -72,37 +72,60 @@ function ensureFlask(): Promise<boolean> {
   });
 }
 
+const HOP_BY_HOP_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailers',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+function filterHopByHop(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const clean: http.OutgoingHttpHeaders = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
 function flaskIntegrationPlugin(): Plugin {
   return {
     name: 'flask-integration',
     configureServer(server) {
       ensureFlask();
-      server.middlewares.use(async (req, res, next) => {
+      server.middlewares.use((req, res, next) => {
         const url = req.url || '/';
         if (
           url.startsWith('/@') ||
           url.startsWith('/src/') ||
           url.startsWith('/node_modules/') ||
-          url.startsWith('/__vite')
+          url.startsWith('/__vite') ||
+          url.startsWith('/socket.io')
         ) {
           return next();
         }
 
-        await ensureFlask();
+        ensureFlask();
+
+        const forwardHeaders = filterHopByHop(req.headers);
+        forwardHeaders.host = '127.0.0.1:5000';
 
         const options: http.RequestOptions = {
           hostname: '127.0.0.1',
           port: 5000,
           path: url,
           method: req.method,
-          headers: {
-            ...req.headers,
-            host: '127.0.0.1:5000',
-          },
+          headers: forwardHeaders,
         };
 
         const proxyReq = http.request(options, (proxyRes) => {
-          res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+          const responseHeaders = filterHopByHop(proxyRes.headers);
+          res.writeHead(proxyRes.statusCode || 200, responseHeaders);
           proxyRes.pipe(res, { end: true });
         });
 
@@ -128,7 +151,6 @@ function flaskIntegrationPlugin(): Plugin {
   <meta charset="utf-8">
   <title>مركز سرعة انجاز - جاري تشغيل الخادم</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="refresh" content="2">
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #0b1426; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }
     .box { padding: 32px; background: rgba(255,255,255,0.05); border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); max-width: 400px; width: 90%; }
@@ -137,6 +159,16 @@ function flaskIntegrationPlugin(): Plugin {
     h2 { margin: 0 0 8px; font-size: 1.25rem; }
     p { margin: 0; color: rgba(255,255,255,0.7); font-size: 0.95rem; }
   </style>
+  <script>
+    let poll = setInterval(function() {
+      fetch('/api/system_health').then(function(r) {
+        if (r.ok) {
+          clearInterval(poll);
+          window.location.replace(window.location.href);
+        }
+      }).catch(function() {});
+    }, 1500);
+  </script>
 </head>
 <body>
   <div class="box">

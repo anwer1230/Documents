@@ -3,6 +3,8 @@ let socket = null;
 let globalDeferredPrompt = null;
 let __lastClickedEl = null;
 let uploadedImages = []; // {data, name, type}
+let loginWaitTimer = null;
+let loginPollTimer = null;
 
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('button, .btn, [role="button"], a');
@@ -11,12 +13,21 @@ document.addEventListener('click', (e) => {
 
 // ============== Helpers ==============
 async function postJSON(url, body, retries = 2) {
+  const installId = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId)
+    ? globalCurrentUserId
+    : (localStorage.getItem('install_id') || '');
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
+      if (installId) headers['X-Install-ID'] = installId;
+
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
+        headers: headers,
+        credentials: 'include',
         body: JSON.stringify(body || {})
       });
       const txt = await res.text();
@@ -30,6 +41,10 @@ async function postJSON(url, body, retries = 2) {
       const trimmed = txt.trim();
       if (trimmed.startsWith('<') || trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<!doctype')) {
         if (trimmed.includes("403. That’s an error") || trimmed.includes("That's an error") || res.status === 403) {
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
           return {
             success: false,
             message: 'خطأ 403 (غير مصرح): تعذر الوصول إلى الخادم. يرجى التأكد من تسجيل الدخول أو استخدام الرابط المشارك المعتمد للمنصة.'
@@ -165,7 +180,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginForm = document.getElementById('loginForm');
   const verifyForm = document.getElementById('verifyForm');
   const passwordForm = document.getElementById('passwordForm');
-  let loginWaitTimer = null;
 
   if (loginForm) {
     loginForm.addEventListener('submit', async (e) => {
@@ -178,14 +192,65 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const r = await postJSON('/api/save_login', { phone, password, user_id: globalCurrentUserId });
         if (r.pending) {
-          // الاتصال يعمل في الخلفية — سنستقبل النتيجة عبر socket.io
+          // الاتصال يعمل في الخلفية — سنستقبل النتيجة عبر socket.io أو الاستعلام المتوازي
           showAlert('🔄 جارِ الاتصال بتيليجرام...', 'info');
-          // لا نترك الزر معلقاً إذا انقطع Socket.IO أو لم تصل نتيجة الخلفية.
           clearTimeout(loginWaitTimer);
+          if (loginPollTimer) clearInterval(loginPollTimer);
+
           loginWaitTimer = setTimeout(() => {
+            if (loginPollTimer) clearInterval(loginPollTimer);
             setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
             showAlert('⏱️ انتهت مهلة الاتصال بتيليجرام. تحقق من الشبكة وحاول مرة أخرى.', 'danger');
           }, 70000);
+
+          // صمام أمان مزدوج: استعلام فوري متوازٍ كل 1.5 ثانية لمعالجة حالة الجلسة
+          loginPollTimer = setInterval(async () => {
+            try {
+              const uid = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId) ? globalCurrentUserId : '';
+              const sRes = await fetch(`/api/get_login_status?user_id=${encodeURIComponent(uid)}&t=${Date.now()}`, {
+                credentials: 'include',
+                headers: { 'X-Install-ID': uid }
+              });
+              if (sRes.ok) {
+                const sData = await sRes.json();
+                if (sData.awaiting_code) {
+                  clearInterval(loginPollTimer);
+                  loginPollTimer = null;
+                  clearTimeout(loginWaitTimer);
+                  setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
+                  if (verifyForm) {
+                    verifyForm.style.display = 'block';
+                    const vc = document.getElementById('verificationCode');
+                    if (vc) vc.focus();
+                  }
+                  showAlert('📱 تم استلام كود التحقق — يرجى إدخاله', 'info');
+                } else if (sData.awaiting_password) {
+                  clearInterval(loginPollTimer);
+                  loginPollTimer = null;
+                  clearTimeout(loginWaitTimer);
+                  setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
+                  if (verifyForm) verifyForm.style.display = 'none';
+                  if (passwordForm) {
+                    passwordForm.style.display = 'block';
+                    const pwd = document.getElementById('twoFactorPassword');
+                    if (pwd) pwd.focus();
+                  }
+                  showAlert('🔐 يرجى إدخال كلمة المرور ذات الخطوتين', 'info');
+                } else if (sData.logged_in) {
+                  clearInterval(loginPollTimer);
+                  loginPollTimer = null;
+                  clearTimeout(loginWaitTimer);
+                  setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
+                  updateLoggedInUI(true);
+                  fetchLoginStatus();
+                  if (typeof renderAccountsBar === 'function') renderAccountsBar();
+                  showAlert('✅ تم تسجيل الدخول بنجاح', 'success');
+                }
+              }
+            } catch (err) {
+              // تجاهل الخطأ العابر أثناء الاستعلام الدوري
+            }
+          }, 1500);
         } else {
           showAlert(r.message || '', r.success ? 'success' : 'danger');
           setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
@@ -194,7 +259,9 @@ document.addEventListener('DOMContentLoaded', () => {
               verifyForm.style.display = 'block';
               document.getElementById('verificationCode').focus();
             } else {
-              updateLoggedInUI();
+              updateLoggedInUI(true);
+              fetchLoginStatus();
+              if (typeof renderAccountsBar === 'function') renderAccountsBar();
             }
           }
         }
@@ -222,10 +289,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('twoFactorPassword').focus();
           } else {
             verifyForm.style.display = 'none';
-            updateLoggedInUI();
-            // إعادة تحميل الصفحة لإظهار شريط الحسابات مع زر "إضافة حساب"
-            showAlert((r.message || '✅ تم تسجيل الدخول') + ' — جارِ تحديث الصفحة...', 'success');
-            setTimeout(() => location.reload(), 1600);
+            updateLoggedInUI(true);
+            fetchLoginStatus();
+            if (typeof renderAccountsBar === 'function') renderAccountsBar();
+            showAlert(r.message || '✅ تم تسجيل الدخول بنجاح', 'success');
           }
         }
       } catch (err) {
@@ -248,9 +315,10 @@ document.addEventListener('DOMContentLoaded', () => {
         showAlert(r.message || '', r.success ? 'success' : 'danger');
         if (r.success) {
           passwordForm.style.display = 'none';
-          showAlert((r.message || '✅ تم تسجيل الدخول') + ' — جارِ تحديث الصفحة...', 'success');
-          // إعادة تحميل الصفحة لإظهار شريط الحسابات مع زر "إضافة حساب"
-          setTimeout(() => location.reload(), 1600);
+          updateLoggedInUI(true);
+          fetchLoginStatus();
+          if (typeof renderAccountsBar === 'function') renderAccountsBar();
+          showAlert(r.message || '✅ تم تسجيل الدخول بنجاح', 'success');
         }
       } catch (err) {
         showAlert('خطأ: ' + err.message, 'danger');
@@ -277,7 +345,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!confirm('هل أنت متأكد من تسجيل الخروج؟')) return;
       const r = await postJSON('/api/user_logout', {});
       showAlert(r.message || '', r.success ? 'success' : 'danger');
-      if (r.success) setTimeout(() => location.reload(), 800);
+      if (r.success) {
+        updateLoggedInUI(false);
+        fetchLoginStatus();
+        if (typeof renderAccountsBar === 'function') renderAccountsBar();
+      }
     });
   }
 
@@ -708,7 +780,7 @@ async function fetchLoginStatus() {
 // ============== Socket.IO ==============
 function initSocket() {
   if (typeof io === 'undefined') return;
-  socket = io({ transports: ['polling'], upgrade: false });
+  socket = io({ transports: ['websocket', 'polling'], upgrade: true });
   window.socket = socket;
   socket.on('connect', () => appendLog('🔌 متصل بالسيرفر'));
   socket.on('disconnect', () => appendLog('⚠️ انقطع الاتصال'));
@@ -755,6 +827,10 @@ function initSocket() {
   // ── نتيجة تسجيل الدخول (تصل بعد اكتمال الاتصال في الخلفية) ──
   socket.on('login_result', d => {
     clearTimeout(loginWaitTimer);
+    if (loginPollTimer) {
+      clearInterval(loginPollTimer);
+      loginPollTimer = null;
+    }
     const btn = document.getElementById('loginBtn');
     const verifyForm = document.getElementById('verifyForm');
     setLoading(btn, false, '<i class="fas fa-sign-in-alt me-2"></i>تسجيل الدخول');
@@ -766,9 +842,10 @@ function initSocket() {
         if (vc) vc.focus();
       }
     } else if (d.status === 'success') {
-      showAlert((d.message || '✅ تم تسجيل الدخول') + ' — جارِ تحديث الصفحة...', 'success');
-      // إعادة تحميل الصفحة لإظهار شريط الحسابات مع زر "إضافة حساب"
-      setTimeout(() => location.reload(), 1600);
+      showAlert(d.message || '✅ تم تسجيل الدخول بنجاح', 'success');
+      updateLoggedInUI(true);
+      fetchLoginStatus();
+      if (typeof renderAccountsBar === 'function') renderAccountsBar();
     } else {
       showAlert(d.message || '❌ فشل تسجيل الدخول', 'danger');
     }

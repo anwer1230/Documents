@@ -169,7 +169,7 @@ except ImportError:
     pdfplumber = None
     fitz = None
 
-from flask import Flask, session, request, render_template, jsonify, redirect, send_file, abort, make_response
+from flask import Flask, session, request, render_template, jsonify, redirect, send_file, abort, make_response, Response
 from install_tracker import track_installation, register_admin_routes
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from telethon import TelegramClient, events, functions
@@ -433,11 +433,32 @@ try:
 except Exception:
     pass
 
+@app.before_request
+def _handle_options_preflight():
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin") or "*"
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
+            "Access-Control-Allow-Headers": request.headers.get(
+                "Access-Control-Request-Headers",
+                "Content-Type, Authorization, X-Requested-With, Range, X-Install-ID, Accept"
+            ),
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "86400",
+        }
+        return Response("", status=200, headers=headers)
+
 @app.after_request
 def _handle_cors_and_security(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range"
+    origin = request.headers.get("Origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, X-Install-ID, Accept"
     if "X-Frame-Options" in response.headers:
         del response.headers["X-Frame-Options"]
     return response
@@ -6099,10 +6120,17 @@ def api_get_stats():
     return jsonify({"sent": 0, "errors": 0})
 
 @app.route("/api/get_login_status", methods=["GET"])
+@app.route("/api/login_status", methods=["GET"])
 def api_get_login_status():
-    user_id = session.get('user_id')
+    user_id = request.args.get('user_id') or session.get('user_id') or request.headers.get('X-Install-ID')
     if not user_id:
-        return jsonify({"logged_in": False, "connected": False})
+        return jsonify({
+            "logged_in": False,
+            "connected": False,
+            "awaiting_code": False,
+            "awaiting_password": False,
+            "is_running": False
+        }), 200
 
     with USERS_LOCK:
         if user_id in USERS:
@@ -6110,6 +6138,18 @@ def api_get_login_status():
             client_manager = user_data.get('client_manager')
             authenticated = user_data.get('authenticated', False)
             connected = user_data.get('connected', False)
+            awaiting_code = user_data.get('awaiting_code', False)
+            awaiting_password = user_data.get('awaiting_password', False)
+
+            if client_manager:
+                if hasattr(client_manager, 'awaiting_code') and client_manager.awaiting_code:
+                    awaiting_code = True
+                if hasattr(client_manager, 'awaiting_password') and client_manager.awaiting_password:
+                    awaiting_password = True
+                if hasattr(client_manager, 'authenticated') and client_manager.authenticated:
+                    authenticated = True
+                if hasattr(client_manager, 'connected') and client_manager.connected:
+                    connected = True
 
             if not authenticated and 'settings' in user_data and 'phone' in user_data['settings']:
                 session_file = os.path.join(SESSIONS_DIR, f"{user_id}_session.session")
@@ -6122,10 +6162,18 @@ def api_get_login_status():
             return jsonify({
                 "logged_in": authenticated, 
                 "connected": connected,
+                "awaiting_code": awaiting_code,
+                "awaiting_password": awaiting_password,
                 "is_running": user_data.get('is_running', False)
-            })
+            }), 200
 
-    return jsonify({"logged_in": False, "connected": False, "is_running": False})
+    return jsonify({
+        "logged_in": False,
+        "connected": False,
+        "awaiting_code": False,
+        "awaiting_password": False,
+        "is_running": False
+    }), 200
 
 @app.route("/api/get_user_info", methods=["GET"])
 def api_get_user_info():
@@ -14346,7 +14394,7 @@ def admin_dashboard():
       await fetch('/admin/api/user/'+slot,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:'block',blocked:blocked})});loadUsers();
     }
-    async function doLogout(){await fetch('/admin/api/logout',{method:'POST'});location.reload();}
+    async function doLogout(){await fetch('/admin/api/logout',{method:'POST'});window.location.replace('/admin/login');}
     function registerBio(){
       let did=localStorage.getItem('deviceId');
       if(!did){did=crypto.randomUUID?crypto.randomUUID():'dev-'+Date.now();localStorage.setItem('deviceId',did);}
@@ -15047,7 +15095,7 @@ def admin_dashboard():
           var countdown=10;
           var iv=setInterval(function(){ countdown--;
             statusDiv.innerHTML='<i class="fas fa-check-circle me-2"></i> ✅ تم التحديث! إعادة تحميل بعد '+countdown+' ثوانٍ';
-            if(countdown<=0){clearInterval(iv);window.location.reload();}
+            if(countdown<=0){clearInterval(iv);statusDiv.innerHTML='<i class="fas fa-check-circle me-2"></i> ✅ اكتمل التحديث بنجاح';}
           },1000);
         }else{
           progressBar.className='progress-bar bg-danger'; statusDiv.className='alert alert-danger';
