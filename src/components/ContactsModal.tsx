@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, UserPlus, Search, Phone, User } from 'lucide-react';
 import { TelegramUser } from '../types';
+import { csrfFetch } from '../services/csrfFetch';
 
 interface ContactsModalProps {
   isOpen: boolean;
@@ -56,6 +57,21 @@ export const ContactsModal: React.FC<ContactsModalProps> = ({
   const [contacts, setContacts] = useState<TelegramUser[]>(INITIAL_CONTACTS);
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      csrfFetch('/api/contacts')
+        .then((res) => res.json())
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setContacts(data);
+          } else if (Array.isArray(data?.contacts) && data.contacts.length > 0) {
+            setContacts(data.contacts);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
 
   // New Contact fields
   const [firstName, setFirstName] = useState('');

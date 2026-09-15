@@ -6,6 +6,8 @@
  * and background synchronizations while preserving full TypeScript safety.
  */
 
+import { csrfFetch } from './csrfFetch.js';
+
 export interface ApiResponse<T = any> {
   success: boolean;
   data?: T;
@@ -52,7 +54,7 @@ export async function request<T = any>(endpoint: string, options: RequestOptions
   const id = setTimeout(() => controller.abort(), timeout);
 
   try {
-    const res = await fetch(url, {
+    const res = await csrfFetch(url, {
       ...fetchOptions,
       headers: {
         'Content-Type': 'application/json',
@@ -394,7 +396,175 @@ export const Api = {
 // Unified API Surface Export
 // ============================================================================
 
+
+// ============================================================================
+// Gemini AI Types & Interfaces
+// ============================================================================
+
+export interface GeminiGenerateOptions {
+  prompt: string;
+  systemInstruction?: string;
+  model?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+}
+
+export interface GeminiGenerateResponse {
+  success: boolean;
+  text: string;
+  model: string;
+  timestamp: string;
+  error?: string;
+  message?: string;
+}
+
+export interface GeminiStatusResponse {
+  success: boolean;
+  configured: boolean;
+  hasGeminiApiKey?: boolean;
+  defaultModel?: string;
+  availableModels?: string[];
+  models?: string[];
+}
+
+export interface GeminiSummarizeMessage {
+  id?: string | number;
+  senderName?: string;
+  text?: string;
+  timestamp?: string;
+  out?: boolean;
+  isOutgoing?: boolean;
+  media?: { type?: string };
+}
+
+export interface GeminiSummarizeOptions {
+  chatId: string;
+  chatTitle?: string;
+  messages?: GeminiSummarizeMessage[];
+  language?: "ar" | "en" | string;
+  sessionString?: string;
+  phone?: string;
+}
+
+export interface GeminiSummarizeResponse {
+  success: boolean;
+  summary: string;
+  messageCount: number;
+  model?: string;
+  chatTitle?: string;
+  timestamp?: string;
+  error?: string;
+  message?: string;
+}
+
+// ============================================================================
+// Gemini AI API Module
+// ============================================================================
+
+export const geminiApi = {
+  async getStatus(): Promise<GeminiStatusResponse> {
+    return request<GeminiStatusResponse>("/api/gemini/status", {
+      method: "GET",
+    });
+  },
+
+  async generateContent(options: GeminiGenerateOptions): Promise<GeminiGenerateResponse> {
+    const {
+      prompt,
+      systemInstruction,
+      model = "gemini-3.8-flash",
+      temperature,
+      maxOutputTokens,
+    } = options;
+
+    return request<GeminiGenerateResponse>("/api/gemini/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt,
+        systemInstruction,
+        model,
+        temperature,
+        maxOutputTokens,
+      }),
+    });
+  },
+
+  async summarizeChat(options: GeminiSummarizeOptions): Promise<GeminiSummarizeResponse> {
+    const {
+      chatId,
+      chatTitle,
+      messages = [],
+      language = "ar",
+      sessionString,
+      phone,
+    } = options;
+
+    return request<GeminiSummarizeResponse>("/api/telegram/chat/summarize", {
+      method: "POST",
+      body: JSON.stringify({
+        chatId,
+        chatTitle,
+        messages,
+        language,
+        sessionString,
+        phone,
+      }),
+    });
+  },
+
+  async translateText(text: string, targetLanguage: string = "ar", sourceLanguage?: string): Promise<string> {
+    const prompt = sourceLanguage
+      ? `Translate the following text from ${sourceLanguage} to ${targetLanguage}:\n\n"${text}"\n\nReturn ONLY the translation without quotes or commentary.`
+      : `Translate the following text to ${targetLanguage}:\n\n"${text}"\n\nReturn ONLY the translation without quotes or commentary.`;
+
+    const response = await this.generateContent({
+      prompt,
+      systemInstruction: "You are an accurate, high-fidelity real-time language translator. Return only the requested translation.",
+      model: "gemini-3.8-flash",
+      temperature: 0.2,
+    });
+
+    return (response.text || "").trim();
+  },
+
+  async suggestSmartReplies(
+    lastMessage: string,
+    chatContext?: string,
+    language: "ar" | "en" = "ar"
+  ): Promise<string[]> {
+    const isArabic = language === "ar";
+    const prompt = isArabic
+      ? `بناءً على الرسالة الأخيرة في محادثة تيليجرام: "${lastMessage}"${chatContext ? `\nسياق المحادثة: "${chatContext}"` : ""}
+اقترح 3 ردود سريعة ومناسبة (كل رد جملة قصيرة واحدة).
+أرجع الردود بصيغة قائمة مفصولة بأسطر جديدة فقط.`
+      : `Based on the latest Telegram message: "${lastMessage}"${chatContext ? `\nContext: "${chatContext}"` : ""}
+Suggest 3 concise, natural quick replies (one short sentence each).
+Return the replies as a plain line-separated list only.`;
+
+    try {
+      const response = await this.generateContent({
+        prompt,
+        systemInstruction: "You are a smart chat assistant generating quick, contextual reply suggestions. Return only the 3 suggestions, one per line.",
+        model: "gemini-3.8-flash",
+        temperature: 0.4,
+      });
+
+      const lines = (response.text || "")
+        .split("\n")
+        .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
+        .filter((l) => l.length > 0 && l.length < 120);
+
+      return lines.slice(0, 3);
+    } catch {
+      return isArabic
+        ? ["تمام، شكراً لك!", "سأراجع ذلك قريباً.", "حسناً، متفقين."]
+        : ["Sounds good, thanks!", "I will check it soon.", "Got it, agreed!"];
+    }
+  },
+};
+
 export const api = {
+  gemini: geminiApi,
   request,
   mtproto: mtprotoApi,
   privacy: privacyApi,

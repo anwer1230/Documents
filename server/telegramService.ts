@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { LogLevel } from 'telegram/extensions/Logger.js';
+import { NewMessage } from 'telegram/events/index.js';
 import fs from 'fs';
 import path from 'path';
 import { ensureTelegramPatch } from './patchTelegram.js';
@@ -12,6 +13,26 @@ ensureTelegramPatch();
 /**
  * FloodWaitQueue: Resilient rate-limiter and exponential backoff queue for MTProto FLOOD_WAIT
  */
+/**
+ * Detects if an error indicates that an MTProto session is revoked, unregistered, duplicated or expired
+ */
+export function isSessionRevokedOrDuplicatedError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message || err?.errorMessage || err || "").toUpperCase();
+  return (
+    msg.includes("SESSION_REVOKED") ||
+    msg.includes("AUTH_KEY_UNREGISTERED") ||
+    msg.includes("AUTH_KEY_DUPLICATED") ||
+    msg.includes("SESSION_EXPIRED") ||
+    msg.includes("USER_DEACTIVATED") ||
+    msg.includes("401") ||
+    err?.code === 401 ||
+    err?.errorMessage === "SESSION_REVOKED" ||
+    err?.errorMessage === "AUTH_KEY_UNREGISTERED" ||
+    err?.errorMessage === "AUTH_KEY_DUPLICATED"
+  );
+}
+
 export class FloodWaitQueue {
   public static async executeWithFloodRetry<T>(
     key: string,
@@ -55,7 +76,7 @@ export const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID || 22043994);
 export const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
 export const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BE36BmheMRx2GxzjWpp_4bmXq_hZg55bP_M_vNVysfnjTxns9VCI0hiCHgnRBx0URe_LoxWaAgrS9G9QZbQhOh8';
 export const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '13NU1_GmeL7bDQcVtlFyuKqsnnsX3XkOyE--2rAQJw4';
-export const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:anwrfwad178@gmail.com';
+export const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:anwerfoud80@gmail.com';
 
 export const MAX_TELEGRAM_ACCOUNTS = 6;
 
@@ -402,32 +423,216 @@ export class TelegramService {
         }
       } catch (err: any) {
         console.warn(`[MTProto Updates Engine] Warning restoring session ${token}:`, err?.message || err);
-        if (
-          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-          err?.code === 401
-        ) {
+        if (isSessionRevokedOrDuplicatedError(err)) {
           this.purgeStaleSession(token);
         }
       }
     }
   }
 
+  private static recentHandledMessageIds = new Map<string, number>();
+
+  /**
+   * Instantaneous NewMessage Event Handler (GramJS NewMessage)
+   * High-priority message processor with immediate entity resolution
+   */
+  public static async handleNewMessageEvent(sessionToken: string, event: any, client: TelegramClient) {
+    if (!TelegramService.onUpdateCallback || !event) return;
+
+    const m = event.message;
+    if (!m) return;
+
+    const msgIdStr = m.id ? String(m.id) : '';
+    const rawPeer = m.peerId || event.chatId;
+    const peerId =
+      (rawPeer?.channelId ? `-100${rawPeer.channelId}` : undefined) ||
+      (rawPeer?.chatId ? `-${rawPeer.chatId}` : undefined) ||
+      (rawPeer?.userId ? rawPeer.userId.toString() : undefined) ||
+      (event.chatId ? String(event.chatId) : undefined) ||
+      extractPeerId(rawPeer || 'user');
+
+    const dedupKey = `${sessionToken}_${msgIdStr}_${peerId}`;
+    const now = Date.now();
+    if (this.recentHandledMessageIds.has(dedupKey)) {
+      const ts = this.recentHandledMessageIds.get(dedupKey)!;
+      if (now - ts < 15000) return;
+    }
+    this.recentHandledMessageIds.set(dedupKey, now);
+
+    // Prune cache periodically
+    if (this.recentHandledMessageIds.size > 2000) {
+      for (const [k, v] of this.recentHandledMessageIds.entries()) {
+        if (now - v > 30000) this.recentHandledMessageIds.delete(k);
+      }
+    }
+
+    const isOut = Boolean(m.out);
+    const s = activeSessions.get(sessionToken);
+
+    // Resolve sender entity directly from message or event
+    let senderEntity: any = m.sender || m._sender;
+    if (!senderEntity && typeof m.getSender === 'function') {
+      try {
+        senderEntity = await m.getSender();
+      } catch (_) {}
+    }
+
+    const senderIdRaw = m.senderId
+      ? extractPeerId(m.senderId)
+      : m.fromId
+      ? extractPeerId(m.fromId)
+      : isOut
+      ? 'me'
+      : peerId;
+
+    if (!senderEntity && senderIdRaw && s && senderIdRaw !== 'me') {
+      senderEntity = s.fullEntityCache?.get(senderIdRaw) || s.entityCache?.get(senderIdRaw);
+    }
+
+    if (!senderEntity && client && senderIdRaw && senderIdRaw !== 'me' && senderIdRaw !== 'user') {
+      try {
+        senderEntity = await client.getEntity(senderIdRaw);
+      } catch (_) {}
+    }
+
+    if (senderEntity && s && senderIdRaw) {
+      s.fullEntityCache?.set(senderIdRaw, senderEntity);
+      s.entityCache?.set(senderIdRaw, senderEntity);
+    }
+
+    let senderName = '';
+    if (isOut) {
+      senderName = 'أنا';
+    } else if (senderEntity) {
+      const parts = [senderEntity.firstName, senderEntity.lastName].filter(Boolean);
+      if (parts.length > 0) {
+        senderName = parts.join(' ').trim();
+      } else if (senderEntity.title) {
+        senderName = senderEntity.title;
+      } else if (senderEntity.username) {
+        senderName = '@' + senderEntity.username;
+      }
+    }
+
+    if (!senderName && m.postAuthor) {
+      senderName = m.postAuthor;
+    }
+
+    // In a 1-to-1 private chat, incoming sender is the chat contact
+    if (!senderName && !isOut && (!peerId.startsWith('-') || event.isPrivate)) {
+      try {
+        const chatEntity = typeof event.getChat === 'function' ? await event.getChat() : null;
+        if (chatEntity) {
+          const parts = [chatEntity.firstName, chatEntity.lastName].filter(Boolean);
+          if (parts.length > 0) senderName = parts.join(' ').trim();
+          else if (chatEntity.title) senderName = chatEntity.title;
+          else if (chatEntity.username) senderName = '@' + chatEntity.username;
+        }
+      } catch (_) {}
+    }
+
+    if (!senderName) {
+      senderName = isOut ? 'أنا' : 'مستخدم';
+    }
+
+    let senderAvatar: string | undefined = undefined;
+    const finalSenderId = isOut ? 'me' : (senderIdRaw || peerId);
+    const photoObj = senderEntity?.photo || m.sender?.photo;
+    const hasPhoto = Boolean(
+      photoObj &&
+      photoObj.className !== 'UserProfilePhotoEmpty' &&
+      photoObj.className !== 'ChatPhotoEmpty'
+    );
+    if (hasPhoto && finalSenderId && finalSenderId !== 'me') {
+      senderAvatar = `/api/telegram/avatar/${encodeURIComponent(finalSenderId)}?token=${encodeURIComponent(sessionToken)}`;
+    }
+
+    const text = m.message || m.text || '';
+    TelegramService.onUpdateCallback(sessionToken, {
+      type: 'new_message',
+      className: 'UpdateNewMessage',
+      peerId,
+      message: {
+        id: m.id?.toString() || 'msg_' + Date.now(),
+        chatId: peerId,
+        senderId: finalSenderId,
+        senderName,
+        senderAvatar,
+        text,
+        timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
+        isOut,
+        status: isOut ? 'sent' : 'received',
+        replyTo: m.replyTo?.replyToMsgId ? { id: m.replyTo.replyToMsgId.toString() } : undefined,
+        media: m.media ? sanitizeData(m.media) : undefined,
+      },
+    });
+  }
+
   /**
    * Continuous UpdatesHandler matching Telegram Web K specification
    * Unpacks recursive Updates containers, new messages, reads, edits, deletes, typing indicators, and reactions
    */
-  public static handleMtprotoUpdate(sessionToken: string, update: any, client: TelegramClient) {
+  public static handleMtprotoUpdate(
+    sessionToken: string,
+    update: any,
+    client: TelegramClient,
+    inheritedUsers?: any[],
+    inheritedChats?: any[]
+  ) {
     if (!TelegramService.onUpdateCallback || !update) return;
 
     try {
       const className = update.className || update.constructor?.name || '';
+      const s = activeSessions.get(sessionToken);
+
+      // Seed entity cache from top-level updates
+      if (s) {
+        if (!s.fullEntityCache) s.fullEntityCache = new Map();
+        if (!s.entityCache) s.entityCache = new Map();
+
+        const allUsers = [
+          ...(Array.isArray(update.users) ? update.users : []),
+          ...(Array.isArray(inheritedUsers) ? inheritedUsers : []),
+        ];
+        for (const u of allUsers) {
+          if (!u) continue;
+          const uid = extractPeerId(u.id || u);
+          if (uid) {
+            s.fullEntityCache.set(uid, u);
+            s.entityCache.set(uid, u);
+            if (u.username) s.fullEntityCache.set(u.username.toLowerCase(), u);
+          }
+        }
+
+        const allChats = [
+          ...(Array.isArray(update.chats) ? update.chats : []),
+          ...(Array.isArray(inheritedChats) ? inheritedChats : []),
+        ];
+        for (const c of allChats) {
+          if (!c) continue;
+          const cid = extractPeerId(c.id || c);
+          if (cid) {
+            s.fullEntityCache.set(cid, c);
+            s.fullEntityCache.set(`-${cid}`, c);
+            s.fullEntityCache.set(`-100${cid}`, c);
+            s.entityCache.set(cid, c);
+            if (c.username) s.fullEntityCache.set(c.username.toLowerCase(), c);
+          }
+        }
+
+        if (update._entities instanceof Map) {
+          for (const [key, ent] of update._entities.entries()) {
+            s.fullEntityCache.set(String(key), ent);
+            s.entityCache.set(String(key), ent);
+          }
+        }
+      }
 
       // 1. Unpack bulk updates (Updates or UpdatesCombined container)
       if (className === 'Updates' || className === 'UpdatesCombined') {
         if (Array.isArray(update.updates)) {
           for (const subUpdate of update.updates) {
-            this.handleMtprotoUpdate(sessionToken, subUpdate, client);
+            this.handleMtprotoUpdate(sessionToken, subUpdate, client, update.users, update.chats);
           }
         }
         return;
@@ -435,7 +640,7 @@ export class TelegramService {
 
       // 2. Unpack UpdateShort
       if (className === 'UpdateShort' && update.update) {
-        this.handleMtprotoUpdate(sessionToken, update.update, client);
+        this.handleMtprotoUpdate(sessionToken, update.update, client, inheritedUsers, inheritedChats);
         return;
       }
 
@@ -447,36 +652,48 @@ export class TelegramService {
         className === 'UpdateShortChatMessage'
       ) {
         const msg = update.message || update;
-        const text = msg.message || msg.text || '';
+        const msgIdStr = msg.id ? String(msg.id) : '';
         const rawPeer = msg.peerId;
         const peerId =
-          rawPeer?.userId?.toString() ||
-          rawPeer?.channelId?.toString() ||
-          rawPeer?.chatId?.toString() ||
-          msg.chatId?.toString() ||
-          msg.fromId?.userId?.toString() ||
-          msg.fromId?.channelId?.toString() ||
-          msg.userId?.toString() ||
-          'user';
+          (rawPeer?.channelId ? `-100${rawPeer.channelId}` : undefined) ||
+          (rawPeer?.chatId ? `-${rawPeer.chatId}` : undefined) ||
+          (rawPeer?.userId ? rawPeer.userId.toString() : undefined) ||
+          (msg.chatId ? `-${msg.chatId}` : undefined) ||
+          (msg.userId ? msg.userId.toString() : undefined) ||
+          extractPeerId(rawPeer || msg.fromId || 'user');
 
-        const isOut = !!msg.out;
-        const senderId = isOut
-          ? 'me'
-          : (msg.fromId?.userId?.toString() || msg.fromId?.channelId?.toString() || msg.userId?.toString() || peerId);
-        const senderName = isOut ? 'أنا' : 'Telegram';
+        const dedupKey = `${sessionToken}_${msgIdStr}_${peerId}`;
+        const now = Date.now();
+        if (this.recentHandledMessageIds.has(dedupKey)) {
+          const ts = this.recentHandledMessageIds.get(dedupKey)!;
+          if (now - ts < 15000) return;
+        }
+        this.recentHandledMessageIds.set(dedupKey, now);
+
+        const text = msg.message || msg.text || '';
+        const senderInfo = TelegramService.resolveSenderInfo(
+          msg,
+          sessionToken,
+          client,
+          update.users || inheritedUsers,
+          update.chats || inheritedChats,
+          peerId
+        );
 
         TelegramService.onUpdateCallback(sessionToken, {
           type: 'new_message',
+          className,
           peerId,
           message: {
             id: msg.id?.toString() || 'msg_' + Date.now(),
             chatId: peerId,
-            senderId,
-            senderName,
+            senderId: senderInfo.senderId,
+            senderName: senderInfo.senderName,
+            senderAvatar: senderInfo.senderAvatar,
             text,
             timestamp: (msg.date || Math.floor(Date.now() / 1000)) * 1000,
-            isOut,
-            status: isOut ? 'sent' : 'received',
+            isOut: Boolean(msg.out),
+            status: msg.out ? 'sent' : 'received',
             replyTo: msg.replyTo?.replyToMsgId ? { id: msg.replyTo.replyToMsgId.toString() } : undefined,
             media: msg.media ? sanitizeData(msg.media) : undefined,
           },
@@ -541,6 +758,7 @@ export class TelegramService {
           peerId,
           messageId: update.maxId?.toString(),
           isOutbox: true,
+          readerId: peerId,
         });
         return;
       }
@@ -714,6 +932,18 @@ export class TelegramService {
         throw connErr;
       }
 
+      // Register high-priority NewMessage event handler for instantaneous message receipt
+      try {
+        client.addEventHandler(async (event: any) => {
+          TelegramService.handleNewMessageEvent(sessionToken, event, client).catch((err) => {
+            console.warn('[TelegramService] NewMessage handler error:', err?.message || err);
+          });
+        }, new NewMessage({}));
+      } catch (handlerErr) {
+        console.warn('Could not attach NewMessage handler:', handlerErr);
+      }
+
+      // Register raw update handler for read receipts, deletes, typing, edits
       try {
         client.addEventHandler(async (update: any) => {
           TelegramService.handleMtprotoUpdate(sessionToken, update, client);
@@ -1018,11 +1248,7 @@ export class TelegramService {
           return { isLoggedIn: true, user: sanitized };
         }
       } catch (err: any) {
-        if (
-          err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-          err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-          err?.code === 401
-        ) {
+        if (isSessionRevokedOrDuplicatedError(err)) {
           console.warn(`[TelegramService] Auth key unregistered for session ${sessionToken}, purging.`);
           this.purgeStaleSession(sessionToken);
           return { isLoggedIn: false, user: null };
@@ -1189,89 +1415,214 @@ export class TelegramService {
     return null;
   }
 
-  public static async getDialogs(sessionToken: string, limit: number = 50) {
+  public static async getDialogs(sessionToken: string, limit: number = 200) {
     if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
       return [];
     }
     try {
       const client = await this.getOrCreateClient(sessionToken);
-      const dialogs = await client.getDialogs({ limit });
+
+      // Robust MTProto Pagination Loop
+      const targetLimit = Math.min(Math.max(limit || 50, 1), 3500);
+      const CHUNK_LIMIT = Math.min(targetLimit, 100);
+      const rawDialogs: any[] = [];
+      const seenDialogIds = new Set<string>();
+
+      let offsetId = 0;
+      let offsetDate = 0;
+      let offsetPeer: any = undefined;
+      let hasMore = true;
+      let iteration = 0;
+      const MAX_ITERATIONS = Math.min(Math.ceil(targetLimit / CHUNK_LIMIT) + 2, 35);
+
+      while (hasMore && rawDialogs.length < targetLimit && iteration < MAX_ITERATIONS) {
+        iteration++;
+        const chunkParams: any = { limit: CHUNK_LIMIT };
+        if (offsetId) chunkParams.offsetId = offsetId;
+        if (offsetDate) chunkParams.offsetDate = offsetDate;
+        if (offsetPeer) chunkParams.offsetPeer = offsetPeer;
+
+        let chunk: any[] = [];
+        try {
+          chunk = await client.getDialogs(chunkParams);
+        } catch (chunkErr: any) {
+          console.warn(`[getDialogs] Chunk error iteration ${iteration}:`, chunkErr?.message || chunkErr);
+          break;
+        }
+
+        if (!chunk || chunk.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        let newCount = 0;
+        for (const d of chunk) {
+          const dKey = String(d.id || d.entity?.id || (d as any).peer?.userId || (d as any).peer?.channelId || (d as any).peer?.chatId || "");
+          if (!dKey || !seenDialogIds.has(dKey)) {
+            if (dKey) seenDialogIds.add(dKey);
+            rawDialogs.push(d);
+            newCount++;
+          }
+        }
+
+        if (chunk.length < CHUNK_LIMIT || newCount === 0) {
+          hasMore = false;
+          break;
+        }
+
+        const lastDialog = chunk[chunk.length - 1];
+        if (lastDialog) {
+          offsetId = lastDialog.message?.id || lastDialog.id || 0;
+          offsetDate = lastDialog.date || lastDialog.message?.date || 0;
+          offsetPeer = lastDialog.inputEntity || undefined;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      // Also retrieve archived dialogs if available (folder: 1)
+      try {
+        const archivedChunk = await client.getDialogs({ limit: 100, folder: 1 });
+        if (archivedChunk && archivedChunk.length > 0) {
+          for (const d of archivedChunk) {
+            const dKey = String(d.id || d.entity?.id || "");
+            if (!dKey || !seenDialogIds.has(dKey)) {
+              if (dKey) seenDialogIds.add(dKey);
+              rawDialogs.push(d);
+            }
+          }
+        }
+      } catch (_) {}
 
       const s = activeSessions.get(sessionToken);
       if (s) {
         if (!s.entityCache) s.entityCache = new Map();
         if (!s.fullEntityCache) s.fullEntityCache = new Map();
-        for (const d of dialogs) {
+        for (const d of rawDialogs) {
           const cleanId = extractPeerId(d.id || d.entity?.id || (d as any).peer);
           if (cleanId) {
             if (d.inputEntity) s.entityCache.set(cleanId, d.inputEntity);
             if (d.entity) {
               s.fullEntityCache.set(cleanId, d.entity);
               s.entityCache.set(cleanId, d.entity);
-              if (cleanId.startsWith('-100')) {
+              if (cleanId.startsWith("-100")) {
                 s.fullEntityCache.set(cleanId.slice(4), d.entity);
               }
             }
             const entUsername = (d.entity as any)?.username;
             if (entUsername) {
               s.entityCache.set(entUsername.toLowerCase(), d.inputEntity || d.entity);
-              s.entityCache.set('@' + entUsername.toLowerCase(), d.inputEntity || d.entity);
+              s.entityCache.set("@" + entUsername.toLowerCase(), d.inputEntity || d.entity);
               if (d.entity) {
                 s.fullEntityCache.set(entUsername.toLowerCase(), d.entity);
-                s.fullEntityCache.set('@' + entUsername.toLowerCase(), d.entity);
+                s.fullEntityCache.set("@" + entUsername.toLowerCase(), d.entity);
               }
             }
           }
         }
       }
 
-      return dialogs.map((d: any) => {
-        let type = 'private';
-        if (d.isChannel) type = 'channel';
-        else if (d.isGroup) type = 'group';
-        else if (d.entity?.bot) type = 'bot';
+      return rawDialogs.map((d: any) => {
+        let type: "private" | "group" | "supergroup" | "channel" | "bot" = "private";
+        const isMegagroup = Boolean(d.entity?.megagroup || (d.isChannel && !d.entity?.broadcast));
+        const isBroadcast = Boolean(d.entity?.broadcast || (d.isChannel && !d.isGroup && !d.entity?.megagroup));
+
+        if (isBroadcast) {
+          type = "channel";
+        } else if (isMegagroup) {
+          type = "supergroup";
+        } else if (d.isGroup) {
+          type = "group";
+        } else if (d.entity?.bot) {
+          type = "bot";
+        } else {
+          type = "private";
+        }
+
+        let canSendMessages = true;
+        if (isBroadcast) {
+          canSendMessages = Boolean(d.entity?.creator || d.entity?.adminRights?.postMessages);
+        } else if (type === "group" || type === "supergroup") {
+          canSendMessages = Boolean(
+            d.entity?.creator ||
+            d.entity?.adminRights ||
+            (!d.entity?.defaultBannedRights?.sendMessages && !d.entity?.bannedRights?.sendMessages)
+          );
+        }
 
         const lastMsg = d.message;
-        let text = lastMsg?.text || '';
+        let text = lastMsg?.text || "";
         if (!text && lastMsg?.media) {
-          text = '[وسائط / ميديا]';
+          const media = lastMsg.media;
+          if (media.photo) {
+            text = "📷 صورة";
+          } else if (media.document) {
+            const isVoice = media.document.attributes?.some((a: any) => a.voice);
+            const isAudio = media.document.attributes?.some((a: any) => a.audio || a.performer);
+            const isVideo = media.document.attributes?.some((a: any) => a.video);
+            const isSticker = media.document.attributes?.some((a: any) => a.stickerset);
+            const docName = media.document.attributes?.find((a: any) => a.fileName)?.fileName;
+
+            if (isVoice) text = "🎤 رسالة صوتية";
+            else if (isVideo) text = "🎥 مقطع مرئي";
+            else if (isAudio) text = "🎵 ملف صوتي";
+            else if (isSticker) text = "🎭 ملصق";
+            else text = docName ? `📄 ${docName}` : "📄 مستند";
+          } else if (media.poll) {
+            text = "📊 استطلاع رأي";
+          } else if (media.geo) {
+            text = "📍 موقع جغرافي";
+          } else if (media.contact) {
+            text = "👤 جهة اتصال";
+          } else {
+            text = "📎 وسائط / ميديا";
+          }
         }
 
         const peerId = extractPeerId(d.id || d.entity?.id || d.peer);
         const photoObj = (d.entity as any)?.photo || (d as any).photo;
         const hasPhoto = Boolean(
           photoObj &&
-          photoObj.className !== 'UserProfilePhotoEmpty' &&
-          photoObj.className !== 'ChatPhotoEmpty'
+          photoObj.className !== "UserProfilePhotoEmpty" &&
+          photoObj.className !== "ChatPhotoEmpty"
         );
         const avatarUrl = hasPhoto
           ? `/api/telegram/avatar/${encodeURIComponent(peerId)}?token=${encodeURIComponent(sessionToken)}`
           : undefined;
 
+        let lastMessageSenderInfo = undefined;
+        if (lastMsg) {
+          lastMessageSenderInfo = TelegramService.resolveSenderInfo(lastMsg, sessionToken, client);
+        }
+
         return {
           id: peerId,
-          title: d.title || d.name || 'محادثة',
+          title: d.title || d.name || "محادثة",
           username: d.entity?.username || undefined,
           type,
           avatarUrl,
           unreadCount: d.unreadCount || 0,
           isPinned: !!d.isPinned,
           isMuted: !!d.isMuted,
+          canSendMessages,
+          isBroadcast,
+          description: d.entity?.about || undefined,
+          membersCount: d.entity?.participantsCount || undefined,
+          restrictionReason: d.entity?.restrictionReason || undefined,
           lastMessage: lastMsg
             ? {
                 text,
                 timestamp: (lastMsg.date || Math.floor(Date.now() / 1000)) * 1000,
                 isOut: !!lastMsg.out,
+                senderId: lastMessageSenderInfo?.senderId,
+                senderName: lastMessageSenderInfo?.senderName,
+                senderAvatar: lastMessageSenderInfo?.senderAvatar,
               }
             : undefined,
         };
       });
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getDialogs] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -1365,22 +1716,26 @@ export class TelegramService {
           }
         }
 
-        const senderId = m.fromId?.userId?.toString() || (m.out ? 'me' : peerId);
-        const senderAvatar =
-          !m.out && senderId && senderId !== 'me'
-            ? `/api/telegram/avatar/${encodeURIComponent(senderId)}?token=${encodeURIComponent(sessionToken)}`
-            : undefined;
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          (messages as any)?.users,
+          (messages as any)?.chats,
+          peerId
+        );
 
         return {
           id: m.id?.toString(),
           chatId: peerId,
-          senderId,
-          senderName: m.out ? 'أنا' : 'عضو',
-          senderAvatar,
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.text || (mediaType ? `[${mediaType}]` : ''),
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
           status: m.out ? 'read' : 'sent',
+          seenBy: m.out ? [peerId] : [],
           media: mediaType
             ? {
                 type: mediaType,
@@ -1397,11 +1752,7 @@ export class TelegramService {
         };
       });
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getMessages] AUTH_KEY_UNREGISTERED detected for session ${sessionToken}, purging.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -1887,11 +2238,7 @@ export class TelegramService {
         unreadCount: state.unreadCount || 0,
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getUpdatesState] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -1974,15 +2321,25 @@ export class TelegramService {
           };
         }
 
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          diff.users,
+          diff.chats
+        );
+
         return {
           id: String(m.id),
           chatId: peerId,
-          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-          senderName: m.out ? 'أنا' : 'عضو',
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.message || (media ? `[${media.type}]` : ''),
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
           status: m.out ? 'read' : 'sent',
+          seenBy: m.out ? [peerId] : [],
           media,
         };
       });
@@ -2001,11 +2358,7 @@ export class TelegramService {
         isIntermediate: diff.className === 'updates.DifferenceSlice',
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2061,11 +2414,20 @@ export class TelegramService {
             url: `/api/telegram/media/${encodeURIComponent(peerId)}/${m.id}`,
           };
         }
+        const senderInfo = TelegramService.resolveSenderInfo(
+          m,
+          sessionToken,
+          client,
+          (diff as any).users,
+          (diff as any).chats
+        );
+
         return {
           id: String(m.id),
           chatId: peerId,
-          senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-          senderName: m.out ? 'أنا' : 'قناة',
+          senderId: senderInfo.senderId,
+          senderName: senderInfo.senderName,
+          senderAvatar: senderInfo.senderAvatar,
           text: m.message || '',
           timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
           isOut: !!m.out,
@@ -2083,11 +2445,7 @@ export class TelegramService {
         isFinal: diff.className === 'updates.ChannelDifference',
       };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         console.warn(`[getChannelDifference] AUTH_KEY_UNREGISTERED detected, purging session.`);
         this.purgeStaleSession(sessionToken);
       } else {
@@ -2137,11 +2495,7 @@ export class TelegramService {
 
       return { buffer, mimeType, fileName };
     } catch (err: any) {
-      if (
-        err?.message?.includes('AUTH_KEY_UNREGISTERED') ||
-        err?.errorMessage === 'AUTH_KEY_UNREGISTERED' ||
-        err?.code === 401
-      ) {
+      if (isSessionRevokedOrDuplicatedError(err)) {
         this.purgeStaleSession(sessionToken);
       }
       return null;
@@ -2416,4 +2770,454 @@ export class TelegramService {
     });
   }
 
+  public static async createChannel(
+    sessionToken: string,
+    title: string,
+    about: string = '',
+    megagroup: boolean = false
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('channels.createChannel', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.channels.CreateChannel({
+          title,
+          about: about || '',
+          megagroup: Boolean(megagroup),
+          broadcast: !megagroup,
+        })
+      );
+      return res;
+    });
+  }
+
+  public static async getContacts(sessionToken: string) {
+    return FloodWaitQueue.executeWithFloodRetry('contacts.getContacts', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.contacts.GetContacts({
+          hash: 0 as any,
+        })
+      );
+      if (res && Array.isArray(res.users)) {
+        return res.users.map((u: any) => ({
+          id: String(u.id),
+          firstName: u.firstName || '',
+          lastName: u.lastName || '',
+          username: u.username || '',
+          phone: u.phone || '',
+          isOnline: u.status?.className === 'UserStatusOnline',
+          photo: u.photo ? true : false,
+        }));
+      }
+      return [];
+    });
+  }
+
+  public static async updateProfile(
+    sessionToken: string,
+    firstName?: string,
+    lastName?: string,
+    about?: string
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('account.updateProfile', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const updates: any = {};
+      if (firstName !== undefined) updates.firstName = firstName;
+      if (lastName !== undefined) updates.lastName = lastName;
+      if (about !== undefined) updates.about = about;
+
+      const res: any = await client.invoke(new Api.account.UpdateProfile(updates));
+      return res;
+    });
+  }
+
+  public static async archiveDialog(
+    sessionToken: string,
+    peerId: string,
+    folderId: number = 1
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('folders.editPeerFolders', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const res: any = await client.invoke(
+        new Api.folders.EditPeerFolders({
+          folderPeers: [
+            new Api.InputFolderPeer({
+              peer,
+              folderId,
+            }),
+          ],
+        })
+      );
+      return res;
+    });
+  }
+
+  public static async updatePasswordSettings(
+    sessionToken: string,
+    newSettings: any
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry('account.updatePasswordSettings', async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const res: any = await client.invoke(
+        new Api.account.UpdatePasswordSettings({
+          password: new Api.InputCheckPasswordEmpty(),
+          newSettings,
+        })
+      );
+      return res;
+    });
+  }
+
+  /**
+   * Universal MTProto Sender Info & Avatar Resolver
+   */
+  public static resolveSenderInfo(
+    m: any,
+    sessionToken: string,
+    client?: any,
+    users?: any[],
+    chats?: any[],
+    peerId?: string,
+    chatTitle?: string
+  ): { senderId: string; senderName: string; senderAvatar?: string } {
+    const isOut = Boolean(m.out);
+    let senderId = '';
+
+    if (isOut) {
+      senderId = 'me';
+    } else if (m.senderId) {
+      senderId = extractPeerId(m.senderId);
+    } else if (m.fromId) {
+      senderId = extractPeerId(m.fromId);
+    } else if (m.peerId) {
+      senderId = extractPeerId(m.peerId);
+    } else if (peerId) {
+      senderId = extractPeerId(peerId);
+    } else {
+      senderId = 'user';
+    }
+
+    if (isOut) {
+      return { senderId: 'me', senderName: 'أنا' };
+    }
+
+    const s = activeSessions.get(sessionToken);
+
+    if (s) {
+      if (!s.fullEntityCache) s.fullEntityCache = new Map();
+      if (!s.entityCache) s.entityCache = new Map();
+
+      if (Array.isArray(users)) {
+        for (const u of users) {
+          if (!u) continue;
+          const uid = extractPeerId(u.id || u);
+          if (uid) {
+            s.fullEntityCache.set(uid, u);
+            s.entityCache.set(uid, u);
+            if (u.username) {
+              s.fullEntityCache.set(u.username.toLowerCase(), u);
+            }
+          }
+        }
+      }
+      if (Array.isArray(chats)) {
+        for (const c of chats) {
+          if (!c) continue;
+          const cid = extractPeerId(c.id || c);
+          if (cid) {
+            s.fullEntityCache.set(cid, c);
+            s.fullEntityCache.set(`-${cid}`, c);
+            s.fullEntityCache.set(`-100${cid}`, c);
+            s.entityCache.set(cid, c);
+            if (c.username) {
+              s.fullEntityCache.set(c.username.toLowerCase(), c);
+            }
+          }
+        }
+      }
+    }
+
+    // Attempt to locate sender entity
+    let entity: any = m.sender || m._sender;
+    const cleanId = senderId.replace(/^-100/, '').replace(/^-/, '');
+
+    if (!entity && m._entities instanceof Map && senderId) {
+      entity = m._entities.get(senderId) || m._entities.get(cleanId);
+    }
+
+    if (!entity && s && senderId) {
+      entity =
+        s.fullEntityCache?.get(senderId) ||
+        s.fullEntityCache?.get(cleanId) ||
+        s.fullEntityCache?.get('-100' + cleanId) ||
+        s.fullEntityCache?.get('-' + cleanId);
+    }
+
+    if (!entity && Array.isArray(users) && senderId) {
+      entity = users.find((u: any) => {
+        const uid = extractPeerId(u.id || u);
+        return uid === senderId || uid === cleanId;
+      });
+    }
+
+    if (!entity && Array.isArray(chats) && senderId) {
+      entity = chats.find((c: any) => {
+        const cid = extractPeerId(c.id || c);
+        return cid === senderId || cid === cleanId || cid === '-100' + cleanId;
+      });
+    }
+
+    if (!entity && client?._entityCache && senderId) {
+      try {
+        entity = (client as any)._entityCache.get(senderId) || (client as any)._entityCache.get(cleanId);
+      } catch (_) {}
+    }
+
+    // In a 1-to-1 private chat, incoming messages are from the peer
+    if (!entity && peerId && !peerId.startsWith('-') && s) {
+      const cleanPeer = peerId.replace(/^-100/, '').replace(/^-/, '');
+      entity = s.fullEntityCache?.get(peerId) || s.fullEntityCache?.get(cleanPeer);
+    }
+
+    if (entity && s && senderId) {
+      s.fullEntityCache?.set(senderId, entity);
+      s.entityCache?.set(senderId, entity);
+      if (cleanId) {
+        s.fullEntityCache?.set(cleanId, entity);
+      }
+    }
+
+    let senderName = '';
+    if (entity) {
+      const parts = [entity.firstName, entity.lastName].filter(Boolean);
+      if (parts.length > 0) {
+        senderName = parts.join(' ').trim();
+      } else if (entity.title) {
+        senderName = entity.title;
+      } else if (entity.username) {
+        senderName = '@' + entity.username;
+      }
+    }
+
+    if (!senderName && m.postAuthor) {
+      senderName = m.postAuthor;
+    } else if (!senderName && m.sender?.title) {
+      senderName = m.sender.title;
+    }
+
+    if (!senderName && chatTitle && (!peerId || !peerId.startsWith('-'))) {
+      senderName = chatTitle;
+    }
+
+    if (!senderName) {
+      senderName = 'مستخدم';
+    }
+
+    let senderAvatar: string | undefined = undefined;
+    const photoObj = entity?.photo || m.sender?.photo;
+    const hasPhoto = Boolean(
+      photoObj &&
+      photoObj.className !== 'UserProfilePhotoEmpty' &&
+      photoObj.className !== 'ChatPhotoEmpty'
+    );
+
+    if (hasPhoto && senderId && senderId !== 'me') {
+      senderAvatar = `/api/telegram/avatar/${encodeURIComponent(senderId)}?token=${encodeURIComponent(sessionToken)}`;
+    }
+
+    return { senderId, senderName, senderAvatar };
+  }
+
+  /**
+   * Fetch Live Full Details for Chat, Channel, Supergroup, or User
+   */
+  public static async getChatFullInfo(sessionToken: string, peerId: string) {
+    if (!sessionToken || !(await this.isAuthorized(sessionToken))) {
+      return null;
+    }
+    return FloodWaitQueue.executeWithFloodRetry(`chat.getFullInfo_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      if (!peer) return null;
+
+      let description = '';
+      let membersCount = 0;
+      let inviteLink: string | undefined = undefined;
+      let canSendMessages = true;
+      let isBroadcast = false;
+      let restrictionReason: any = undefined;
+      let peerSettings: any = undefined;
+
+      try {
+        const inputPeer = await client.getInputEntity(peer);
+        if (
+          inputPeer.className === 'InputPeerChannel' ||
+          (peer as any).className === 'Channel' ||
+          (peer as any).broadcast ||
+          (peer as any).megagroup
+        ) {
+          const full: any = await client.invoke(
+            new Api.channels.GetFullChannel({
+              channel: new Api.InputChannel({
+                channelId: (peer as any).id || (inputPeer as any).channelId,
+                accessHash: (peer as any).accessHash || (inputPeer as any).accessHash,
+              }),
+            })
+          );
+          const fullChat = full.fullChat;
+          description = fullChat?.about || '';
+          membersCount = fullChat?.participantsCount || 0;
+          if (fullChat?.exportedInvite?.link) {
+            inviteLink = fullChat.exportedInvite.link;
+          }
+          const ch = full.chats?.[0] || peer;
+          isBroadcast = Boolean(ch?.broadcast);
+          const isCreator = Boolean(ch?.creator);
+          const adminRights = ch?.adminRights;
+          const defaultBanned = ch?.defaultBannedRights;
+          const bannedRights = ch?.bannedRights;
+
+          if (isBroadcast) {
+            canSendMessages = Boolean(isCreator || adminRights?.postMessages);
+          } else {
+            canSendMessages = Boolean(
+              isCreator ||
+              adminRights?.postMessages ||
+              (!defaultBanned?.sendMessages && !bannedRights?.sendMessages)
+            );
+          }
+
+          if (ch?.restrictionReason && ch.restrictionReason.length > 0) {
+            restrictionReason = ch.restrictionReason;
+          }
+        } else if (inputPeer.className === 'InputPeerChat' || (peer as any).className === 'Chat') {
+          const full: any = await client.invoke(
+            new Api.messages.GetFullChat({
+              chatId: (peer as any).id || (inputPeer as any).chatId,
+            })
+          );
+          const fullChat = full.fullChat;
+          description = fullChat?.about || '';
+          membersCount = fullChat?.participants?.participants?.length || 0;
+          canSendMessages = !(fullChat?.defaultBannedRights?.sendMessages);
+        } else if (inputPeer.className === 'InputPeerUser' || (peer as any).className === 'User') {
+          const full: any = await client.invoke(
+            new Api.users.GetFullUser({
+              id: inputPeer as any,
+            })
+          );
+          description = full.fullUser?.about || '';
+          canSendMessages = true;
+          if (full.users?.[0]?.restrictionReason) {
+            restrictionReason = full.users[0].restrictionReason;
+          }
+        }
+
+        try {
+          const settingsRes: any = await client.invoke(
+            new Api.messages.GetPeerSettings({
+              peer: inputPeer as any,
+            })
+          );
+          if (settingsRes?.settings) {
+            peerSettings = {
+              reportSpam: Boolean(settingsRes.settings.reportSpam),
+              addContact: Boolean(settingsRes.settings.addContact),
+              blockContact: Boolean(settingsRes.settings.blockContact),
+              shareContact: Boolean(settingsRes.settings.shareContact),
+              needReq: Boolean(settingsRes.settings.needReq),
+            };
+          }
+        } catch (_) {}
+
+        return {
+          id: peerId,
+          description,
+          membersCount,
+          participantsCount: membersCount,
+          inviteLink,
+          canSendMessages,
+          isBroadcast,
+          restrictionReason,
+          peerSettings,
+        };
+      } catch (err: any) {
+        console.warn(`[getChatFullInfo] Notice fetching full info for ${peerId}:`, err?.message || err);
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Report Spam or Terms Violation (messages.reportSpam / account.reportPeer)
+   */
+  public static async reportSpam(
+    sessionToken: string,
+    peerId: string,
+    reason?: string,
+    details?: string
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry(`chat.reportSpam_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const inputPeer = await client.getInputEntity(peer);
+
+      try {
+        let reportReason: any = new Api.InputReportReasonSpam();
+        if (reason === 'violence') reportReason = new Api.InputReportReasonViolence();
+        else if (reason === 'child_abuse') reportReason = new Api.InputReportReasonChildAbuse();
+        else if (reason === 'pornography') reportReason = new Api.InputReportReasonPornography();
+        else if (reason === 'copyright') reportReason = new Api.InputReportReasonCopyright();
+        else if (reason === 'illegal_goods') reportReason = new Api.InputReportReasonIllegalDrugs();
+        else if (reason === 'personal_details') reportReason = new Api.InputReportReasonPersonalDetails();
+        else if (reason === 'other') reportReason = new Api.InputReportReasonOther();
+
+        const res: any = await client.invoke(
+          new Api.account.ReportPeer({
+            peer: inputPeer as any,
+            reason: reportReason,
+            message: details || 'Reported by user',
+          })
+        );
+        return { success: Boolean(res) };
+      } catch {
+        const res: any = await client.invoke(
+          new Api.messages.ReportSpam({
+            peer: inputPeer as any,
+          })
+        );
+        return { success: Boolean(res) };
+      }
+    });
+  }
+
+  /**
+   * Add Contact (contacts.addContact)
+   */
+  public static async addContact(
+    sessionToken: string,
+    peerId: string,
+    firstName: string,
+    lastName: string = '',
+    phone: string = ''
+  ) {
+    return FloodWaitQueue.executeWithFloodRetry(`contacts.addContact_${peerId}`, async () => {
+      const client = await this.getOrCreateClient(sessionToken);
+      const peer = await resolvePeer(client, peerId);
+      const inputPeer = await client.getInputEntity(peer);
+      const res: any = await client.invoke(
+        new Api.contacts.AddContact({
+          id: inputPeer as any,
+          firstName,
+          lastName,
+          phone,
+          addPhonePrivacyException: true,
+        })
+      );
+      return sanitizeData(res);
+    });
+  }
+
 }
+

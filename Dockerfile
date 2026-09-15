@@ -1,39 +1,32 @@
-# Stage 1: Build & Dependencies
-FROM node:22-alpine AS builder
-
+# Stage 1: Build application
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Install build dependencies
-COPY package*.json ./
-RUN npm ci
+# Install dependencies with legacy-peer-deps
+COPY package*.json .npmrc* ./
+RUN npm install --legacy-peer-deps
 
-# Copy all source files
+# Copy source and build client + server bundle
 COPY . .
-
-# Build Vite client & compiled Express MTProto backend
 RUN npm run build
 
-# Stage 2: Production Runner
-FROM node:22-alpine AS runner
-
+# Stage 2: Production runtime
+FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV RENDER=true
-ENV PORT=3000
+ENV PORT=10000
 
-# Copy production artifacts and package manifests
-COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Install production dependencies only
+COPY package*.json .npmrc* ./
+RUN npm install --omit=dev --legacy-peer-deps
 
+# Copy built assets and static files
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/package.json ./package.json
 
-EXPOSE 3000
+# Expose port (Render overrides with its own PORT env)
+EXPOSE 10000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
-
-CMD ["npm", "start"]
+# Start server
+CMD ["node", "dist/server.cjs"]

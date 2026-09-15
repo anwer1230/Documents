@@ -285,6 +285,14 @@ export class SQLiteDatabaseService {
           updated_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_user_statuses_updated ON user_statuses(updated_at);
+
+        CREATE TABLE IF NOT EXISTS bug_reports (
+          id TEXT PRIMARY KEY,
+          user_id TEXT,
+          description TEXT,
+          logs TEXT,
+          created_at INTEGER NOT NULL
+        );
       `);
 
       this.migrateInitialData();
@@ -1077,6 +1085,32 @@ export class SQLiteDatabaseService {
       dbPath: this.dbFilePath,
       isReady: this.isInitialized && this.db !== null,
     };
+  }
+
+  public addBugReport(report: { userId?: string; description: string; logs?: string }): { id: string; success: boolean } {
+    if (!this.db) return { id: '', success: false };
+    const id = 'bug_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    const now = Date.now();
+    try {
+      this.db.run(
+        'INSERT INTO bug_reports (id, user_id, description, logs, created_at) VALUES (?, ?, ?, ?, ?)',
+        [id, report.userId || 'anonymous', report.description, report.logs || '', now]
+      );
+      return { id, success: true };
+    } catch (e) {
+      console.error('[SQLite] addBugReport error:', e);
+      return { id, success: false };
+    }
+  }
+
+  public getBugReports(): any[] {
+    if (!this.db) return [];
+    try {
+      return this.db.all('SELECT * FROM bug_reports ORDER BY created_at DESC LIMIT 100');
+    } catch (e) {
+      console.error('[SQLite] getBugReports error:', e);
+      return [];
+    }
   }
 
   public close(): void {

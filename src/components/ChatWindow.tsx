@@ -1,3 +1,5 @@
+import { AiSummaryModal } from "./modals/AiSummaryModal";
+import { geminiApi } from "../services/api";
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Search,
@@ -40,6 +42,9 @@ import {
   Gift,
   ArrowLeft,
   ArrowRight,
+  AlertTriangle,
+  AlertCircle,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   TelegramChat,
@@ -122,6 +127,41 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   isDark,
 }) => {
   const isAr = lang === 'ar';
+  const [isAiSummaryOpen, setIsAiSummaryOpen] = useState(false);
+  const [aiSummaryText, setAiSummaryText] = useState("");
+  const [isAiSummarizing, setIsAiSummarizing] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const [smartReplies, setSmartReplies] = useState<string[]>([
+    "تمام، شكراً لك!",
+    "سأراجع ذلك قريباً.",
+    "حسناً، متفقين.",
+  ]);
+
+  const handleOpenAiSummary = async () => {
+    setIsAiSummaryOpen(true);
+    if (aiSummaryText) return;
+    setIsAiSummarizing(true);
+    setAiSummaryError(null);
+    try {
+      const recent = messages.slice(-40).map((m) => ({
+        id: m.id,
+        senderName: m.isOut ? (lang === "ar" ? "أنا" : "Me") : (m.sender?.title || m.sender?.firstName || chat.name),
+        text: m.text,
+      }));
+      const res = await geminiApi.summarizeChat({
+        chatId: chat.id,
+        chatTitle: chat.name,
+        messages: recent,
+        language: lang,
+      });
+      setAiSummaryText(res.summary || "");
+    } catch (err: any) {
+      setAiSummaryError(err?.message || (lang === "ar" ? "تعذر تلخيص المحادثة" : "Failed to summarize conversation"));
+    } finally {
+      setIsAiSummarizing(false);
+    }
+  };
+
   const [replyingMessage, setReplyingMessage] = useState<TelegramMessage | null>(null);
   const [inChatSearch, setInChatSearch] = useState(false);
   const [searchWord, setSearchWord] = useState('');
@@ -168,6 +208,55 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     x: number;
     y: number;
   } | null>(null);
+
+  // Spam banner dismissed state
+  const [isSpamBannerDismissed, setIsSpamBannerDismissed] = useState(false);
+
+  useEffect(() => {
+    setIsSpamBannerDismissed(false);
+  }, [chat?.id]);
+
+  const handleAddContact = async () => {
+    if (!chat) return;
+    try {
+      const activeToken = localStorage.getItem('tg_active_session_token') || '';
+      const res = await fetch('/api/telegram/add-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-session-token': activeToken },
+        body: JSON.stringify({ peerId: chat.id, firstName: chat.title }),
+      });
+      if (res.ok) {
+        onToast(isAr ? 'تمت إضافة جهة الاتصال بنجاح' : 'Contact added successfully', 'success');
+        setIsSpamBannerDismissed(true);
+      } else {
+        const err = await res.json();
+        onToast(err.error || (isAr ? 'فشل إضافة جهة الاتصال' : 'Failed to add contact'), 'error');
+      }
+    } catch {
+      onToast(isAr ? 'حدث خطأ أثناء إضافة جهة الاتصال' : 'Error adding contact', 'error');
+    }
+  };
+
+  const handleReportSpamAndBlock = async () => {
+    if (!chat) return;
+    try {
+      const activeToken = localStorage.getItem('tg_active_session_token') || '';
+      const res = await fetch('/api/telegram/report-spam', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-session-token': activeToken },
+        body: JSON.stringify({ peerId: chat.id, reason: 'spam', details: 'Reported via peer banner' }),
+      });
+      if (res.ok) {
+        onToast(isAr ? 'تم الإبلاغ عن المحادثة بنجاح' : 'Reported spam successfully', 'success');
+        setIsSpamBannerDismissed(true);
+      } else {
+        const err = await res.json();
+        onToast(err.error || (isAr ? 'فشل الإبلاغ' : 'Failed to report'), 'error');
+      }
+    } catch {
+      onToast(isAr ? 'حدث خطأ أثناء الإبلاغ' : 'Error reporting', 'error');
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -694,6 +783,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       isDark ? 'bg-[#242f3d]/95 border-[#2f3f50] text-white' : 'bg-white/95 border-gray-200 text-gray-800'
                     }`}
                   >
+                    <button
+                      onClick={() => {
+                        setShowMoreMenu(false);
+                        handleOpenAiSummary();
+                      }}
+                      className={`w-full text-start px-4 py-2 text-xs flex items-center gap-3 ${
+                        isDark ? "hover:bg-[#2b394a] text-[#3390ec]" : "hover:bg-gray-100 text-[#3390ec]"
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4 text-[#3390ec]" />
+                      <span className="font-semibold">{isAr ? "تلخيص المحادثة (Gemini AI)" : "Summarize Chat (Gemini AI)"}</span>
+                    </button>
                     {/* Search */}
                     <button
                       onClick={() => {
@@ -828,6 +929,70 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         )}
       </header>
 
+      {/* Legal & Regional Restriction Warning Banner (Official MTProto Restriction Notice) */}
+      {chat.restrictionReason && chat.restrictionReason.length > 0 && (
+        <div
+          className={`px-4 py-2.5 flex items-center justify-between text-xs border-b select-none z-10 ${
+            isDark ? 'bg-amber-950/40 border-amber-800/40 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold block text-[11px]">
+                {isAr ? '⚠️ إشعار قيود قانونية / إقليمية' : '⚠️ Legal / Regional Notice'}
+              </span>
+              <p className="truncate text-xs opacity-90">
+                {chat.restrictionReason[0].text || chat.restrictionReason[0].reason || (isAr ? 'هذه المحادثة مقيدة قانونياً في بعض المناطق' : 'Restricted in certain jurisdictions')}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Telegram Spam & Peer Verification Banner (Official Web K Peer Settings) */}
+      {!isSpamBannerDismissed && (chat.peerSettings?.reportSpam || chat.peerSettings?.addContact) && (
+        <div
+          className={`px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs border-b select-none z-10 transition ${
+            isDark ? 'bg-[#182533] border-[#242f3d] text-gray-200' : 'bg-blue-50/90 border-blue-200/80 text-gray-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span className="text-[11px] font-medium">
+              {isAr ? 'هذا المستخدم ليس ضمن جهات اتصالك.' : 'This user is not in your contacts.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 ms-auto">
+            {chat.peerSettings?.addContact && (
+              <button
+                onClick={handleAddContact}
+                className="px-2.5 py-1 rounded-md bg-[#3390ec] text-white hover:bg-[#2881da] font-medium text-[11px] flex items-center gap-1 transition"
+              >
+                <UserPlus className="w-3 h-3" />
+                <span>{isAr ? 'إضافة لجهات الاتصال' : 'Add Contact'}</span>
+              </button>
+            )}
+            {chat.peerSettings?.reportSpam && (
+              <button
+                onClick={handleReportSpamAndBlock}
+                className="px-2.5 py-1 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 font-medium text-[11px] flex items-center gap-1 transition"
+              >
+                <Flag className="w-3 h-3" />
+                <span>{isAr ? 'إبلاغ عن سبام وحظر' : 'Report Spam'}</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsSpamBannerDismissed(true)}
+              className="text-gray-400 hover:text-gray-200 p-1"
+              title={isAr ? 'تجاهل' : 'Dismiss'}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Supergroup Forum Topics Bar */}
       {forumTopics.length > 0 && (
         <ForumTopicsBar
@@ -955,12 +1120,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           // Consecutive grouping logic (Web K algorithm)
           const isSameSenderPrev =
             prevMsg &&
-            prevMsg.senderId === msg.senderId &&
+            prevMsg.isOut === msg.isOut &&
+            (msg.senderId && prevMsg.senderId && msg.senderId !== 'user'
+              ? prevMsg.senderId === msg.senderId
+              : Boolean(msg.senderName && prevMsg.senderName && msg.senderName === prevMsg.senderName)) &&
             Math.abs(msg.timestamp - prevMsg.timestamp) < 5 * 60 * 1000;
 
           const isSameSenderNext =
             nextMsg &&
-            nextMsg.senderId === msg.senderId &&
+            nextMsg.isOut === msg.isOut &&
+            (msg.senderId && nextMsg.senderId && msg.senderId !== 'user'
+              ? nextMsg.senderId === msg.senderId
+              : Boolean(msg.senderName && nextMsg.senderName && msg.senderName === nextMsg.senderName)) &&
             Math.abs(nextMsg.timestamp - msg.timestamp) < 5 * 60 * 1000;
 
           const isFirstInGroup = !isSameSenderPrev;
@@ -1029,13 +1200,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 )}
 
                 {/* Left Avatar for Incoming Group/Supergroup/Channel Messages */}
-                {!isOut && chat.type !== 'private' && (
+                {!isOut && (chat.id.startsWith('-') || chat.type === 'group' || chat.type === 'supergroup' || chat.type === 'channel') && (
                   <div className="w-8 shrink-0 select-none">
                     {isLastInGroup ? (
                       msg.senderAvatar ? (
                         <img
                           src={msg.senderAvatar}
-                          alt={msg.senderName}
+                          alt={msg.senderName || chat.title}
                           referrerPolicy="no-referrer"
                           className="w-8 h-8 rounded-full object-cover shadow-sm"
                         />
@@ -1044,7 +1215,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                           className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold shadow-sm"
                           style={{ backgroundColor: senderColor }}
                         >
-                          {msg.senderName.slice(0, 1)}
+                          {(msg.senderName || chat.title || '؟').slice(0, 1)}
                         </div>
                       )
                     ) : (
@@ -1076,12 +1247,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   } px-3 pt-2 pb-1.5`}
                 >
                   {/* Sender Name in Groups (with official Telegram Color) */}
-                  {!isOut && isFirstInGroup && chat.type !== 'private' && (
+                  {!isOut && isFirstInGroup && (chat.id.startsWith('-') || chat.type === 'group' || chat.type === 'supergroup' || chat.type === 'channel') && (
                     <span
                       className="text-xs font-bold block mb-1 hover:underline cursor-pointer select-none"
                       style={{ color: senderColor }}
                     >
-                      {msg.senderName}
+                      {msg.senderName || chat.title}
                     </span>
                   )}
 
@@ -1203,9 +1374,30 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-gray-400 select-none float-end ms-2">
                     <span>{formatMessageTime(msg.timestamp)}</span>
                     {isOut && (
-                      <span className="inline-flex">
-                        {msg.status === 'read' ? (
+                      <span
+                        className="inline-flex items-center"
+                        title={
+                          msg.status === 'read' || (msg.seenBy && msg.seenBy.length > 0)
+                            ? msg.seenBy && msg.seenBy.length > 0
+                              ? isAr
+                                ? `تمت المشاهدة بواسطة: ${msg.seenBy.join(', ')}`
+                                : `Seen by: ${msg.seenBy.join(', ')}`
+                              : isAr
+                              ? 'تمت المشاهدة'
+                              : 'Seen'
+                            : msg.status === 'sending'
+                            ? isAr
+                              ? 'جاري الإرسال...'
+                              : 'Sending...'
+                            : isAr
+                            ? 'تم الإرسال'
+                            : 'Sent'
+                        }
+                      >
+                        {msg.status === 'read' || (msg.seenBy && msg.seenBy.length > 0) ? (
                           <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : msg.status === 'sending' ? (
+                          <Clock className="w-3.5 h-3.5 text-gray-400 animate-pulse" />
                         ) : (
                           <Check className="w-3.5 h-3.5 text-gray-400" />
                         )}
@@ -1446,6 +1638,35 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           <div className="my-1 border-t border-gray-700/20" />
 
           {contextMenu.message.isOut && (
+            <div
+              className={`px-3.5 py-1.5 text-[11px] flex items-center gap-2 select-none border-b ${
+                isDark ? 'border-gray-700/30 text-gray-400' : 'border-gray-200 text-gray-500'
+              }`}
+            >
+              {contextMenu.message.status === 'read' ||
+              (contextMenu.message.seenBy && contextMenu.message.seenBy.length > 0) ? (
+                <>
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate font-medium">
+                    {contextMenu.message.seenBy && contextMenu.message.seenBy.length > 0
+                      ? isAr
+                        ? `شوهدت بواسطة (${contextMenu.message.seenBy.length})`
+                        : `Seen by (${contextMenu.message.seenBy.length})`
+                      : isAr
+                      ? 'تمت مشاهدة الرسالة'
+                      : 'Message seen'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                  <span>{isAr ? 'تم تسليم الرسالة' : 'Message delivered'}</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {contextMenu.message.isOut && (
             <button
               onClick={() => {
                 setDeleteModalMsgId(contextMenu.message!.id);
@@ -1462,8 +1683,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
       )}
 
-      {/* Bottom Action Bar: JOIN CHANNEL or MUTE/UNMUTE or Message Input */}
-      {chat.type === 'channel' && chat.isJoined === false ? (
+      {/* Bottom Action Bar: JOIN CHANNEL or BROADCAST MUTE or RESTRICTED or Message Input */}
+      {chat.type === 'channel' && chat.isBroadcast && chat.isJoined === false ? (
         <div
           className={`w-full px-4 py-3 border-t flex flex-col sm:flex-row items-center justify-between gap-3 backdrop-blur-md transition-colors ${
             isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
@@ -1495,7 +1716,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             )}
           </button>
         </div>
-      ) : chat.type === 'channel' && chat.isJoined !== false ? (
+      ) : chat.type === 'channel' && chat.isBroadcast && chat.canSendMessages === false ? (
         <div
           className={`w-full px-4 py-2.5 border-t flex items-center justify-between gap-3 backdrop-blur-md transition-colors ${
             isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
@@ -1533,8 +1754,46 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             )}
           </button>
         </div>
+      ) : chat.canSendMessages === false ? (
+        <div
+          className={`w-full px-4 py-3 border-t flex items-center justify-center gap-2 backdrop-blur-md text-xs font-semibold ${
+            isDark ? 'bg-[#17212b]/95 border-[#0e1621] text-gray-400' : 'bg-gray-50 border-gray-200 text-gray-500'
+          }`}
+        >
+          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+          <span>
+            {isAr
+              ? 'إرسال الرسائل مقيد في هذه المجموعة بواسطة المشرفين'
+              : 'Posting is restricted in this group by administrators'}
+          </span>
+        </div>
       ) : (
-        /* Bottom Message Input Bar */
+        <>
+          {/* Smart Quick Replies Bar (AI Suggestions) */}
+        {messages.length > 0 && !messages[messages.length - 1].isOut && (
+          <div className={`px-4 py-1.5 flex items-center gap-2 overflow-x-auto no-scrollbar border-t shrink-0 select-none ${
+            isDark ? "bg-[#17212b]/95 border-[#242f3d]" : "bg-white/95 border-gray-100"
+          }`}>
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#3390ec] shrink-0">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isAr ? "ردود ذكية:" : "Quick Replies:"}</span>
+            </div>
+            {smartReplies.map((replyText, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSendMessageWithTopic(replyText)}
+                className={`px-3 py-1 rounded-full text-xs font-medium shrink-0 transition active:scale-95 border ${
+                  isDark
+                    ? "bg-[#242f3d] hover:bg-[#2b394a] text-gray-200 border-[#2f3f50]"
+                    : "bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-200"
+                }`}
+              >
+                {replyText}
+              </button>
+            ))}
+          </div>
+        )}
         <MessageInput
           onSendMessage={handleSendMessageWithTopic}
           replyToMessage={replyingMessage}
@@ -1549,6 +1808,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           lang={lang}
           isDark={isDark}
         />
+        </>
       )}
 
       {/* Modals */}
@@ -1672,6 +1932,21 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           onComplete={() => setActiveReactionAnimation(null)}
         />
       )}
+      {/* 9. Gemini AI Chat Summary Modal */}
+      <AiSummaryModal
+        isOpen={isAiSummaryOpen}
+        onClose={() => setIsAiSummaryOpen(false)}
+        chatTitle={chat.name}
+        summary={aiSummaryText}
+        isLoading={isAiSummarizing}
+        error={aiSummaryError}
+        onRefresh={() => {
+          setAiSummaryText("");
+          handleOpenAiSummary();
+        }}
+        isDark={isDark}
+        lang={lang}
+      />
     </div>
   );
 };
