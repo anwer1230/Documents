@@ -3113,13 +3113,30 @@ class TelegramManager:
                     client_manager.client.get_entity(int(entity))
                 )
             except Exception as e:
-                raise Exception(f"لا يمكن الوصول إلى المعرّف الرقمي {entity}: {e}")
-
-        # ── رابط دعوة خاص (invite link يحتوي على +) ──
-        m_invite = _re.search(r't\.me/\+([A-Za-z0-9_\-]+)', entity)
+                raise Exception(f"لا يمكن الوصول إلى المعرّف الرقمي {entity}: {e}")        # ── رابط دعوة خاص (invite link يحتوي على + أو joinchat) ──
+        m_invite = _re.search(r'(?:t\.me|telegram\.me)/(?:\+|joinchat/)([A-Za-z0-9_\-]+)', entity, flags=_re.IGNORECASE)
         if m_invite:
             invite_hash = m_invite.group(1)
-            # جرّب ImportChatInviteRequest (ينضم إن لم يكن عضواً)
+            # 1. إذا كان الحساب منضماً مسبقاً، فحص رابط الدعوة عبر CheckChatInviteRequest لاسترجاع الكيان فوراً
+            try:
+                from telethon.tl.functions.messages import CheckChatInviteRequest
+                chk_res = client_manager.run_coroutine(
+                    client_manager.client(CheckChatInviteRequest(invite_hash))
+                )
+                if hasattr(chk_res, 'chat') and chk_res.chat:
+                    return chk_res.chat
+            except Exception:
+                pass
+
+            # 2. جرّب get_entity بالرابط مباشرة
+            try:
+                return client_manager.run_coroutine(
+                    client_manager.client.get_entity(entity)
+                )
+            except Exception:
+                pass
+
+            # 3. جرّب ImportChatInviteRequest (ينضم إن لم يكن عضواً)
             try:
                 from telethon.tl.functions.messages import ImportChatInviteRequest
                 result = client_manager.run_coroutine(
@@ -3129,7 +3146,6 @@ class TelegramManager:
                     return result.chats[0]
             except Exception as invite_err:
                 inv_msg = str(invite_err).lower()
-                # إذا كان مصادقاً عليه مسبقاً، جرّب get_entity بالرابط كاملاً
                 if 'already' in inv_msg or 'joined' in inv_msg or 'user_already' in inv_msg:
                     try:
                         return client_manager.run_coroutine(
@@ -3137,7 +3153,6 @@ class TelegramManager:
                         )
                     except Exception:
                         pass
-                # جرّب get_entity بالرابط كاملاً على كل حال
                 try:
                     return client_manager.run_coroutine(
                         client_manager.client.get_entity(entity)
@@ -3243,17 +3258,23 @@ class TelegramManager:
             state["last_attempt"] = now
             return {"allowed": True, "reason": None, "wait_seconds": 0}
 
-    def ensure_group_membership(self, user_id, client_manager, group):
+    def ensure_group_membership(self, user_id, client_manager, group, skip_join=False):
         """
-        فحص عضوية المجموعة والانضمام إليها عند الحاجة.
-        لا تُعاد المحاولة بلا حدود؛ النتيجة تحتوي على حالة واضحة لمرحلة الدورة.
+        فحص عضوية المجموعة والانضمام إليها عند الحاجة:
+        - إذا كان الحساب منضماً مسبقاً (already_joined): يبقى للإرسال الفوري في نفس العملية.
+        - إذا كان غير منضم:
+          * إذا كان skip_join مفعلاً (لوجود مهلة انتظار Telegram سابقة في هذه الدورة):
+            يؤجل دون إيقاف فحص الروابط الأخرى حتى تستمر الروابط المنضمة في الإرسال.
+          * إذا سمح رصيد الانضمام: يحاول الانضمام وعند النجاح يؤجل الإرسال للدورة التالية (joined).
+        - استثناءات الفحص والانضمام معزولة تماماً لكل رابط ولا تعطل فحص أو إرسال الروابط الأخرى.
         """
         import re as _re
-        from telethon.errors import UserAlreadyParticipantError as _Already
-        from telethon.errors import UserNotParticipantError as _NotParticipant
-        from telethon.tl.functions.channels import JoinChannelRequest
-        from telethon.tl.functions.messages import ImportChatInviteRequest
-        from telethon.tl.functions.channels import GetParticipantRequest
+        from telethon.errors import (
+            UserAlreadyParticipantError as _Already,
+            UserNotParticipantError as _NotParticipant,
+        )
+        from telethon.tl.functions.channels import JoinChannelRequest, GetParticipantRequest
+        from telethon.tl.functions.messages import ImportChatInviteRequest, CheckChatInviteRequest
 
         cleaned = _clean_group_entry(str(group))
         invite_match = _re.search(
@@ -3263,25 +3284,79 @@ class TelegramManager:
         )
 
         async def _check_membership():
+            entity_obj = None
             if invite_match:
-                # إذا كان الحساب منضمًا بالفعل فقد يستطيع Telethon حل الرابط.
-                # عند تعذر ذلك ننتقل لمحاولة استيراد الدعوة مرة واحدة.
+                invite_hash = invite_match.group(1)
+                # 1. فحص رابط الدعوة عبر CheckChatInviteRequest لمعرفة إن كان منضماً بالفعل
+                try:
+                    chk = await client_manager.client(CheckChatInviteRequest(invite_hash))
+                    # ChatInviteAlready أو وجود كائن chat يعني أن الحساب منضم مسبقاً
+                    if type(chk).__name__ == "ChatInviteAlready" or hasattr(chk, "chat"):
+                        return "already_joined", getattr(chk, "chat", None)
+                except _Already:
+                    return "already_joined", None
+                except Exception:
+                    pass
+
+                # 2. محاولة جلب الكيان مباشرة إن كان محفوظاً في الجلسة
                 try:
                     entity_obj = await client_manager.client.get_entity(cleaned)
+                    if getattr(entity_obj, "left", None) is False or getattr(entity_obj, "creator", False):
+                        return "already_joined", entity_obj
                 except Exception:
-                    return "needs_join", None
-            else:
-                entity_obj = await client_manager.client.get_entity(cleaned)
+                    pass
+
+                return "needs_join", None
+
+            # روابط عامة أو معرفات رقمية أو أسماء مستخدمين
             try:
-                # GetParticipantRequest هو الفحص الأدق للقنوات والمجموعات الكبيرة.
-                if hasattr(entity_obj, "megagroup") or hasattr(entity_obj, "broadcast"):
-                    await client_manager.client(
-                        GetParticipantRequest(entity_obj, "me")
-                    )
-                else:
-                    await client_manager.client.get_permissions(entity_obj, "me")
-                return "already_joined"
+                entity_obj = await client_manager.client.get_entity(cleaned)
             except _NotParticipant:
+                return "needs_join", None
+            except Exception as ent_err:
+                err_text = str(ent_err).lower()
+                if "already" in err_text:
+                    return "already_joined", None
+                return "needs_join", None
+
+            # فحص الخصائص المباشرة للكيان
+            if getattr(entity_obj, "left", None) is False or getattr(entity_obj, "creator", False):
+                return "already_joined", entity_obj
+
+            try:
+                if hasattr(entity_obj, "megagroup") or hasattr(entity_obj, "broadcast"):
+                    try:
+                        await client_manager.client(GetParticipantRequest(entity_obj, "me"))
+                        return "already_joined", entity_obj
+                    except _NotParticipant:
+                        return "needs_join", entity_obj
+                    except Exception:
+                        # في بعض القنوات والمجموعات، قد تكون قائمة المشاركين مخصصة للإدارة فقط (ChatAdminRequiredError)
+                        # ولكن العضو منضم فعلياً؛ نتحقق من صلاحياته
+                        try:
+                            perms = await client_manager.client.get_permissions(entity_obj, "me")
+                            if perms and not getattr(perms, "is_banned", False):
+                                return "already_joined", entity_obj
+                        except _NotParticipant:
+                            return "needs_join", entity_obj
+                        except Exception:
+                            pass
+                        if getattr(entity_obj, "left", None) is False:
+                            return "already_joined", entity_obj
+                        return "already_joined", entity_obj
+                else:
+                    try:
+                        await client_manager.client.get_permissions(entity_obj, "me")
+                        return "already_joined", entity_obj
+                    except _NotParticipant:
+                        return "needs_join", entity_obj
+                    except Exception:
+                        if getattr(entity_obj, "left", None) is False:
+                            return "already_joined", entity_obj
+                        return "already_joined", entity_obj
+            except _NotParticipant:
+                return "needs_join", entity_obj
+            except Exception:
                 return "needs_join", entity_obj
 
         def _join_entity(entity_obj=None):
@@ -3294,15 +3369,23 @@ class TelegramManager:
                         return "joined"
                     except _Already:
                         return "already_joined"
+                    except Exception as imp_err:
+                        if "already" in str(imp_err).lower():
+                            return "already_joined"
+                        raise imp_err
                 try:
-                    await client_manager.client(JoinChannelRequest(entity_obj))
+                    await client_manager.client(JoinChannelRequest(entity_obj or cleaned))
+                    return "joined"
                 except _Already:
                     return "already_joined"
-                return "joined"
+                except Exception as ch_err:
+                    if "already" in str(ch_err).lower():
+                        return "already_joined"
+                    raise ch_err
             return _join()
 
         try:
-            membership_status, entity_obj = client_manager.run_coroutine(
+            membership_status, resolved_entity = client_manager.run_coroutine(
                 _check_membership()
             )
             if membership_status == "already_joined":
@@ -3312,6 +3395,16 @@ class TelegramManager:
                     "reason": "الحساب منضم مسبقًا",
                 }
 
+            # إذا كان الرابط غير منضم ولكن مطلوب تخطي الانضمام (مثلاً بسبب FloodWait سابق)
+            if skip_join:
+                return {
+                    "status": "deferred",
+                    "group": str(group),
+                    "reason": "تم تأجيل الانضمام لوجود مهلة انتظار Telegram على الانضمام",
+                    "technical": "JoinSkippedDueToPriorFloodWait",
+                }
+
+            # فحص حصة الانضمام المتاحة
             slot = self._reserve_join_slot(user_id)
             if not slot["allowed"]:
                 return {
@@ -3321,17 +3414,26 @@ class TelegramManager:
                     "technical": f"سيُعاد الفحص بعد نحو {slot['wait_seconds']} ثانية",
                 }
 
-            result = client_manager.run_coroutine(_join_entity(entity_obj))
+            result = client_manager.run_coroutine(_join_entity(resolved_entity))
+            if result == "already_joined":
+                return {
+                    "status": "already_joined",
+                    "group": str(group),
+                    "reason": "الحساب منضم مسبقًا",
+                }
             return {
-                "status": result,
+                "status": "joined",
                 "group": str(group),
-                "reason": (
-                    "تم الانضمام بنجاح — سيبدأ الإرسال من الدورة التالية"
-                    if result == "joined"
-                    else "الحساب منضم مسبقًا"
-                ),
+                "reason": "تم الانضمام بنجاح — سيبدأ الإرسال من الدورة التالية",
             }
         except Exception as error:
+            err_str = str(error).lower()
+            if "already" in err_str or isinstance(error, _Already):
+                return {
+                    "status": "already_joined",
+                    "group": str(group),
+                    "reason": "الحساب منضم مسبقًا",
+                }
             return {
                 "status": "failed",
                 "group": str(group),
@@ -3343,9 +3445,11 @@ class TelegramManager:
     def prepare_groups_for_send(self, user_id, client_manager, groups):
         """
         يجهز المجموعات قبل الدورة:
-        - المنضم إليها تبقى للإرسال الحالي.
-        - التي تم الانضمام إليها الآن تؤجل للدورة التالية.
-        - الفشل أو تجاوز حد الانضمام يؤجل أيضًا مع سبب واضح.
+        - المجموعات التي تظهر منضمة في حالة الفحص (already_joined): ترسل إليها الرسائل فوراً (send_now).
+        - المجموعات غير المنضمة: يتم الانضمام إليها وتأجيل الإرسال إليها للدورة القادمة (deferred/joined).
+        - لا يتم تأخير الإرسال عن الكل مطلقاً: إذا واجه انضمام أي رابط مهلة أو خطأ، يؤجل ذلك الرابط فقط
+          وتستمر العملية في فحص بقية الروابط وإرسال الرسائل للمجموعات المنضمة حالياً.
+        - عزل الاستثناءات لكل رابط على حدة بحيث لا يعطل إرسال الرسائل للروابط المنضمة حالياً في نفس العملية.
         """
         result = {
             "send_now": [],
@@ -3357,41 +3461,43 @@ class TelegramManager:
         if not client_manager or not getattr(client_manager, "client", None):
             return result
 
+        join_flood_wait = False
+
         for index, group in enumerate(groups):
-            # الدعوات الخاصة قد تنضم داخل ImportChatInviteRequest،
-            # والروابط العامة تمر عبر JoinChannelRequest.
-            membership = self.ensure_group_membership(user_id, client_manager, group)
-            status = membership.get("status")
-            if status == "already_joined":
-                result["send_now"].append(group)
-                result["already_joined"].append(group)
-                continue
+            try:
+                membership = self.ensure_group_membership(
+                    user_id, client_manager, group, skip_join=join_flood_wait
+                )
+                status = membership.get("status")
 
-            if status == "joined":
+                if status == "already_joined":
+                    result["send_now"].append(group)
+                    result["already_joined"].append(group)
+                    continue
+
+                if status == "joined":
+                    result["deferred"].append(group)
+                    result["joined"].append(group)
+                    continue
+
+                # فشل أو غير منضم مع تعذر الانضمام (يؤجل هذا الرابط فقط)
+                err = membership.get("error")
+                if err is not None and type(err).__name__ == "FloodWaitError":
+                    join_flood_wait = True
+
                 result["deferred"].append(group)
-                result["joined"].append(group)
-                continue
+                result["failures"].append(membership)
 
-            result["deferred"].append(group)
-            result["failures"].append(membership)
-            if (
-                membership.get("error") is not None
-                and type(membership["error"]).__name__ == "FloodWaitError"
-            ):
-                # لا نواصل محاولات الانضمام بعد أن يفرض Telegram FloodWait.
-                # تُترك بقية المجموعات للدورة التالية.
-                for remaining_group in groups[index + 1:]:
-                    deferred = {
-                        "status": "deferred",
-                        "group": str(remaining_group),
-                        "reason": membership.get("reason")
-                        or "فرض Telegram مهلة انتظار قبل أي انضمام جديد",
-                        "technical": membership.get("technical")
-                        or "FloodWaitError",
-                    }
-                    result["deferred"].append(remaining_group)
-                    result["failures"].append(deferred)
-                break
+            except Exception as item_err:
+                logger.error(f"خطأ غير معطل أثناء فحص/انضمام المجموعة {group}: {item_err}")
+                result["deferred"].append(group)
+                result["failures"].append({
+                    "status": "failed",
+                    "group": str(group),
+                    "error": item_err,
+                    "reason": _describe_send_failure(item_err)["reason"],
+                    "technical": _describe_send_failure(item_err)["technical"],
+                })
 
         return result
 
@@ -4464,12 +4570,13 @@ def execute_scheduled_messages(user_id, settings):
                         user_id, _join_detail, "الانضمام قبل الإرسال"
                     )
 
+            _sched_sendable_count = len([g for g in groups if g not in _sched_deferred_groups])
             socketio.emit('log_update', {
                 "message": (
-                    f"🚀 بدء الإرسال المجدول... "
-                    f"({len(_sched_deferred_groups)} مؤجلة للدورة التالية)"
+                    f"🚀 بدء الإرسال المجدول إلى {_sched_sendable_count} مجموعة منضمة... "
+                    f"({len(_sched_deferred_groups)} غير منضمة/مؤجلة للدورة التالية)"
                     if _sched_deferred_groups
-                    else "🚀 بدء الإرسال المجدول..."
+                    else f"🚀 بدء الإرسال المجدول إلى {_sched_sendable_count} مجموعة منضمة..."
                 )
             }, to=user_id)
 
@@ -4545,6 +4652,8 @@ def execute_scheduled_messages(user_id, settings):
                 with USERS_LOCK:
                     if user_id in USERS:
                         USERS[user_id]['stats']['errors'] += 1
+                if i < len(groups):
+                    time.sleep(2)
 
         socketio.emit('log_update', {
             "message": (
@@ -5986,12 +6095,13 @@ def api_send_now():
                             user_id, _join_detail, "الانضمام قبل الإرسال"
                         )
 
+                    _sendable_now_count = len([g for g in groups_list if g not in deferred_groups])
                     socketio.emit('log_update', {
                         "message": (
-                            f"🚀 بدء الإرسال الفوري... "
-                            f"({len(deferred_groups)} مؤجلة للدورة التالية)"
+                            f"🚀 بدء الإرسال الفوري إلى {_sendable_now_count} مجموعة منضمة... "
+                            f"({len(deferred_groups)} غير منضمة/مؤجلة للدورة التالية)"
                             if deferred_groups
-                            else "🚀 بدء الإرسال الفوري..."
+                            else f"🚀 بدء الإرسال الفوري إلى {_sendable_now_count} مجموعة منضمة..."
                         )
                     }, to=user_id)
             except Exception as _check_err:
@@ -6079,6 +6189,8 @@ def api_send_now():
                         if user_id in USERS:
                             USERS[user_id]['stats']['errors'] += 1
                             socketio.emit('stats_update', USERS[user_id]['stats'], to=user_id)
+                    if i < len(groups_list):
+                        time.sleep(2)
 
             socketio.emit('log_update', {
                 "message": (
