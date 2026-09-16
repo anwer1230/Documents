@@ -673,6 +673,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
             {/* Right Header Actions */}
             <div className="flex items-center gap-1">
+              {/* Header Join Button / Icon if not joined */}
+              {(chat.type === 'channel' || chat.type === 'group' || chat.type === 'supergroup') && chat.isJoined === false && (
+                <button
+                  id="chat-header-join-button"
+                  onClick={() => onJoinChannel && onJoinChannel(chat.id)}
+                  disabled={isJoiningChannel}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#3390ec] hover:bg-[#2881da] active:scale-95 text-white font-bold text-xs shadow-md transition-all disabled:opacity-60 shrink-0"
+                  title={chat.type === 'channel' ? (isAr ? 'الانضمام إلى القناة' : 'Join Channel') : (isAr ? 'الانضمام إلى المجموعة' : 'Join Group')}
+                >
+                  {isJoiningChannel ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {chat.type === 'channel'
+                      ? (isAr ? 'الانضمام إلى القناة' : 'Join Channel')
+                      : (isAr ? 'الانضمام إلى المجموعة' : 'Join Group')}
+                  </span>
+                </button>
+              )}
               {/* Quick MTProto Typing Simulator Button */}
               {onSimulateTyping && chat.type !== 'saved' && (
                 <button
@@ -1684,21 +1705,31 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
       )}
 
       {/* Bottom Action Bar: JOIN CHANNEL or BROADCAST MUTE or RESTRICTED or Message Input */}
-      {chat.type === 'channel' && chat.isBroadcast && chat.isJoined === false ? (
+      {(chat.type === 'channel' || chat.type === 'group' || chat.type === 'supergroup') && chat.isJoined === false ? (
         <div
+          id="chat-unjoined-bottom-bar"
           className={`w-full px-4 py-3 border-t flex flex-col sm:flex-row items-center justify-between gap-3 backdrop-blur-md transition-colors ${
             isDark ? 'bg-[#17212b]/95 border-[#0e1621]' : 'bg-white/95 border-gray-200'
           }`}
         >
           <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Radio className="w-4 h-4 text-[#3390ec]" />
+            {chat.type === 'channel' ? (
+              <Radio className="w-4 h-4 text-[#3390ec] shrink-0" />
+            ) : (
+              <Users className="w-4 h-4 text-[#3390ec] shrink-0" />
+            )}
             <span>
-              {isAr
-                ? 'أنت في وضع معاينة القناة. انضم لتصلك منشورات وتحديثات القناة.'
-                : 'Preview mode. Join to receive posts and updates from this channel.'}
+              {chat.type === 'channel'
+                ? isAr
+                  ? 'أنت في وضع معاينة القناة. انضم لتصلك منشورات وتحديثات القناة.'
+                  : 'Preview mode. Join to receive posts and updates from this channel.'
+                : isAr
+                  ? 'أنت في وضع معاينة المجموعة. انضم للمشاركة والتفاعل في المجموعة.'
+                  : 'Preview mode. Join to participate and chat in this group.'}
             </span>
           </div>
           <button
+            id="chat-unjoined-bottom-join-btn"
             onClick={() => onJoinChannel && onJoinChannel(chat.id)}
             disabled={isJoiningChannel}
             className="w-full sm:w-auto min-w-[200px] py-2.5 px-6 rounded-xl bg-[#3390ec] hover:bg-[#2b7ec9] active:scale-98 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-[#3390ec]/25 transition disabled:opacity-60"
@@ -1711,7 +1742,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             ) : (
               <>
                 <UserPlus className="w-4 h-4" />
-                <span>{isAr ? 'الانضمام إلى القناة' : 'JOIN CHANNEL'}</span>
+                <span>
+                  {chat.type === 'channel'
+                    ? isAr
+                      ? 'الانضمام إلى القناة'
+                      : 'JOIN CHANNEL'
+                    : isAr
+                      ? 'الانضمام إلى المجموعة'
+                      : 'JOIN GROUP'}
+                </span>
               </>
             )}
           </button>

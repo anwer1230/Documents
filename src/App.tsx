@@ -1617,12 +1617,21 @@ export default function App() {
     // If chat is not in chats list yet, prepend it
     setChats((prev) => {
       const exists = prev.some(
-        (c) => c.id === chat.id || (c.username && c.username.toLowerCase() === chat.username?.toLowerCase())
+        (c) => c.id === chat.id || (c.username && chat.username && c.username.toLowerCase() === chat.username.toLowerCase())
       );
       if (!exists) {
         return [chat, ...prev];
       }
-      return prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
+      return prev.map((c) => {
+        if (c.id === chat.id || (c.username && chat.username && c.username.toLowerCase() === chat.username.toLowerCase())) {
+          return {
+            ...c,
+            ...(chat.isJoined === false ? { isJoined: false } : {}),
+            unreadCount: 0,
+          };
+        }
+        return c;
+      });
     });
 
     // Mark unread as read in UI
@@ -1703,11 +1712,12 @@ export default function App() {
     }
   };
 
-  // Join Channel with MTProto API and WebSocket real-time broadcast
+  // Join Channel or Group with MTProto API and WebSocket real-time broadcast
   const handleJoinChannel = async (channelId: string) => {
     setIsJoiningChannel(true);
+    const activeC = chats.find((c) => c.id === channelId);
+    const isGroup = activeC?.type === 'group' || activeC?.type === 'supergroup';
     try {
-      const activeC = chats.find((c) => c.id === channelId);
       const targetIdentifier = activeC?.username || channelId;
 
       const res = await fetch('/api/telegram/join-channel', {
@@ -1717,30 +1727,32 @@ export default function App() {
       });
 
       if (!res.ok) {
-        throw new Error('Failed to join channel');
+        throw new Error('Failed to join channel or group');
       }
 
       // Update chat state in local list
       setChats((prev) =>
         prev.map((c) => {
-          if (c.id === channelId || (c.username && c.username.toLowerCase() === targetIdentifier.toLowerCase())) {
+          if (c.id === channelId || (c.username && targetIdentifier && c.username.toLowerCase() === targetIdentifier.toLowerCase())) {
             return {
               ...c,
               isJoined: true,
-              membersCount: (c.membersCount || 10000) + 1,
+              membersCount: (c.membersCount || 1000) + 1,
             };
           }
           return c;
         })
       );
 
-      // Add system message into channel feed
+      // Add system message into chat feed
       const joinSysMsg: TelegramMessage = {
         id: `sys_join_${Date.now()}`,
         chatId: channelId,
         senderId: 'system',
         senderName: 'تيليجرام',
-        text: themeConfig.language === 'ar' ? '🎉 انضممت إلى القناة بنجاح' : '🎉 You joined the channel',
+        text: themeConfig.language === 'ar'
+          ? (isGroup ? '🎉 انضممت إلى المجموعة بنجاح' : '🎉 انضممت إلى القناة بنجاح')
+          : (isGroup ? '🎉 You joined the group' : '🎉 You joined the channel'),
         timestamp: Date.now(),
         isOut: false,
         status: 'read',
@@ -1752,17 +1764,21 @@ export default function App() {
       }));
 
       showToast(
-        themeConfig.language === 'ar' ? 'تم الانضمام إلى القناة بنجاح! 📢' : 'Successfully joined the channel! 📢',
+        themeConfig.language === 'ar'
+          ? (isGroup ? 'تم الانضمام إلى المجموعة بنجاح! 👥' : 'تم الانضمام إلى القناة بنجاح! 📢')
+          : (isGroup ? 'Successfully joined the group! 👥' : 'Successfully joined the channel! 📢'),
         'success'
       );
     } catch (err: any) {
-      console.error('Error joining channel:', err);
+      console.error('Error joining channel/group:', err);
       // Ensure UI still marks as joined gracefully
       setChats((prev) =>
         prev.map((c) => (c.id === channelId ? { ...c, isJoined: true } : c))
       );
       showToast(
-        themeConfig.language === 'ar' ? 'تم الانضمام إلى القناة بنجاح! 📢' : 'Successfully joined the channel! 📢',
+        themeConfig.language === 'ar'
+          ? (isGroup ? 'تم الانضمام إلى المجموعة بنجاح! 👥' : 'تم الانضمام إلى القناة بنجاح! 📢')
+          : (isGroup ? 'Successfully joined the group! 👥' : 'Successfully joined the channel! 📢'),
         'success'
       );
     } finally {

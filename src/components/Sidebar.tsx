@@ -104,25 +104,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const handleSelectGlobalResult = (result: any) => {
+    const isChannel = result.type === 'channel';
+    const isGroup = result.type === 'group' || result.type === 'supergroup';
+    const isJoined = result.isJoined === true;
+
     const existing = chats.find(
-      (c) => c.id === result.id || (c.username && c.username.toLowerCase() === result.username?.toLowerCase())
+      (c) => c.id === result.id || (c.username && result.username && c.username.toLowerCase() === result.username.toLowerCase())
     );
     if (existing) {
+      if (!isJoined && existing.isJoined !== true) {
+        existing.isJoined = false;
+      }
       onSelectChat(existing);
       return;
     }
 
     const newChat: TelegramChat = {
-      id: result.id || `channel_${result.username || Date.now()}`,
-      title: result.title || result.username || 'قناة تليجرام',
+      id: result.id || `${result.type || 'channel'}_${result.username || Date.now()}`,
+      title: result.title || result.username || (isChannel ? (isAr ? 'قناة تليجرام' : 'Telegram Channel') : (isAr ? 'مجموعة تليجرام' : 'Telegram Group')),
       username: result.username,
-      type: result.type || 'channel',
-      isJoined: result.isJoined ?? false,
+      type: result.type || (isChannel ? 'channel' : 'group'),
+      isBroadcast: isChannel,
+      isJoined: isJoined,
       isVerified: result.isVerified ?? false,
-      membersCount: result.participantsCount || 12000,
+      membersCount: result.participantsCount || (isChannel ? 12000 : 1500),
       description: result.description,
       unreadCount: 0,
-      avatarColor: '#3390ec',
+      avatarColor: isChannel ? '#3390ec' : isGroup ? '#2fa28a' : '#8e54e9',
     };
     onSelectChat(newChat);
   };
