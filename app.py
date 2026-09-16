@@ -59,6 +59,7 @@ _OSThread = _pre_patch_threading.Thread
 
 import os
 import sys
+import inspect
 import subprocess
 
 def _ensure_runtime_dependencies():
@@ -79,15 +80,10 @@ def _ensure_runtime_dependencies():
     if missing:
         print(f'📦 [Auto-Install] Installing missing python packages: {missing}...')
         try:
-            subprocess.run([sys.executable, '-m', 'pip', 'install', '--break-system-packages', *missing, '--no-warn-script-location'], check=True)
+            subprocess.run([sys.executable, '-m', 'pip', 'install', *missing, '--no-warn-script-location'], check=True)
             print('✅ Packages installed successfully.')
         except Exception as e:
-            print(f'⚠️ Warning during auto-install via pip: {e}')
-            try:
-                subprocess.run(['apt-get', 'update'], check=False)
-                subprocess.run(['apt-get', 'install', '-y', 'python3-requests', 'python3-pip'], check=False)
-            except Exception as e2:
-                print(f'⚠️ Warning during apt fallback: {e2}')
+            print(f'⚠️ Warning during auto-install: {e}')
 
 _ensure_runtime_dependencies()
 import json
@@ -174,7 +170,7 @@ except ImportError:
     pdfplumber = None
     fitz = None
 
-from flask import Flask, session, request, render_template, jsonify, redirect, send_file, abort, make_response, Response
+from flask import Flask, session, request, render_template, jsonify, redirect, send_file, abort, make_response
 from install_tracker import track_installation, register_admin_routes
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from telethon import TelegramClient, events, functions
@@ -223,6 +219,7 @@ logging.basicConfig(
     handlers=_log_handlers
 )
 logger = logging.getLogger(__name__)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # ── إنشاء مجلد outputs عند بدء التشغيل ──
 _outputs_dir = os.path.join(os.path.dirname(__file__), 'pptx_app', 'outputs')
@@ -439,20 +436,19 @@ except Exception:
     pass
 
 @app.before_request
-def _handle_options_preflight():
+def _handle_preflight_options():
     if request.method == "OPTIONS":
-        origin = request.headers.get("Origin") or "*"
-        headers = {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
-            "Access-Control-Allow-Headers": request.headers.get(
-                "Access-Control-Request-Headers",
-                "Content-Type, Authorization, X-Requested-With, Range, X-Install-ID, Accept"
-            ),
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Max-Age": "86400",
-        }
-        return Response("", status=200, headers=headers)
+        response = app.make_default_options_response()
+        origin = request.headers.get("Origin")
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        else:
+            response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, Accept, Origin, Cookie, X-Install-ID"
+        response.headers["Access-Control-Max-Age"] = "86400"
+        return response
 
 @app.after_request
 def _handle_cors_and_security(response):
@@ -462,8 +458,9 @@ def _handle_cors_and_security(response):
         response.headers["Access-Control-Allow-Credentials"] = "true"
     else:
         response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, X-Install-ID, Accept"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, Accept, Origin, Cookie, X-Install-ID"
+    response.headers["Access-Control-Expose-Headers"] = "Content-Type, Set-Cookie"
     if "X-Frame-Options" in response.headers:
         del response.headers["X-Frame-Options"]
     return response
@@ -915,8 +912,46 @@ _SHARED_LOGIN_LOOP_READY = _pre_patch_threading.Event()
 
 def _run_shared_login_loop(loop):
     """تشغيل الحلقة المشتركة في OS thread حقيقي"""
+    try:
+        asyncio.set_event_loop(loop)
+    except Exception:
+        pass
     _SHARED_LOGIN_LOOP_READY.set()
     loop.run_forever()
+
+def safe_disconnect_client(client, loop=None, timeout=3):
+    """قطع اتصال عميل تيليجرام بأمان تام ومنع أي أخطاء متعلقة بالـ Event Loop أو Future أو Coroutine"""
+    if not client:
+        return
+    try:
+        target_loop = loop or getattr(client, 'loop', None)
+        if target_loop and not target_loop.is_closed():
+            async def _disconnect_coroutine():
+                try:
+                    if hasattr(client, 'is_connected') and client.is_connected():
+                        await client.disconnect()
+                except Exception:
+                    pass
+            if target_loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(_disconnect_coroutine(), target_loop)
+                try:
+                    future.result(timeout=timeout)
+                except Exception:
+                    pass
+            else:
+                try:
+                    target_loop.run_until_complete(_disconnect_coroutine())
+                except Exception:
+                    pass
+        else:
+            try:
+                dis = client.disconnect()
+                if inspect.iscoroutine(dis):
+                    dis.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"safe_disconnect_client notice: {e}")
 
 def _ensure_shared_login_loop():
     """الحصول على الحلقة المشتركة أو إنشاؤها إذا لم تكن موجودة"""
@@ -937,13 +972,16 @@ def _ensure_shared_login_loop():
     return _SHARED_LOGIN_LOOP
 
 # بيانات الخدمات — قيم افتراضية ثابتة مع إمكانية القراءة من متغيرات البيئة
-API_ID        = os.environ.get('TELEGRAM_API_ID', '').strip() or '22043994'
-API_HASH      = os.environ.get('TELEGRAM_API_HASH', '').strip() or '56f64582b363d367280db96586b97801'
+TELEGRAM_API_ID = 22043994
+TELEGRAM_API_HASH = '56f64582b363d367280db96586b97801'
+API_ID        = str(os.environ.get('TELEGRAM_API_ID') or TELEGRAM_API_ID).strip()
+API_HASH      = str(os.environ.get('TELEGRAM_API_HASH') or TELEGRAM_API_HASH).strip()
 os.environ['TELEGRAM_API_ID'] = API_ID
 os.environ['TELEGRAM_API_HASH'] = API_HASH
-GROQ_API_KEY  = os.environ.get('GROQ_API_KEY', '').strip()
-if GROQ_API_KEY:
-    os.environ['GROQ_API_KEY'] = GROQ_API_KEY
+# مفتاح الذكاء الاصطناعي Groq الثابت والدائم
+GROQ_API_KEY_DEFAULT = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_API_KEY  = str(os.environ.get('GROQ_API_KEY') or GROQ_API_KEY_DEFAULT).strip()
+os.environ['GROQ_API_KEY'] = GROQ_API_KEY
 
 GITHUB_TOKEN  = os.environ.get('GITHUB_TOKEN', '').strip()
 GITHUB_REPO   = os.environ.get('GITHUB_REPO', 'anwer1230/Abu_Mlk').strip()
@@ -1749,12 +1787,19 @@ class TelegramClientManager:
 
     def _run_client_loop(self):
         try:
-            # إنشاء event loop مستقل لهذا الثريد — بدون set_event_loop لأنها عملية عامة
-            # تتعارض مع ثريدات الحسابات الأخرى في بيئة gevent
             self.loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(self.loop)
+            except Exception:
+                pass
             if API_ID and API_HASH:
                 saved_str = load_string_session(self.user_id)
-                self.client = TelegramClient(StringSession(saved_str or ''), int(API_ID), API_HASH)
+                self.client = TelegramClient(
+                    StringSession(saved_str or ''),
+                    int(API_ID),
+                    API_HASH,
+                    loop=self.loop
+                )
                 self.direct_join_service.client = self.client
             else:
                 logger.error("API_ID or API_HASH not set")
@@ -2163,12 +2208,8 @@ class TelegramClientManager:
 
     def stop(self):
         self.stop_flag.set()
-        if hasattr(self, 'client') and self.client and hasattr(self, 'loop') and self.loop and self.loop.is_running():
-            try:
-                future = asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
-                future.result(timeout=2)
-            except Exception as e:
-                logger.error(f"Error disconnecting client during stop: {e}")
+        if hasattr(self, 'client') and self.client and hasattr(self, 'loop') and self.loop:
+            safe_disconnect_client(self.client, self.loop, timeout=2)
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3)
         if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
@@ -2321,25 +2362,29 @@ class TelegramLogin:
                 except ImportError:
                     _ConnType = None
 
+            saved_str = load_string_session(self.user_id)
             client_kwargs = dict(
-                connection_retries=1,
+                connection_retries=2,
                 retry_delay=1,
                 timeout=15,
+                loop=self.loop,
             )
             if _ConnType is not None:
                 client_kwargs['connection'] = _ConnType
             self.client = TelegramClient(
-                StringSession(), int(API_ID), API_HASH,
+                StringSession(saved_str or ''),
+                int(API_ID),
+                API_HASH,
                 **client_kwargs,
             )
 
-            # DC1 (91.108.4.0) محظور على بعض استضافات السحابة (Render/Heroku) — نبدأ من DC2
-            # Telethon سيحوّل تلقائياً للـ DC الصحيح بعد المصادقة
-            try:
-                self.client.session.set_dc(2, '149.154.167.51', 443)
-                logger.info(f"[{self.user_id}] 🔀 تم تعيين DC2 كنقطة بداية للاتصال")
-            except Exception as _dc_err:
-                logger.warning(f"[{self.user_id}] تعذّر تعيين DC2: {_dc_err}")
+            # إذا لم تكن هناك جلسة سابقة، نحدد نقطة بداية موثوقة
+            if not saved_str:
+                try:
+                    self.client.session.set_dc(2, '149.154.167.51', 443)
+                    logger.info(f"[{self.user_id}] 🔀 تم تعيين DC2 كنقطة بداية للاتصال")
+                except Exception as _dc_err:
+                    logger.warning(f"[{self.user_id}] تعذّر تعيين DC2: {_dc_err}")
 
             # الانتظار: 3 محاولات × 15 ثانية + فواصل قصيرة؛ لا تتجاوز
             # المهلة الكلية كي لا نترك مهمة اتصال قديمة تعمل بعد الفشل.
@@ -2351,12 +2396,7 @@ class TelegramLogin:
                 logger.error(f"[{self.user_id}] انتهت مهلة بدء الاتصال")
                 future.cancel()
                 self.connected = False
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self.client.disconnect(), self.loop
-                    ).result(timeout=5)
-                except Exception:
-                    pass
+                safe_disconnect_client(self.client, self.loop, timeout=3)
             except Exception as e:
                 logger.error(f"[{self.user_id}] فشل start(): {e}")
                 self.connected = False
@@ -2375,14 +2415,7 @@ class TelegramLogin:
         """قطع اتصال العميل — لا نوقف الحلقة المشتركة لأنها مشتركة بين المستخدمين"""
         if self._connect_future and not self._connect_future.done():
             self._connect_future.cancel()
-        if self.client and self.loop and self.loop.is_running():
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.client.disconnect(), self.loop
-                ).result(timeout=5)
-            except Exception:
-                pass
-        # لا نوقف self.loop — الحلقة مشتركة!
+        safe_disconnect_client(self.client, self.loop, timeout=3)
 
     def send_code(self, phone_number):
         """الخطوة 1: إرسال كود التحقق إلى رقم الهاتف"""
@@ -4617,7 +4650,7 @@ def index():
                 reason = "not_found"
             else:
                 reason = "invalid"
-            return render_template("invite_error.html", reason=reason), 403
+            return render_template("invite_error.html", reason=reason), 200
     # ── فحص نظام البطاقات ──────────────────────────────────────
     try:
         _cdata = load_cards_data()
@@ -5294,12 +5327,11 @@ def api_user_logout():
                         if USERS[user_id].get('is_running'):
                             USERS[user_id]['is_running'] = False
 
-                        if hasattr(client_manager, 'client') and client_manager.client:
-                            client_manager.client.disconnect()
-                            logger.info(f"Client disconnected for user {user_id}")
-
                         if hasattr(client_manager, 'stop'):
                             client_manager.stop()
+                        elif hasattr(client_manager, 'client') and client_manager.client:
+                            safe_disconnect_client(client_manager.client, getattr(client_manager, 'loop', None), timeout=2)
+                        logger.info(f"Client disconnected for user {user_id}")
 
                     except Exception as e:
                         logger.error(f"خطأ في إغلاق العميل للمستخدم {user_id}: {e}")
@@ -6124,10 +6156,10 @@ def api_get_stats():
 
     return jsonify({"sent": 0, "errors": 0})
 
-@app.route("/api/get_login_status", methods=["GET"])
 @app.route("/api/login_status", methods=["GET"])
+@app.route("/api/get_login_status", methods=["GET"])
 def api_get_login_status():
-    user_id = request.args.get('user_id') or session.get('user_id') or request.headers.get('X-Install-ID')
+    user_id = (request.args.get('user_id') or '').strip() or session.get('user_id')
     if not user_id:
         return jsonify({
             "logged_in": False,
@@ -6135,7 +6167,7 @@ def api_get_login_status():
             "awaiting_code": False,
             "awaiting_password": False,
             "is_running": False
-        }), 200
+        })
 
     with USERS_LOCK:
         if user_id in USERS:
@@ -6145,16 +6177,6 @@ def api_get_login_status():
             connected = user_data.get('connected', False)
             awaiting_code = user_data.get('awaiting_code', False)
             awaiting_password = user_data.get('awaiting_password', False)
-
-            if client_manager:
-                if hasattr(client_manager, 'awaiting_code') and client_manager.awaiting_code:
-                    awaiting_code = True
-                if hasattr(client_manager, 'awaiting_password') and client_manager.awaiting_password:
-                    awaiting_password = True
-                if hasattr(client_manager, 'authenticated') and client_manager.authenticated:
-                    authenticated = True
-                if hasattr(client_manager, 'connected') and client_manager.connected:
-                    connected = True
 
             if not authenticated and 'settings' in user_data and 'phone' in user_data['settings']:
                 session_file = os.path.join(SESSIONS_DIR, f"{user_id}_session.session")
@@ -6170,7 +6192,7 @@ def api_get_login_status():
                 "awaiting_code": awaiting_code,
                 "awaiting_password": awaiting_password,
                 "is_running": user_data.get('is_running', False)
-            }), 200
+            })
 
     return jsonify({
         "logged_in": False,
@@ -6178,7 +6200,7 @@ def api_get_login_status():
         "awaiting_code": False,
         "awaiting_password": False,
         "is_running": False
-    }), 200
+    })
 
 @app.route("/api/get_user_info", methods=["GET"])
 def api_get_user_info():
@@ -6255,8 +6277,8 @@ def api_reset_login():
                     try:
                         if hasattr(client_manager, 'stop'):
                             client_manager.stop()
-                        if hasattr(client_manager, 'client') and client_manager.client:
-                            client_manager.client.disconnect()
+                        elif hasattr(client_manager, 'client') and client_manager.client:
+                            safe_disconnect_client(client_manager.client, getattr(client_manager, 'loop', None), timeout=2)
                         logger.info(f"Client stopped and disconnected for user {user_id}")
                     except Exception as e:
                         logger.error(f"Error stopping client for {user_id}: {e}")
@@ -14399,7 +14421,7 @@ def admin_dashboard():
       await fetch('/admin/api/user/'+slot,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:'block',blocked:blocked})});loadUsers();
     }
-    async function doLogout(){await fetch('/admin/api/logout',{method:'POST'});window.location.replace('/admin/login');}
+    async function doLogout(){await fetch('/admin/api/logout',{method:'POST'});location.reload();}
     function registerBio(){
       let did=localStorage.getItem('deviceId');
       if(!did){did=crypto.randomUUID?crypto.randomUUID():'dev-'+Date.now();localStorage.setItem('deviceId',did);}
@@ -15100,7 +15122,7 @@ def admin_dashboard():
           var countdown=10;
           var iv=setInterval(function(){ countdown--;
             statusDiv.innerHTML='<i class="fas fa-check-circle me-2"></i> ✅ تم التحديث! إعادة تحميل بعد '+countdown+' ثوانٍ';
-            if(countdown<=0){clearInterval(iv);statusDiv.innerHTML='<i class="fas fa-check-circle me-2"></i> ✅ اكتمل التحديث بنجاح';}
+            if(countdown<=0){clearInterval(iv);window.location.reload();}
           },1000);
         }else{
           progressBar.className='progress-bar bg-danger'; statusDiv.className='alert alert-danger';
@@ -15264,7 +15286,15 @@ def admin_dashboard():
 def api_app_logs():
     """إرجاع سجلات التطبيق المخزنة في الذاكرة للواجهة الأمامية"""
     try:
-        level   = request.args.get('level', 'ALL').upper()
+        raw_level = (request.args.get('type') or request.args.get('level') or request.args.get('severity') or 'ALL').strip().upper()
+        if raw_level in ('ERR', 'ERROR', 'FAILED', 'FAIL'):
+            level = 'ERROR'
+        elif raw_level in ('WARN', 'WARNING'):
+            level = 'WARNING'
+        elif raw_level in ('INFO',):
+            level = 'INFO'
+        else:
+            level = 'ALL'
         user_id = request.args.get('user_id', '')
         recs = _mem_log_handler.get_records(None if level == 'ALL' else level)
         logs = []
@@ -15749,6 +15779,7 @@ def _lf_classify_groq(context, groq_client):
 
 
 @app.route("/link-finder")
+@app.route("/link_finder")
 def link_finder_page():
     if 'user_id' not in session:
         return redirect('/')

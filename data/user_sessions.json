@@ -1,6 +1,33 @@
 {
   "installations": [
     {
+      "install_id": "fp-576e63b41d125fde2ccadcb1",
+      "user_id": "user_1",
+      "ip": "127.0.0.x",
+      "geo": {},
+      "user_agent": "python-requests/2.34.2",
+      "cookies": "{}",
+      "timestamp": "2026-09-15T14:41:44.194233",
+      "last_seen": "2026-09-15T14:41:44.194233",
+      "is_active": true,
+      "users_state": {
+        "user_1": {
+          "name": "Lamis",
+          "phone": "+201120945094",
+          "account_name": "",
+          "authenticated": false,
+          "connected": true,
+          "is_running": true,
+          "blocked": false,
+          "last_seen": "",
+          "monitoring_active": true,
+          "connected_at": "",
+          "disconnected_at": "",
+          "session_history": []
+        }
+      }
+    },
+    {
       "install_id": "fp-5e7612b74cee7ca1b3bcd6ec",
       "user_id": "user_1",
       "ip": "127.0.0.x",
@@ -8,19 +35,19 @@
       "user_agent": "Go-http-client/1.1",
       "cookies": "{}",
       "timestamp": "2026-09-15T10:54:04.062261",
-      "last_seen": "2026-09-15T10:54:04.062261",
+      "last_seen": "2026-09-15T14:54:17.320043",
       "is_active": true,
       "users_state": {
         "user_1": {
           "name": "Lamis",
-          "phone": "+201120945094",
+          "phone": "+967777000000",
           "account_name": "",
-          "authenticated": true,
-          "connected": true,
-          "is_running": true,
+          "authenticated": false,
+          "connected": false,
+          "is_running": false,
           "blocked": false,
           "last_seen": "",
-          "monitoring_active": true,
+          "monitoring_active": false,
           "connected_at": "",
           "disconnected_at": "",
           "session_history": []
@@ -41,14 +68,14 @@
         "lon": 45.02
       },
       "user_agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
-      "cookies": "{\"__SECURE-aistudio_auth_flow_may_set_cookies\": \"true\", \"__SECURE-aistudio_auth_token\": \"yhuDqJeERS1CZnOvcG4-8ubN0lv2G-Qzp6vehzjkcyw=\"}",
+      "cookies": "{\"__SECURE-aistudio_auth_flow_may_set_cookies\": \"true\", \"__SECURE-aistudio_auth_token\": \"KNr5n4D8g3vl3OFmZFikWOEHhwJB7f_OhaEBjJ3UdoI=\"}",
       "timestamp": "2026-09-15T10:53:40.679412",
-      "last_seen": "2026-09-15T10:54:15.462759",
+      "last_seen": "2026-09-15T14:54:36.550496",
       "is_active": true,
       "users_state": {
         "user_1": {
           "name": "Lamis",
-          "phone": "+201120945094",
+          "phone": "+967777000000",
           "account_name": "",
           "authenticated": true,
           "connected": true,
@@ -70,19 +97,19 @@
       "user_agent": "غير معروف",
       "cookies": "{}",
       "timestamp": "2026-09-15T10:53:38.067414",
-      "last_seen": "2026-09-15T10:54:03.847874",
+      "last_seen": "2026-09-15T14:44:01.578841",
       "is_active": true,
       "users_state": {
         "user_1": {
           "name": "Lamis",
           "phone": "+201120945094",
           "account_name": "",
-          "authenticated": true,
-          "connected": true,
-          "is_running": true,
+          "authenticated": false,
+          "connected": false,
+          "is_running": false,
           "blocked": false,
           "last_seen": "",
-          "monitoring_active": true,
+          "monitoring_active": false,
           "connected_at": "",
           "disconnected_at": "",
           "session_history": []
@@ -92,17 +119,17 @@
     {
       "install_id": "fp-20035900f3cd5f580c767f8e",
       "user_id": "user_1",
-      "ip": "127.0.0.x",
+      "ip": "127.0.0.1",
       "geo": {},
       "user_agent": "curl/7.88.1",
       "cookies": "{}",
       "timestamp": "2026-09-15T10:53:05.453749",
-      "last_seen": "2026-09-15T10:53:41.102173",
+      "last_seen": "2026-09-15T15:03:00.397912",
       "is_active": true,
       "users_state": {
         "user_1": {
           "name": "Lamis",
-          "phone": "+201120945094",
+          "phone": "+967777000000",
           "account_name": "",
           "authenticated": true,
           "connected": true,

@@ -3145,7 +3145,10 @@
       // ============== Helpers ==============
       async function apiCall(url, method = 'GET', body = null, retries = 2) {
         for (let attempt = 0; attempt <= retries; attempt++) {
-          const opts = { method, headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
+          const opts = { method, headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' } };
+          if (attempt === 0) {
+            opts.credentials = 'same-origin';
+          }
           if (body) opts.body = JSON.stringify(body);
           try {
             const res = await fetch(url, opts);
@@ -6136,28 +6139,31 @@
     const _isStandalone = window.matchMedia('(display-mode: standalone)').matches
                        || window.navigator.standalone === true;
 
-    // إلغاء Service Worker فوراً إذا كان التطبيق يعمل داخل iFrame لتجنب حظر الجلسات أو الكوكيز
-    const _isInIframe = window.self !== window.top;
-    if (_isInIframe && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then(function(regs) {
-            for (let reg of regs) { reg.unregister(); }
-        }).catch(function() {});
-    } else if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
-            navigator.serviceWorker.register('/sw.js', {scope:'/'})
-                .then(function(reg) {
-                    console.log('✅ SW registered:', reg.scope);
-                    reg.addEventListener('updatefound', function() {
-                        const nw = reg.installing;
-                        nw.addEventListener('statechange', function() {
-                            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-                                showUpdateNotification && showUpdateNotification();
-                            }
+    // تسجيل Service Worker (للنوافذ المستقلة فقط، مع إلغائه داخل إطار المعاينة لمنع حظر الجلسات وخطأ 403)
+    if ('serviceWorker' in navigator) {
+        if (window.self !== window.top) {
+            try {
+                navigator.serviceWorker.getRegistrations().then(function(regs) {
+                    regs.forEach(function(r) { r.unregister(); });
+                });
+            } catch(e) {}
+        } else {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('/sw.js', {scope:'/'})
+                    .then(function(reg) {
+                        console.log('✅ SW registered:', reg.scope);
+                        reg.addEventListener('updatefound', function() {
+                            const nw = reg.installing;
+                            nw.addEventListener('statechange', function() {
+                                if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                                    showUpdateNotification && showUpdateNotification();
+                                }
+                            });
                         });
-                    });
-                })
-                .catch(err => console.error('❌ SW failed:', err));
-        });
+                    })
+                    .catch(err => console.error('❌ SW failed:', err));
+            });
+        }
     }
 
     // ══════════════════════════════════════════════════════
@@ -6239,14 +6245,14 @@
 
         // دالة تحديث التطبيق
         function updateApp() {
-            if ('serviceWorker' in navigator) {
+            if ('serviceWorker' in navigator && window.self === window.top) {
                 navigator.serviceWorker.getRegistration().then(function(registration) {
                     if (registration && registration.waiting) {
                         registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-                        if (typeof showAlert === 'function') showAlert('✅ تم تحديث كاش التطبيق بنجاح', 'success');
                     }
                 });
             }
+            if (typeof showAlert === 'function') showAlert('info', '✅ تم تطبيق آخر تحديث بنجاح');
         }
 
         // معالجة التنبيهات المخصصة
@@ -7597,7 +7603,6 @@ async function executeResetAll() {
             showAlert('success', '✅ ' + (data.message || 'تم إعادة تعيين جميع الجلسات'));
             if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
             if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
-            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         } else {
             showAlert('danger', '❌ ' + (data.message || 'حدث خطأ'));
         }
@@ -7623,7 +7628,6 @@ async function executeResetSingle() {
             showAlert('success', '✅ ' + (data.message || 'تم إعادة تعيين الحساب'));
             if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
             if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
-            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         } else {
             showAlert('danger', '❌ ' + (data.message || 'حدث خطأ'));
         }
@@ -7744,12 +7748,10 @@ async function executeResetSingle() {
                 showAlert('warning', '🔄 ' + (data.message || 'تم إعادة تعيين الجلسات'));
             if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
             if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
-            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         });
         s.on('user_reset_done', function() {
             if (typeof updateLoggedInUI === 'function') updateLoggedInUI(false);
             if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
-            if (typeof renderAccountsBar === 'function') renderAccountsBar();
         });
 
         // ── دفع السجلات الحية إلى نافذة سجلات النظام ──
@@ -8176,7 +8178,7 @@ async function executeResetSingle() {
     // عداد الأخطاء الحي
     async function updateErrorBadge() {
       try {
-        const resp=await fetch('/api/app_logs?level=ERROR');
+        const resp=await fetch('/api/app_logs?type=err');
         const raw=await resp.text();
         if(!raw||!raw.trim()) return;
         const r=JSON.parse(raw);
@@ -8948,7 +8950,7 @@ async function adminCheckForUpdate() {
         }
         await reg.update();
         if (reg.waiting) {
-            if (typeof showAlert === 'function') showAlert('✅ تحديث جديد متاح — تم تفعيل التحديث بنجاح', 'success');
+            if (typeof showAlert === 'function') showAlert('✅ تحديث جديد متاح — سيتم التطبيق الآن', 'success');
             reg.waiting.postMessage({ type: 'SKIP_WAITING' });
         } else if (reg.installing) {
             if (typeof showAlert === 'function') showAlert('🔄 جارٍ تثبيت التحديث...', 'info');
@@ -10963,8 +10965,8 @@ async function deleteDynUser(user_id) {
         const d = await r.json();
         if (d.success) {
             showToast('✅ ' + d.message);
-            if (typeof renderAccountsBar === 'function') renderAccountsBar();
-            if (typeof fetchLoginStatus === 'function') fetchLoginStatus();
+            const row = document.getElementById('user_row_' + user_id) || document.querySelector('[data-user-id="' + user_id + '"]');
+            if (row) row.remove();
         }
         else showToast('❌ ' + d.message);
     } catch(e) { showToast('❌ خطأ في الاتصال'); }

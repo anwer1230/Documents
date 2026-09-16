@@ -19,9 +19,11 @@ from telethon.sessions import StringSession
 
 logger = logging.getLogger('auth')
 
-# ── إعدادات Telegram API ─────────────────────────────────────
-API_ID   = os.environ.get('TELEGRAM_API_ID', '').strip() or '22043994'
-API_HASH = os.environ.get('TELEGRAM_API_HASH', '').strip() or '56f64582b363d367280db96586b97801'
+# ── إعدادات Telegram API الثابتة ─────────────────────────────────────
+TELEGRAM_API_ID = 22043994
+TELEGRAM_API_HASH = '56f64582b363d367280db96586b97801'
+API_ID   = str(os.environ.get('TELEGRAM_API_ID') or TELEGRAM_API_ID).strip()
+API_HASH = str(os.environ.get('TELEGRAM_API_HASH') or TELEGRAM_API_HASH).strip()
 
 # ── مسار مجلد الجلسات ──────────────────────────────────────
 SESSIONS_DIR = os.path.join('/tmp', 'sessions') if os.environ.get('RENDER') else "sessions"
@@ -154,8 +156,12 @@ class TelegramLogin:
 
     def _run_loop(self):
         """تشغيل حلقة asyncio في OS thread حقيقي — تبقى حية للأبد"""
-        self.loop   = asyncio.new_event_loop()
-        self.client = TelegramClient(StringSession(), int(API_ID), API_HASH)
+        self.loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(self.loop)
+        except Exception:
+            pass
+        self.client = TelegramClient(StringSession(), int(API_ID), API_HASH, loop=self.loop)
         self.loop.run_until_complete(self._connect())
         try:
             self.loop.run_forever()
@@ -186,9 +192,14 @@ class TelegramLogin:
         if self.loop and self.loop.is_running():
             if self.client:
                 try:
-                    asyncio.run_coroutine_threadsafe(
-                        self.client.disconnect(), self.loop
-                    ).result(timeout=5)
+                    async def _disconnect_coro():
+                        try:
+                            if hasattr(self.client, 'is_connected') and self.client.is_connected():
+                                await self.client.disconnect()
+                        except Exception:
+                            pass
+                    future = asyncio.run_coroutine_threadsafe(_disconnect_coro(), self.loop)
+                    future.result(timeout=3)
                 except Exception:
                     pass
             self.loop.call_soon_threadsafe(self.loop.stop)

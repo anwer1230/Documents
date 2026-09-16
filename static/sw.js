@@ -22,18 +22,23 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
     if (e.request.method !== 'GET') return;
-    try {
-        const url = new URL(e.request.url);
-        if (
-            url.pathname.startsWith('/api/') ||
-            url.pathname.startsWith('/socket.io/') ||
-            url.pathname.startsWith('/admin/') ||
-            url.pathname.startsWith('/tools/')
-        ) {
-            return;
-        }
-    } catch(err) {}
-    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+    const url = new URL(e.request.url);
+    // عدم اعتراض طلبات الـ API أو اتصالات Socket أو لوحة الإدارة منعاً لأي تعارض في المصادقة
+    if (url.pathname.startsWith('/api/') || 
+        url.pathname.startsWith('/socket.io/') || 
+        url.pathname.startsWith('/admin/') || 
+        url.pathname.startsWith('/tools/')) {
+        return;
+    }
+    e.respondWith(
+        fetch(e.request).then(response => {
+            // لا تقم بإرجاع كاش لأي أخطاء 403
+            if (!response || response.status === 403 || response.status === 502) {
+                return response;
+            }
+            return response;
+        }).catch(() => caches.match(e.request))
+    );
 });
 
 // ── استقبال Web Push ──────────────────────────────────────────

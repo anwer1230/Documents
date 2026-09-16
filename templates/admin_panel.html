@@ -661,7 +661,7 @@
                             <label class="btn-sm-act" style="margin:0;cursor:pointer;" for="adminImportFileInput"><i class="fas fa-file-import me-1"></i>استيراد</label>
                             <input type="file" id="adminImportFileInput" accept=".json" style="display:none" onchange="adminImportSettingsFile(this.files[0]); this.value='';">
                             <button class="btn-sm-yellow" onclick="adminSyncSettingsFromServer()"><i class="fas fa-sync me-1"></i>مزامنة من الخادم</button>
-                            <button onclick="if(confirm('حذف الإعدادات المحلية؟')){localStorage.clear();showToast('✅ تم مسح الإعدادات المحلية بنجاح');}" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);padding:8px 12px;border-radius:8px;font-size:0.82rem;font-weight:600;cursor:pointer;"><i class="fas fa-trash me-1"></i>إعادة تعيين</button>
+                            <button onclick="if(confirm('حذف الإعدادات المحلية وإعادة الضبط؟')){localStorage.clear();if(typeof loadSettingsFromLocal==='function')loadSettingsFromLocal();}" style="background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);padding:8px 12px;border-radius:8px;font-size:0.82rem;font-weight:600;cursor:pointer;"><i class="fas fa-trash me-1"></i>إعادة تعيين</button>
                         </div>
                         <div id="settingsMgmtMsg" style="font-size:0.78rem;color:var(--muted);"></div>
                         <p style="font-size:0.75rem;color:var(--muted);margin:8px 0 0;border-top:1px solid rgba(99,102,241,0.1);padding-top:8px;"><i class="fas fa-info-circle me-1"></i>الإعدادات تُحفظ في الخادم ومزامنة تلقائياً.</p>
@@ -1598,7 +1598,7 @@ async function adminImportSettingsFile(file) {
         var d = await r.json();
         if (d.success) {
             showToast('✅ تم الاستيراد بنجاح!');
-            if (typeof loadAllSettings === 'function') loadAllSettings();
+            if (msg) msg.innerHTML = '<span style="color:#6ee7b7;">✅ تم تطبيق الإعدادات المستوردة بنجاح</span>';
         } else {
             if (msg) msg.innerHTML = '';
             showToast('❌ ' + (d.message || 'فشل الاستيراد'));
@@ -1618,7 +1618,7 @@ async function adminSyncSettingsFromServer() {
         if (msg) msg.innerHTML = '';
         if (d.success && d.settings && Object.keys(d.settings).length) {
             showToast('✅ تم تحديث الإعدادات من الخادم بنجاح');
-            if (typeof loadAllSettings === 'function') loadAllSettings();
+            if (msg) msg.innerHTML = '<span style="color:#6ee7b7;">✅ تم تحديث الإعدادات</span>';
         } else {
             showToast('ℹ️ لا توجد إعدادات محفوظة على الخادم');
         }
@@ -1721,7 +1721,7 @@ async function checkForUpdate() {
         if (!reg) { res.innerHTML = '<span style="color:#6b7280;">ℹ️ لا يوجد Service Worker</span>'; return; }
         await reg.update();
         if (reg.waiting) {
-            res.innerHTML = '<span style="color:#6ee7b7;">✅ تحديث متاح — تم التطبيق بنجاح</span>';
+            res.innerHTML = '<span style="color:#6ee7b7;">✅ تحديث متاح — تم تفعيله بنجاح</span>';
             reg.waiting.postMessage({type:'SKIP_WAITING'});
         } else if (reg.installing) {
             res.innerHTML = '<span style="color:#6ee7b7;">🔄 جاري التثبيت...</span>';

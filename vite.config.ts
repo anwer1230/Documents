@@ -7,21 +7,26 @@ import { defineConfig, type Plugin } from 'vite';
 
 let flaskProcess: ChildProcess | null = null;
 let isStartingFlask = false;
+let isFlaskReady = false;
 
 function ensureFlask(): Promise<boolean> {
+  if (isFlaskReady && flaskProcess && !flaskProcess.killed) {
+    return Promise.resolve(true);
+  }
   return new Promise((resolve) => {
-    if (flaskProcess && !flaskProcess.killed) {
+    if (flaskProcess && !flaskProcess.killed && isFlaskReady) {
       resolve(true);
       return;
     }
     if (isStartingFlask) {
-      setTimeout(() => resolve(true), 1500);
+      setTimeout(() => resolve(isFlaskReady), 1500);
       return;
     }
     isStartingFlask = true;
 
     const check = http.get('http://127.0.0.1:5000/api/system_health', () => {
       isStartingFlask = false;
+      isFlaskReady = true;
       resolve(true);
     });
 
@@ -34,15 +39,18 @@ function ensureFlask(): Promise<boolean> {
           PORT: '5000',
           PYTHONUNBUFFERED: '1',
           SESSION_SECRET: process.env.SESSION_SECRET || 'abu_malk_stable_session_secret_2026',
+          GROQ_API_KEY: process.env.GROQ_API_KEY || '',
         },
         stdio: 'inherit',
       });
+
       flaskProcess = p;
 
       p.on('error', (err) => {
         console.error('❌ [Vite] Failed to start Flask process:', err);
         flaskProcess = null;
         isStartingFlask = false;
+        isFlaskReady = false;
         resolve(false);
       });
 
@@ -50,18 +58,20 @@ function ensureFlask(): Promise<boolean> {
         console.warn(`⚠️ [Vite] Flask process exited with code ${code}`);
         flaskProcess = null;
         isStartingFlask = false;
+        isFlaskReady = false;
       });
 
       let attempts = 0;
       const poll = setInterval(() => {
         attempts++;
-        const probe = http.get('http://127.0.0.1:5000/', () => {
+        const probe = http.get('http://127.0.0.1:5000/api/system_health', () => {
           clearInterval(poll);
           isStartingFlask = false;
+          isFlaskReady = true;
           resolve(true);
         });
         probe.on('error', () => {
-          if (attempts >= 30) {
+          if (attempts >= 40) {
             clearInterval(poll);
             isStartingFlask = false;
             resolve(false);
@@ -72,34 +82,16 @@ function ensureFlask(): Promise<boolean> {
   });
 }
 
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailers',
-  'transfer-encoding',
-  'upgrade',
-]);
-
-function filterHopByHop(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
-  const clean: http.OutgoingHttpHeaders = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-      clean[key] = value;
-    }
-  }
-  return clean;
-}
-
 function flaskIntegrationPlugin(): Plugin {
   return {
     name: 'flask-integration',
     configureServer(server) {
       ensureFlask();
+
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || '/';
+
+        // دمج أصول Vite و Socket.IO ليتم التعامل معها مباشرة بواسطة خادم Vite ومحول الـ WebSocket
         if (
           url.startsWith('/@') ||
           url.startsWith('/src/') ||
@@ -110,22 +102,35 @@ function flaskIntegrationPlugin(): Plugin {
           return next();
         }
 
-        await ensureFlask();
+        if (!isFlaskReady) {
+          await ensureFlask();
+        }
 
-        const forwardHeaders = filterHopByHop(req.headers);
-        forwardHeaders.host = '127.0.0.1:5000';
+        // تنقية Hop-by-Hop headers لمنع تلف اتصالات HTTP Keep-Alive
+        const reqHeaders: Record<string, string | string[] | undefined> = { ...req.headers };
+        delete reqHeaders['host'];
+        delete reqHeaders['connection'];
+        delete reqHeaders['keep-alive'];
+        delete reqHeaders['upgrade'];
+        delete reqHeaders['http2-settings'];
+        delete reqHeaders['transfer-encoding'];
+        reqHeaders['host'] = '127.0.0.1:5000';
 
         const options: http.RequestOptions = {
           hostname: '127.0.0.1',
           port: 5000,
           path: url,
           method: req.method,
-          headers: forwardHeaders,
+          headers: reqHeaders,
         };
 
         const proxyReq = http.request(options, (proxyRes) => {
-          const responseHeaders = filterHopByHop(proxyRes.headers);
-          res.writeHead(proxyRes.statusCode || 200, responseHeaders);
+          const resHeaders = { ...proxyRes.headers };
+          delete resHeaders['connection'];
+          delete resHeaders['keep-alive'];
+          delete resHeaders['transfer-encoding'];
+          delete resHeaders['upgrade'];
+          res.writeHead(proxyRes.statusCode || 200, resHeaders);
           proxyRes.pipe(res, { end: true });
         });
 
@@ -145,9 +150,7 @@ function flaskIntegrationPlugin(): Plugin {
           }
           if (!res.headersSent && (url === '/' || url.startsWith('/?'))) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(`<!DOCTYPE html>
-<html dir="rtl" lang="ar">
-<head>
+            res.end(`<!DOCTYPE html><html dir="rtl" lang="ar"><head>
   <meta charset="utf-8">
   <title>مركز سرعة انجاز - جاري تشغيل الخادم</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -160,27 +163,44 @@ function flaskIntegrationPlugin(): Plugin {
     p { margin: 0; color: rgba(255,255,255,0.7); font-size: 0.95rem; }
   </style>
   <script>
-    let poll = setInterval(function() {
-      fetch('/api/system_health').then(function(r) {
+    let isTransitioning = false;
+    const pollInterval = setInterval(async () => {
+      if (isTransitioning) return;
+      try {
+        const r = await fetch('/api/system_health?_t=' + Date.now());
         if (r.ok) {
-          clearInterval(poll);
-          window.location.replace(window.location.href);
+          isTransitioning = true;
+          clearInterval(pollInterval);
+          const pageRes = await fetch('/?_ready=1');
+          if (pageRes.ok) {
+            const html = await pageRes.text();
+            document.open();
+            document.write(html);
+            document.close();
+          }
         }
-      }).catch(function() {});
-    }, 1500);
+      } catch(e) {}
+    }, 1200);
   </script>
 </head>
 <body>
   <div class="box">
     <div class="spinner"></div>
     <h2>جاري تشغيل خادم المنصة...</h2>
-    <p>يرجى الانتظار لحظات، سيتم التحميل تلقائياً</p>
+    <p>يرجى الانتظار لحظات، يتم الاتصال تلقائياً...</p>
   </div>
 </body>
 </html>`);
             return;
           }
           next();
+        });
+
+        req.on('error', (err) => {
+          proxyReq.destroy(err);
+        });
+        res.on('close', () => {
+          proxyReq.destroy();
         });
 
         req.pipe(proxyReq, { end: true });
@@ -200,7 +220,7 @@ export default defineConfig(() => {
     server: {
       host: '0.0.0.0',
       port: 3000,
-      allowedHosts: true,
+      allowedHosts: true as true,
       cors: true,
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},

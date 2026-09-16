@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════════════
 #  مفتاح Groq
 # ══════════════════════════════════════════════════════════════════════════
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '').strip()
+GROQ_API_KEY_DEFAULT = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_API_KEY = str(os.environ.get('GROQ_API_KEY') or GROQ_API_KEY_DEFAULT).strip()
+os.environ['GROQ_API_KEY'] = GROQ_API_KEY
 
 # ══════════════════════════════════════════════════════════════════════════
 #  قاموس الدول — استيراد من group_country_analyzer مع fallback
