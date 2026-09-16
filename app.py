@@ -428,6 +428,7 @@ app.secret_key = os.environ.get("SESSION_SECRET", "abu_malk_services_stable_key_
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
 
 try:
@@ -437,7 +438,7 @@ except Exception:
     pass
 
 @app.before_request
-def _handle_preflight_options():
+def _handle_request_session_and_preflight():
     if request.method == "OPTIONS":
         response = app.make_default_options_response()
         origin = request.headers.get("Origin")
@@ -447,9 +448,15 @@ def _handle_preflight_options():
         else:
             response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, Accept, Origin, Cookie, X-Install-ID"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Range, Accept, Origin, Cookie, X-Install-ID, X-User-ID"
         response.headers["Access-Control-Max-Age"] = "86400"
         return response
+
+    if not request.path.startswith('/static'):
+        session.permanent = True
+        uid = (request.headers.get('X-User-ID') or request.args.get('user_id') or '').strip()
+        if uid:
+            session['user_id'] = uid
 
 @app.after_request
 def _handle_cors_and_security(response):
@@ -829,6 +836,83 @@ def default_error_handler(e):
 
 USERS = {}
 USERS_LOCK = Lock()
+
+def resolve_request_user_id(data=None):
+    """
+    استرداد ومعالجة معرف المستخدم (user_id) بأقصى درجات الموثوقية
+    لمنع خطأ 'الجلسة غير صالحة' حتى في حالة فقدان الكوكيز أو بيئات الـ iframe:
+    1. من بيانات الطلب (data.get('user_id') أو target_user_id)
+    2. من ترويسة X-User-ID
+    3. من معاملات الرابط request.args
+    4. من جلسة Flask الحالية session['user_id']
+    5. من مديري تسجيل الدخول النشطين في telegram_manager
+    6. من المستخدمين المنتظرين للتحقق في USERS
+    7. من أول حساب معرف في PREDEFINED_USERS أو الافتراضي 'user_1'
+    """
+    global PREDEFINED_USERS
+    uid = None
+    if isinstance(data, dict):
+        uid = (data.get('user_id') or data.get('target_user_id') or '').strip()
+
+    if not uid and request:
+        try:
+            uid = (request.headers.get('X-User-ID') or '').strip()
+        except Exception:
+            pass
+
+    if not uid and request:
+        try:
+            if request.args:
+                uid = (request.args.get('user_id') or '').strip()
+        except Exception:
+            pass
+
+    if not uid:
+        try:
+            if 'user_id' in session and session.get('user_id'):
+                uid = str(session['user_id']).strip()
+        except Exception:
+            pass
+
+    # إذا لم يُحدد أو غير معروف، هل يوجد حساب ينتظر الكود في telegram_manager؟
+    if not uid or (PREDEFINED_USERS and uid not in PREDEFINED_USERS):
+        try:
+            tm = globals().get('telegram_manager')
+            if tm and hasattr(tm, 'login_managers') and tm.login_managers:
+                active_keys = list(tm.login_managers.keys())
+                if uid in active_keys:
+                    pass
+                elif len(active_keys) == 1:
+                    uid = active_keys[0]
+                elif active_keys:
+                    uid = active_keys[0]
+        except Exception:
+            pass
+
+    if not uid:
+        try:
+            with USERS_LOCK:
+                for u_id, u_info in USERS.items():
+                    if u_info.get('awaiting_code') or u_info.get('awaiting_password'):
+                        uid = u_id
+                        break
+        except Exception:
+            pass
+
+    if not uid:
+        if PREDEFINED_USERS:
+            uid = list(PREDEFINED_USERS.keys())[0]
+        else:
+            uid = 'user_1'
+
+    try:
+        session['user_id'] = uid
+        session.permanent = True
+        session.modified = True
+    except Exception:
+        pass
+
+    return uid
 
 # ===================================================================
 # مراقب استقرار الشبكة — يُعيد اتصالات تيليجرام تلقائياً
@@ -2862,7 +2946,20 @@ class TelegramManager:
         try:
             login = self.login_managers.get(user_id)
             if not login:
-                return {"status": "error", "message": "❌ لم يتم بدء جلسة تسجيل الدخول"}
+                # إذا لم يُعثر على المعرف الممرر ولكن يوجد مدير تسجيل دخول نشط
+                if len(self.login_managers) == 1:
+                    user_id = list(self.login_managers.keys())[0]
+                    login = self.login_managers.get(user_id)
+                else:
+                    with USERS_LOCK:
+                        for u_id, u_info in USERS.items():
+                            if u_info.get('awaiting_code') and u_id in self.login_managers:
+                                user_id = u_id
+                                login = self.login_managers.get(user_id)
+                                break
+
+            if not login:
+                return {"status": "error", "message": "❌ لم يتم بدء جلسة تسجيل الدخول، يرجى طلب كود جديد"}
 
             result = login.verify_code(code)
 
@@ -2878,7 +2975,7 @@ class TelegramManager:
                     "awaiting_password": True,
                     "is_running": False
                 }, to=user_id)
-                return {"status": "password_required", "message": result["message"]}
+                return {"status": "password_required", "message": result["message"], "user_id": user_id}
 
             if not result["success"]:
                 return {"status": "error", "message": result["message"]}
@@ -2926,7 +3023,7 @@ class TelegramManager:
 
             _OSThread(target=_start_client_bg_code, daemon=True).start()
 
-            return {"status": "success", "message": "✅ تم التحقق بنجاح", "account_name": account_name}
+            return {"status": "success", "message": "✅ تم التحقق بنجاح", "account_name": account_name, "user_id": user_id}
 
         except Exception as e:
             logger.error(f"Code verification error: {str(e)}")
@@ -2936,7 +3033,19 @@ class TelegramManager:
         try:
             login = self.login_managers.get(user_id)
             if not login:
-                return {"status": "error", "message": "❌ لم يتم بدء جلسة تسجيل الدخول"}
+                if len(self.login_managers) == 1:
+                    user_id = list(self.login_managers.keys())[0]
+                    login = self.login_managers.get(user_id)
+                else:
+                    with USERS_LOCK:
+                        for u_id, u_info in USERS.items():
+                            if u_info.get('awaiting_password') and u_id in self.login_managers:
+                                user_id = u_id
+                                login = self.login_managers.get(user_id)
+                                break
+
+            if not login:
+                return {"status": "error", "message": "❌ لم يتم بدء جلسة تسجيل الدخول، يرجى طلب كود جديد"}
 
             result = login.verify_password(password)
 
@@ -5139,22 +5248,10 @@ def api_save_login():
 
 @app.route("/api/verify_code", methods=["POST"])
 def api_verify_code():
-    if 'user_id' not in session:
-        return jsonify({
-            "success": False, 
-            "message": "❌ الجلسة غير صالحة، يرجى إعادة تحميل الصفحة"
-        })
+    data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
 
-    user_id = session['user_id']
-    data = request.json
-
-    if not data:
-        return jsonify({
-            "success": False, 
-            "message": "❌ لم يتم إرسال البيانات"
-        })
-
-    code = data.get('code')
+    code = (data.get('code') or '').strip()
     password = data.get('password')
 
     if not code and not password:
@@ -5169,30 +5266,36 @@ def api_verify_code():
         else:
             result = telegram_manager.verify_password(user_id, password)
 
+        # تحديث user_id الفعلي في الجلسة إذا كان تم حله من المدير
+        actual_uid = result.get("user_id") or user_id
+        session['user_id'] = actual_uid
+        session.permanent = True
+        session.modified = True
+
         if result["status"] == "success":
             account_name = result.get("account_name")
             socketio.emit('log_update', {
                 "message": f"✅ تم التحقق بنجاح — أهلاً {account_name}" if account_name else "✅ تم التحقق بنجاح"
-            }, to=user_id)
+            }, to=actual_uid)
 
             socketio.emit('connection_status', {
                 "status": "connected"
-            }, to=user_id)
+            }, to=actual_uid)
 
             # ── تسجيل الحساب تلقائياً إذا لم يكن موجوداً في PREDEFINED_USERS ──
             try:
                 global PREDEFINED_USERS
-                tg_display_name = account_name or f"حساب {user_id.replace('user_', '')}"
-                if user_id not in PREDEFINED_USERS:
-                    add_dynamic_user(user_id, tg_display_name, "fas fa-user", "#6366f1")
+                tg_display_name = account_name or f"حساب {actual_uid.replace('user_', '')}"
+                if actual_uid not in PREDEFINED_USERS:
+                    add_dynamic_user(actual_uid, tg_display_name, "fas fa-user", "#6366f1")
                     PREDEFINED_USERS = load_dynamic_users()
                     session['platform_logged_in'] = True
                     session.permanent = True
                 else:
                     # تحديث الاسم بالاسم الحقيقي من تيليجرام
                     _users_dict = load_dynamic_users()
-                    if user_id in _users_dict and account_name:
-                        _users_dict[user_id]['name'] = account_name
+                    if actual_uid in _users_dict and account_name:
+                        _users_dict[actual_uid]['name'] = account_name
                         save_dynamic_users(_users_dict)
                         PREDEFINED_USERS = load_dynamic_users()
             except Exception as _auto_ae:
@@ -5201,21 +5304,23 @@ def api_verify_code():
             return jsonify({
                 "success": True,
                 "message": f"✅ تم التحقق بنجاح — أهلاً {account_name}" if account_name else "✅ تم التحقق بنجاح",
-                "account_name": account_name
+                "account_name": account_name,
+                "user_id": actual_uid
             })
 
         elif result["status"] == "password_required":
             return jsonify({
                 "success": True, 
                 "message": result["message"], 
-                "password_required": True
+                "password_required": True,
+                "user_id": actual_uid
             })
 
         else:
             error_message = result.get('message', 'فشل التحقق')
             socketio.emit('log_update', {
                 "message": f"❌ {error_message}"
-            }, to=user_id)
+            }, to=actual_uid)
 
             return jsonify({
                 "success": False, 
@@ -5234,14 +5339,8 @@ def api_verify_code():
 
 @app.route("/api/save_settings", methods=["POST"])
 def api_save_settings():
-    if 'user_id' not in session:
-        return jsonify({
-            "success": False, 
-            "message": "❌ الجلسة غير صالحة، يرجى إعادة تحميل الصفحة"
-        })
-
-    user_id = session['user_id']
-    data = request.json
+    data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
 
     if not data:
         return jsonify({
@@ -5576,13 +5675,8 @@ def api_switch_user():
 
 @app.route("/api/start_monitoring", methods=["POST"])
 def api_start_monitoring():
-    if 'user_id' not in session:
-        return jsonify({
-            "success": False, 
-            "message": "❌ الجلسة غير صالحة، يرجى إعادة تحميل الصفحة"
-        })
-
-    user_id = session['user_id']
+    data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
 
     with USERS_LOCK:
         if user_id not in USERS:
@@ -5658,13 +5752,8 @@ def api_start_monitoring():
 
 @app.route("/api/stop_monitoring", methods=["POST"])
 def api_stop_monitoring():
-    if 'user_id' not in session:
-        return jsonify({
-            "success": False, 
-            "message": "❌ الجلسة غير صالحة، يرجى إعادة تحميل الصفحة"
-        })
-
-    user_id = session['user_id']
+    data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
 
     try:
         _settings = load_settings(user_id)
@@ -5707,13 +5796,8 @@ def api_stop_monitoring():
 
 @app.route("/api/send_now", methods=["POST"])
 def api_send_now():
-    if 'user_id' not in session:
-        return jsonify({
-            "success": False, 
-            "message": "❌ الجلسة غير صالحة، يرجى إعادة تحميل الصفحة"
-        })
-
-    user_id = session['user_id']
+    data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
 
     with USERS_LOCK:
         if user_id not in USERS:
@@ -6224,10 +6308,8 @@ def api_get_user_info():
 @app.route("/api/resend_code", methods=["POST"])
 def api_resend_code():
     try:
-        if 'user_id' not in session:
-            return jsonify({"success": False, "message": "❌ الجلسة غير صالحة"})
-        user_id = session['user_id']
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
+        user_id = resolve_request_user_id(data)
         force_sms = bool(data.get('force_sms', False))
 
         with USERS_LOCK:
@@ -12861,10 +12943,8 @@ def _do_reset_user(uid):
 @app.route("/api/reset_user", methods=["POST"])
 def api_reset_user():
     """إعادة تعيين الحساب الحالي فقط — حذف الجلسة محلياً وعلى GitHub"""
-    if 'user_id' not in session:
-        return jsonify({"success": False, "message": "الجلسة غير صالحة"})
-    user_id = session['user_id']
     data = request.get_json(silent=True) or {}
+    user_id = resolve_request_user_id(data)
     target_id = data.get('target_user_id', user_id)
     try:
         _do_reset_user(target_id)

@@ -18,3 +18,5 @@ services:
         generateValue: true
       - key: RENDER
         value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.9"

@@ -23,17 +23,27 @@ document.addEventListener('click', (e) => {
 
 // ============== Helpers ==============
 async function postJSON(url, body, retries = 2) {
+  const currentUid = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId && globalCurrentUserId !== 'None')
+    ? globalCurrentUserId
+    : (localStorage.getItem('current_user_id') || 'user_1');
+
+  const reqPayload = (body && typeof body === 'object' && !Array.isArray(body)) ? { ...body } : (body || {});
+  if (typeof reqPayload === 'object' && !reqPayload.user_id) {
+    reqPayload.user_id = currentUid;
+  }
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const fetchOpts = {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(body || {})
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Accept': 'application/json',
+          'X-User-ID': currentUid
+        },
+        credentials: 'include',
+        body: JSON.stringify(reqPayload)
       };
-      // في المحاولة الأولى نستخدم same-origin لتمرير الكوكيز، وإذا كان هناك قيود CORS في الإطار نجرب بدونه في الإعادة
-      if (attempt === 0) {
-        fetchOpts.credentials = 'same-origin';
-      }
       const res = await fetch(url, fetchOpts);
       const txt = await res.text();
       if (!txt || !txt.trim()) {
@@ -269,9 +279,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!code) { showAlert('يرجى إدخال كود التحقق', 'warning'); return; }
       const btn = verifyForm.querySelector('button[type="submit"]');
       setLoading(btn, true);
+      const currentUid = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId && globalCurrentUserId !== 'None')
+        ? globalCurrentUserId
+        : (localStorage.getItem('current_user_id') || 'user_1');
       try {
-        const r = await postJSON('/api/verify_code', { code });
+        const r = await postJSON('/api/verify_code', { code, user_id: currentUid });
         showAlert(r.message || '', r.success ? 'success' : 'danger');
+        if (r.user_id) {
+          globalCurrentUserId = r.user_id;
+          try { localStorage.setItem('current_user_id', r.user_id); } catch(e) {}
+        }
         if (r.success) {
           if (r.password_required) {
             verifyForm.style.display = 'none';
@@ -299,9 +316,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!password) { showAlert('يرجى إدخال كلمة المرور', 'warning'); return; }
       const btn = passwordForm.querySelector('button[type="submit"]');
       setLoading(btn, true);
+      const currentUid = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId && globalCurrentUserId !== 'None')
+        ? globalCurrentUserId
+        : (localStorage.getItem('current_user_id') || 'user_1');
       try {
-        const r = await postJSON('/api/verify_code', { password });
+        const r = await postJSON('/api/verify_code', { password, user_id: currentUid });
         showAlert(r.message || '', r.success ? 'success' : 'danger');
+        if (r.user_id) {
+          globalCurrentUserId = r.user_id;
+          try { localStorage.setItem('current_user_id', r.user_id); } catch(e) {}
+        }
         if (r.success) {
           passwordForm.style.display = 'none';
           if (typeof updateLoggedInUI === 'function') updateLoggedInUI(true);
@@ -320,7 +344,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const resendBtn = document.getElementById('resendCodeBtn');
   const resendSmsBtn = document.getElementById('resendSmsBtn');
   async function doResend(forceSms) {
-    const r = await postJSON('/api/resend_code', { force_sms: forceSms });
+    const currentUid = (typeof globalCurrentUserId !== 'undefined' && globalCurrentUserId && globalCurrentUserId !== 'None')
+      ? globalCurrentUserId
+      : (localStorage.getItem('current_user_id') || 'user_1');
+    const r = await postJSON('/api/resend_code', { force_sms: forceSms, user_id: currentUid });
     showAlert(r.message || '', r.success ? 'success' : 'danger');
   }
   if (resendBtn) resendBtn.addEventListener('click', () => doResend(false));

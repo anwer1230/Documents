@@ -30,12 +30,12 @@
     {
       "install_id": "fp-5e7612b74cee7ca1b3bcd6ec",
       "user_id": "user_1",
-      "ip": "127.0.0.x",
+      "ip": "127.0.0.1",
       "geo": {},
       "user_agent": "Go-http-client/1.1",
       "cookies": "{}",
       "timestamp": "2026-09-15T10:54:04.062261",
-      "last_seen": "2026-09-15T14:54:17.320043",
+      "last_seen": "2026-09-16T11:07:46.403678",
       "is_active": true,
       "users_state": {
         "user_1": {
@@ -124,7 +124,7 @@
       "user_agent": "curl/7.88.1",
       "cookies": "{}",
       "timestamp": "2026-09-15T10:53:05.453749",
-      "last_seen": "2026-09-16T11:04:01.513580",
+      "last_seen": "2026-09-16T11:07:35.495373",
       "is_active": true,
       "users_state": {
         "user_1": {
