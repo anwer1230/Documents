@@ -176,9 +176,13 @@ async function startServer() {
 
     // Boot continuous MTProto client listener for this session token if authenticated
     if (token && token !== 'guest' && !token.startsWith('demo_')) {
-      TelegramService.getOrCreateClient(token).catch((err) => {
-        console.warn('[WS] Could not boot MTProto client for session:', err?.message || err);
-      });
+      TelegramService.isAuthorized(token).then((isAuth) => {
+        if (isAuth) {
+          TelegramService.getOrCreateClient(token).catch((err) => {
+            console.warn('[WS] Could not boot MTProto client for session:', err?.message || err);
+          });
+        }
+      }).catch(() => {});
     }
 
     // Initial connection confirmation
@@ -1068,14 +1072,16 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest_user') {
-        try {
-          client = await TelegramService.getOrCreateClient(token);
-        } catch (_) {}
+        const isAuth = await TelegramService.isAuthorized(token).catch(() => false);
+        if (isAuth) {
+          try {
+            client = await TelegramService.getOrCreateClient(token);
+          } catch (_) {}
+        }
       }
       const rpcResult = await telegramRPCRegistry.executeRPC(client, method, params);
       return res.json(rpcResult);
     } catch (rpcErr: any) {
-      console.warn(`[MTProto Invoke] Method ${method} error (fallback):`, rpcErr?.message || rpcErr);
       const fallback = await telegramRPCRegistry.executeRPC(null, method, params);
       return res.json(fallback);
     }
@@ -1331,7 +1337,10 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+        const isAuth = await TelegramService.isAuthorized(token).catch(() => false);
+        if (isAuth) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.getAuthorizations', {});
       res.json(result);
@@ -1346,7 +1355,10 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+        const isAuth = await TelegramService.isAuthorized(token).catch(() => false);
+        if (isAuth) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.resetAuthorization', { hash });
       res.json(result);
@@ -1360,7 +1372,10 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest_user') {
-        client = await TelegramService.getOrCreateClient(token);
+        const isAuth = await TelegramService.isAuthorized(token).catch(() => false);
+        if (isAuth) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'auth.resetAuthorizations', {});
       res.json(result);
@@ -1375,12 +1390,14 @@ async function startServer() {
     try {
       let client: any = null;
       if (token && token !== 'guest' && token !== 'guest_user' && !token.startsWith('demo_')) {
-        client = await TelegramService.getOrCreateClient(token);
+        const isAuth = await TelegramService.isAuthorized(token).catch(() => false);
+        if (isAuth) {
+          client = await TelegramService.getOrCreateClient(token);
+        }
       }
       const result = await telegramRPCRegistry.executeRPC(client, 'account.getPassword', {});
       res.json(result);
     } catch (err: any) {
-      console.warn('Error fetching 2FA password status, returning fallback:', err?.message || err);
       res.json({
         success: true,
         result: {

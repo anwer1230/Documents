@@ -69,11 +69,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isAr = lang === 'ar';
 
-  // Filter chats by search and active folder
-  const filteredChats = chats.filter((chat) => {
+  // Filter chats by search and active folder, deduplicating IDs to ensure unique React keys
+  const seenChatIds = new Set<string>();
+  const filteredChats = (chats || []).filter((chat, idx) => {
+    if (!chat) return false;
+    const resolvedId = String(chat.id || `chat_${idx}`);
+    if (seenChatIds.has(resolvedId)) return false;
+    seenChatIds.add(resolvedId);
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      const matchTitle = chat.title.toLowerCase().includes(q);
+      const matchTitle = (chat.title || '').toLowerCase().includes(q);
       const matchUser = chat.username?.toLowerCase().includes(q);
       const matchLast = chat.lastMessage?.text?.toLowerCase().includes(q);
       if (!matchTitle && !matchUser && !matchLast) return false;
@@ -150,9 +156,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Stories Carousel (If stories exist) */}
       {peerStoriesList.length > 0 && (
         <div className="px-3 py-2 flex items-center gap-3 overflow-x-auto no-scrollbar border-b border-gray-700/30 shrink-0">
-          {peerStoriesList.map((peer) => (
+          {peerStoriesList.map((peer, idx) => (
             <button
-              key={peer.peerId}
+              key={peer.peerId ? `story-${peer.peerId}` : `story-${idx}`}
               onClick={() => onOpenStory && onOpenStory(peer.peerId)}
               className="flex flex-col items-center gap-1 group shrink-0"
             >
@@ -164,18 +170,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }`}
               >
                 <div
-                  style={{ backgroundColor: getSenderColor(peer.peerId) }}
+                  style={{ backgroundColor: getSenderColor(peer.peerId || idx) }}
                   className="w-full h-full rounded-full flex items-center justify-center text-xs font-bold text-white overflow-hidden"
                 >
                   {peer.peerAvatar ? (
                     <img src={peer.peerAvatar} alt="" className="w-full h-full object-cover" />
                   ) : (
-                    getInitials(peer.peerName)
+                    getInitials(peer.peerName || '')
                   )}
                 </div>
               </div>
               <span className="text-[10px] text-gray-400 group-hover:text-white max-w-[50px] truncate">
-                {peer.peerName}
+                {peer.peerName || (isAr ? 'مستخدم' : 'User')}
               </span>
             </button>
           ))}
@@ -215,14 +221,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isAr ? 'لا توجد محادثات مطابقة' : 'No chats found'}
           </div>
         ) : (
-          filteredChats.map((chat) => {
+          filteredChats.map((chat, idx) => {
             const isSelected = selectedChatId === chat.id;
             const typing = typingMap[chat.id];
             const isSaved = chat.type === 'saved';
+            const chatKey = chat.id ? `chat-${chat.id}` : `chat-${idx}`;
 
             return (
               <div
-                key={chat.id}
+                key={chatKey}
                 onClick={() => onSelectChat(chat.id)}
                 className={`p-3 flex items-center gap-3 cursor-pointer transition-colors relative ${
                   isSelected
@@ -245,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     ) : chat.avatarUrl ? (
                       <img src={chat.avatarUrl} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      getInitials(chat.title)
+                      getInitials(chat.title || '')
                     )}
                   </div>
                   {chat.isOnline && !isSaved && (
@@ -257,7 +264,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
                     <div className="flex items-center gap-1 truncate font-semibold text-sm">
-                      <span className="truncate">{chat.title}</span>
+                      <span className="truncate">{chat.title || (isAr ? 'محادثة' : 'Chat')}</span>
                       {chat.isVerified && (
                         <span className="text-[#3390ec] shrink-0 text-xs">✓</span>
                       )}

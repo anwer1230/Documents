@@ -22,13 +22,19 @@ export function getAvatarColor(idOrName: string | number): string {
   return getSenderColor(idOrName);
 }
 
-export function getInitials(name: string): string {
-  if (!name) return 'TG';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+export function getInitials(name?: string | null): string {
+  if (!name || typeof name !== 'string') return 'TG';
+  const trimmed = name.trim();
+  if (!trimmed) return 'TG';
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2 && parts[0] && parts[1]) {
+    const firstChar = parts[0][0] || '';
+    const secondChar = parts[1][0] || '';
+    if (firstChar || secondChar) {
+      return (firstChar + secondChar).toUpperCase();
+    }
   }
-  return name.slice(0, 2).toUpperCase();
+  return trimmed.slice(0, 2).toUpperCase();
 }
 
 export function formatTelegramDate(timestamp: number, lang: 'ar' | 'en' = 'ar'): string {

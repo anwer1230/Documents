@@ -309,11 +309,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   };
 
   const parseInlineFormatting = (str: string, prefixKey: string): React.ReactNode => {
+    if (!str || typeof str !== 'string') return '';
     // Regex for Spoiler: ||spoiler||, Bold: **bold**, Italic: *italic*, Underline: __underline__, Strike: ~~strike~~, Monospace: `code`
     const regex = /(\|\|.+?\|\||\*\*.+?\*\*|\*.+?\*|__.+?__|~~.+?~~|`.+?`)/g;
     const parts = str.split(regex);
 
     return parts.map((part, pIdx) => {
+      if (!part) return '';
       const partKey = `${prefixKey}-${pIdx}`;
 
       if (part.startsWith('||') && part.endsWith('||')) {
@@ -485,7 +487,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold shrink-0 text-sm shadow"
                   style={{ backgroundColor: chat.avatarColor || '#3390ec' }}
                 >
-                  {chat.type === 'saved' ? <Bookmark className="w-5 h-5 fill-white" /> : chat.title.slice(0, 2)}
+                  {chat.type === 'saved' ? <Bookmark className="w-5 h-5 fill-white" /> : (chat.title || 'TG').slice(0, 2).toUpperCase()}
                 </div>
               )}
 
@@ -935,16 +937,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                   : 'Official Telegram bot platform supporting interactive inline replies, mini apps, and bot commands.')}
             </p>
 
-            {chat.botInfo?.commands && chat.botInfo.commands.length > 0 && (
-              <div
-                className={`text-start rounded-xl p-3 mb-3 space-y-1.5 text-xs border ${
-                  isDark ? 'bg-[#1c2733]/80 border-[#2f3f50]' : 'bg-gray-50 border-gray-200'
-                }`}
-              >
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
-                  {isAr ? 'الأوامر الشائعة:' : 'Common Commands:'}
-                </p>
-                {chat.botInfo.commands.slice(0, 4).map((cmd) => (
+            {Array.isArray(chat.botInfo?.commands) && chat.botInfo.commands.length > 0 && (
+                <div
+                  className={`text-start rounded-xl p-3 mb-3 space-y-1.5 text-xs border ${
+                    isDark ? 'bg-[#1c2733]/80 border-[#2f3f50]' : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                    {isAr ? 'الأوامر الشائعة:' : 'Common Commands:'}
+                  </p>
+                  {chat.botInfo.commands.slice(0, 4).map((cmd) => (
                   <button
                     key={cmd.command}
                     type="button"
@@ -1065,7 +1067,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                           className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold shadow-sm"
                           style={{ backgroundColor: senderColor }}
                         >
-                          {msg.senderName.slice(0, 1)}
+                          {(msg.senderName || chat.title || 'TG').slice(0, 1).toUpperCase()}
                         </div>
                       )
                     ) : (

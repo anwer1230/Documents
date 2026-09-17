@@ -442,7 +442,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   />
                 ) : (
                   <div className="w-14 h-14 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-xl border-2 border-white/30 shadow-md">
-                    {currentUser.firstName.slice(0, 2).toUpperCase()}
+                    {(currentUser.firstName || currentUser.username || 'TG').slice(0, 2).toUpperCase()}
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
@@ -495,7 +495,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
                         <div className="w-8 h-8 rounded-full bg-[#3390ec] flex items-center justify-center text-xs font-bold text-white shrink-0">
-                          {acc.user.firstName.slice(0, 2).toUpperCase()}
+                          {(acc.user?.firstName || acc.user?.username || 'TG').slice(0, 2).toUpperCase()}
                         </div>
                         <div className="min-w-0">
                           <div className="text-sm truncate">
@@ -803,7 +803,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   />
                 ) : (
                   <div className="w-20 h-20 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-2xl text-white border-2 border-white/20 shadow-lg">
-                    {currentUser.firstName.slice(0, 2).toUpperCase()}
+                    {(currentUser.firstName || currentUser.username || 'TG').slice(0, 2).toUpperCase()}
                   </div>
                 )}
                 <div className="absolute bottom-0 end-0 p-1.5 rounded-full bg-[#3390ec] text-white shadow hover:scale-110 transition">
@@ -1017,7 +1017,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                     />
                   ) : (
                     <div className="w-24 h-24 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-2xl text-white border-2 border-white/20 shadow-md">
-                      {firstName.slice(0, 2).toUpperCase()}
+                      {(firstName || 'TG').slice(0, 2).toUpperCase()}
                     </div>
                   )}
                 </div>
@@ -2216,10 +2216,10 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-[#3390ec] flex items-center justify-center font-bold text-white">
-                        {chat.title.slice(0, 2)}
+                        {(chat.title || 'TG').slice(0, 2)}
                       </div>
                       <div>
-                        <div className="font-medium text-sm">{chat.title}</div>
+                        <div className="font-medium text-sm">{chat.title || (isAr ? 'محادثة' : 'Chat')}</div>
                         <div className="text-xs text-gray-400 truncate max-w-[180px]">
                           {chat.lastMessage?.text || (isAr ? 'محادثة مؤرشفة' : 'Archived chat')}
                         </div>

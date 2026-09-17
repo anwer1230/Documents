@@ -59,9 +59,9 @@ export const ShareLinkModal: React.FC<ShareLinkModalProps> = ({
 
         <div className="mt-4 flex flex-col items-center">
           <div className="w-16 h-16 rounded-full flex items-center justify-center font-bold text-2xl text-white shadow-lg mb-3 bg-[#3390ec]">
-            {chat.title.slice(0, 2).toUpperCase()}
+            {(chat.title || 'TG').slice(0, 2).toUpperCase()}
           </div>
-          <h3 className="font-bold text-lg text-center">{chat.title}</h3>
+          <h3 className="font-bold text-lg text-center">{chat.title || (isAr ? 'محادثة' : 'Chat')}</h3>
           {chat.username && (
             <p className="text-xs text-gray-400 font-mono mt-0.5">@{chat.username}</p>
           )}

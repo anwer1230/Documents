@@ -46,7 +46,10 @@ export default function App() {
     const saved = localStorage.getItem('tg_multi_accounts');
     if (saved) {
       try {
-        return JSON.parse(saved).slice(0, MAX_TELEGRAM_ACCOUNTS);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.slice(0, MAX_TELEGRAM_ACCOUNTS);
+        }
       } catch {}
     }
     return [];
@@ -764,7 +767,15 @@ export default function App() {
         if (data.dialogs && data.dialogs.length > 0) {
           setChats((prev) => {
             const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
-            return [savedChat, ...data.dialogs.filter((d: any) => d.id !== 'saved_messages')];
+            const incoming = Array.isArray(data.dialogs) ? data.dialogs : [];
+            const map = new Map<string, TelegramChat>();
+            map.set('saved_messages', savedChat);
+            for (const d of incoming) {
+              if (d && d.id && d.id !== 'saved_messages' && !map.has(String(d.id))) {
+                map.set(String(d.id), d);
+              }
+            }
+            return Array.from(map.values());
           });
         }
       }

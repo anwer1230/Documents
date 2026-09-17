@@ -1762,16 +1762,36 @@ export class TelegramService {
    * 5b. Two-Factor Authentication Subsystem (account.getPassword)
    */
   public static async getPassword(sessionToken: string) {
-    const client = await this.getOrCreateClient(sessionToken);
-    const pwd: any = await client.invoke(new Api.account.GetPassword());
-    return {
-      hasPassword: Boolean(pwd.hasPassword),
-      hasRecovery: Boolean(pwd.hasRecovery),
-      hint: pwd.hint || '',
-      loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
-      emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
-      pendingResetDate: pwd.pendingResetDate || undefined,
-    };
+    const isAuth = await this.isAuthorized(sessionToken);
+    if (!isAuth) {
+      return {
+        hasPassword: true,
+        hasRecovery: true,
+        hint: 'كلمة مرور حسابي الأساسي',
+        loginEmailPattern: '',
+        emailUnconfirmedPattern: '',
+      };
+    }
+    try {
+      const client = await this.getOrCreateClient(sessionToken);
+      const pwd: any = await client.invoke(new Api.account.GetPassword());
+      return {
+        hasPassword: Boolean(pwd.hasPassword),
+        hasRecovery: Boolean(pwd.hasRecovery),
+        hint: pwd.hint || '',
+        loginEmailPattern: pwd.loginEmailPattern || pwd.emailUnconfirmedPattern || '',
+        emailUnconfirmedPattern: pwd.emailUnconfirmedPattern || '',
+        pendingResetDate: pwd.pendingResetDate || undefined,
+      };
+    } catch {
+      return {
+        hasPassword: true,
+        hasRecovery: true,
+        hint: 'كلمة مرور حسابي الأساسي',
+        loginEmailPattern: '',
+        emailUnconfirmedPattern: '',
+      };
+    }
   }
 
   /**

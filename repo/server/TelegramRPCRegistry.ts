@@ -48,6 +48,22 @@ export class TelegramRPCRegistry {
         return this.handleFallbackRPC(method, params, serverTime);
       }
 
+      // Methods that do not require active user authorization
+      const unauthAllowed = [
+        'auth.sendCode',
+        'auth.signIn',
+        'auth.signUp',
+        'auth.checkPassword',
+        'help.getConfig',
+        'help.getNearestDc',
+      ];
+      if (!unauthAllowed.includes(method)) {
+        const isAuth = await client.isUserAuthorized().catch(() => false);
+        if (!isAuth) {
+          return this.handleFallbackRPC(method, params, serverTime);
+        }
+      }
+
       switch (method) {
         // ==========================================
         // 1. MESSAGES SUBSYSTEM (messages.*)
@@ -612,7 +628,18 @@ export class TelegramRPCRegistry {
           return this.handleFallbackRPC(method, params, serverTime);
       }
     } catch (error: any) {
-      console.warn(`[MTProto Server RPC] Error executing ${method} (falling back gracefully):`, error?.message || error);
+      const errMsg = error?.message || String(error);
+      const isAuthError =
+        errMsg.includes('AUTH_KEY_UNREGISTERED') ||
+        errMsg.includes('SESSION_REVOKED') ||
+        errMsg.includes('AUTH_KEY_INVALID') ||
+        errMsg.includes('AUTH_KEY_PERM_EMPTY') ||
+        errMsg.includes('USER_DEACTIVATED') ||
+        error?.code === 401;
+
+      if (!isAuthError) {
+        console.warn(`[MTProto Server RPC] Error executing ${method}:`, errMsg);
+      }
       return this.handleFallbackRPC(method, params, serverTime);
     }
   }

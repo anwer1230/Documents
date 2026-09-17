@@ -107,16 +107,17 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   ];
 
   // Autocomplete command matching when text starts with '/'
-  const isSlashCommand = text.startsWith('/') && !text.includes(' ');
+  const safeText = typeof text === 'string' ? text : '';
+  const isSlashCommand = safeText.startsWith('/') && !safeText.includes(' ');
   const matchingCommands = isSlashCommand
     ? botCommands.filter((c) =>
-        c.command.toLowerCase().startsWith(text.slice(1).toLowerCase())
+        c.command.toLowerCase().startsWith(safeText.slice(1).toLowerCase())
       )
     : [];
 
   // Inline Query detection: e.g. "@gif " or "@pic " or "@smart_helper_bot "
-  const inlineMatch = text.match(/^@([a-zA-Z0-9_]+)\s*(.*)$/);
-  const isInlineQuery = !!inlineMatch && text.includes(' ');
+  const inlineMatch = safeText.match(/^@([a-zA-Z0-9_]+)\s*(.*)$/);
+  const isInlineQuery = !!inlineMatch && safeText.includes(' ');
   const inlineBotName = inlineMatch ? inlineMatch[1] : '';
   const inlineQueryString = inlineMatch ? inlineMatch[2] : '';
 
