@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Web",
+  "description": "تطبيق تليجرام ويب حقيقي للمحادثات والرسائل والقنوات والمجموعات باستخدام واجهة تيليجرام الرسمية",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

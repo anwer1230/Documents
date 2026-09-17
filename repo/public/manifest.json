@@ -1,0 +1,21 @@
+{
+  "short_name": "Telegram",
+  "name": "Telegram Web K",
+  "icons": [
+    {
+      "src": "https://telegram.org/img/t_logo.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://telegram.org/img/t_logo.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#18222d",
+  "theme_color": "#3390ec",
+  "display": "standalone",
+  "orientation": "portrait"
+}
