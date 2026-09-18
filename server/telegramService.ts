@@ -1673,11 +1673,20 @@ export class TelegramService {
     const client = await this.getOrCreateClient(sessionToken);
     let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
     if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
-    else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+    else if (key === 'profilePhotos' || key === 'profile_photos' || key === 'profilePhoto') inputKey = new Api.InputPrivacyKeyProfilePhoto();
     else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
-    else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'calls' || key === 'phoneCall') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'phoneP2P' || key === 'p2p') inputKey = new Api.InputPrivacyKeyPhoneP2P();
+    else if (key === 'chatInvite' || key === 'invites') inputKey = new Api.InputPrivacyKeyChatInvite();
     else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
-    else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+    else if (key === 'bio' || key === 'about') inputKey = new Api.InputPrivacyKeyAbout();
+    else if (key === 'birthday') {
+      try {
+        if ((Api as any).InputPrivacyKeyBirthday) {
+          inputKey = new (Api as any).InputPrivacyKeyBirthday();
+        }
+      } catch {}
+    }
 
     const res: any = await client.invoke(new Api.account.GetPrivacy({ key: inputKey }));
     const sanitized = sanitizeData(res);
@@ -1712,11 +1721,20 @@ export class TelegramService {
     const client = await this.getOrCreateClient(sessionToken);
     let inputKey: any = new Api.InputPrivacyKeyStatusTimestamp();
     if (key === 'phoneNumber' || key === 'phone_number') inputKey = new Api.InputPrivacyKeyPhoneNumber();
-    else if (key === 'profilePhotos' || key === 'profile_photos') inputKey = new Api.InputPrivacyKeyProfilePhoto();
+    else if (key === 'profilePhotos' || key === 'profile_photos' || key === 'profilePhoto') inputKey = new Api.InputPrivacyKeyProfilePhoto();
     else if (key === 'forwards' || key === 'forwarded_messages') inputKey = new Api.InputPrivacyKeyForwards();
-    else if (key === 'calls') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'calls' || key === 'phoneCall') inputKey = new Api.InputPrivacyKeyPhoneCall();
+    else if (key === 'phoneP2P' || key === 'p2p') inputKey = new Api.InputPrivacyKeyPhoneP2P();
+    else if (key === 'chatInvite' || key === 'invites') inputKey = new Api.InputPrivacyKeyChatInvite();
     else if (key === 'voiceMessages' || key === 'voice_messages') inputKey = new Api.InputPrivacyKeyVoiceMessages();
-    else if (key === 'bio') inputKey = new Api.InputPrivacyKeyAbout();
+    else if (key === 'bio' || key === 'about') inputKey = new Api.InputPrivacyKeyAbout();
+    else if (key === 'birthday') {
+      try {
+        if ((Api as any).InputPrivacyKeyBirthday) {
+          inputKey = new (Api as any).InputPrivacyKeyBirthday();
+        }
+      } catch {}
+    }
 
     let finalRules: any[] = [];
     let chosenOption: 'everybody' | 'contacts' | 'nobody' = 'everybody';
@@ -1756,6 +1774,18 @@ export class TelegramService {
       key,
       option: chosenOption,
     };
+  }
+
+  public static async getAccountTTL(sessionToken: string) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const res: any = await client.invoke(new Api.account.GetAccountTTL());
+    return sanitizeData(res);
+  }
+
+  public static async setAccountTTL(sessionToken: string, days: number) {
+    const client = await this.getOrCreateClient(sessionToken);
+    const res: any = await client.invoke(new Api.account.SetAccountTTL({ ttl: new Api.AccountDaysTTL({ days }) }));
+    return sanitizeData(res);
   }
 
   /**

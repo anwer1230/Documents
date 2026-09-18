@@ -1,243 +1,120 @@
 /**
- * redisCacheService.ts - Production Redis & Multi-Tier Hot Cache Engine
- * Offloads up to 80% of repetitive reads by maintaining an ultra-low latency
- * hot cache tier for messages, dialogs, user profiles, and active peer channels.
- * 
- * Supports:
- * - Redis cluster / standalone via optional ioredis (REDIS_URL or REDIS_HOST:REDIS_PORT)
- * - Transparent high-throughput In-Memory LRU fallback when Redis server is not provisioned
- * - Real-time metrics (cache hits, misses, hit ratio, memory estimation)
- * - Automatic cache invalidation on edits, deletes, or new incoming messages
+ * In-Memory & Redis-Compatible High-Performance Tier-1 Hot Message Cache
+ * Provides sub-millisecond access for recent chat messages, LRU eviction, and automatic TTL expiration.
  */
-import path from 'path';
-import { createRequire } from 'module';
 
-const getRequireTarget = (): string | URL => {
-  try {
-    if (typeof import.meta !== 'undefined' && import.meta.url) {
-      return import.meta.url;
-    }
-  } catch (_) {}
-  if (typeof __filename !== 'undefined' && __filename && __filename !== '[eval]') {
-    return path.resolve(__filename);
-  }
-  return path.resolve(process.cwd(), 'package.json');
-};
-
-const nodeRequire = createRequire(getRequireTarget());
-
-interface CacheItem<T> {
+interface CacheEntry<T> {
   data: T;
   expiresAt: number;
-}
-
-class InMemoryRedisCache {
-  private store: Map<string, CacheItem<any>> = new Map();
-  private maxItems: number = 2000;
-
-  public get<T>(key: string): T | null {
-    const item = this.store.get(key);
-    if (!item) return null;
-    if (Date.now() > item.expiresAt) {
-      this.store.delete(key);
-      return null;
-    }
-    return item.data as T;
-  }
-
-  public set(key: string, value: any, ttlSeconds: number = 3600): void {
-    if (this.store.size >= this.maxItems) {
-      const firstKey = this.store.keys().next().value;
-      if (firstKey) this.store.delete(firstKey);
-    }
-    this.store.set(key, {
-      data: value,
-      expiresAt: Date.now() + ttlSeconds * 1000,
-    });
-  }
-
-  public del(key: string): void {
-    this.store.delete(key);
-  }
-
-  public delPattern(prefix: string): void {
-    for (const key of this.store.keys()) {
-      if (key.startsWith(prefix)) {
-        this.store.delete(key);
-      }
-    }
-  }
-
-  public size(): number {
-    return this.store.size;
-  }
-
-  public clear(): void {
-    this.store.clear();
-  }
+  lastAccessed: number;
 }
 
 export class RedisCacheService {
-  private static instance: RedisCacheService;
-  private memoryCache = new InMemoryRedisCache();
-  private redisClient: any = null;
-  private isRedisConnected = false;
-  private hits = 0;
-  private misses = 0;
+  private cache: Map<string, CacheEntry<any>> = new Map();
+  private maxEntries: number = 1000;
+  private defaultTTLMs: number = 5 * 60 * 1000; // 5 minutes
+  private hits: number = 0;
+  private misses: number = 0;
+  private evictions: number = 0;
 
-  private constructor() {
-    this.initRedis();
+  constructor(maxEntries: number = 1000) {
+    this.maxEntries = maxEntries;
+
+    // Periodic sweep for expired entries every 60 seconds
+    setInterval(() => {
+      this.purgeExpired();
+    }, 60000).unref?.();
   }
 
-  public static getInstance(): RedisCacheService {
-    if (!RedisCacheService.instance) {
-      RedisCacheService.instance = new RedisCacheService();
-    }
-    return RedisCacheService.instance;
-  }
-
-  private initRedis(): void {
-    const redisUrl = process.env.REDIS_URL || process.env.REDIS_HOST;
-    if (!redisUrl) {
-      console.log('[HotCache] No REDIS_URL configured. Running in high-speed In-Memory LRU Cache mode.');
-      return;
+  public async getHotMessages(key: string): Promise<any[] | null> {
+    const entry = this.cache.get(key);
+    if (!entry) {
+      this.misses++;
+      return null;
     }
 
-    try {
-      const RedisClass = nodeRequire('ioredis');
-      if (RedisClass) {
-        this.redisClient = new RedisClass(redisUrl, {
-          maxRetriesPerRequest: 1,
-          connectTimeout: 3000,
-          lazyConnect: true,
-        });
-
-        this.redisClient.connect().then(() => {
-          this.isRedisConnected = true;
-          console.log('[HotCache] Successfully connected to remote Redis tier!');
-        }).catch((err: any) => {
-          console.warn('[HotCache] Remote Redis unreachable, operating in In-Memory LRU fallback mode:', err?.message || err);
-          this.isRedisConnected = false;
-        });
-
-        this.redisClient.on('error', (err: any) => {
-          this.isRedisConnected = false;
-        });
-      }
-    } catch (_) {
-      console.log('[HotCache] ioredis module not present, active in zero-dependency In-Memory LRU Cache mode.');
-    }
-  }
-
-  /**
-   * Retrieves hot cached messages for instant rendering (O(1) latency)
-   */
-  public async getHotMessages(chatId: string): Promise<any[] | null> {
-    const key = `chat:hot_messages:${chatId}`;
-    try {
-      if (this.isRedisConnected && this.redisClient) {
-        const raw = await this.redisClient.get(key);
-        if (raw) {
-          this.hits++;
-          return JSON.parse(raw);
-        }
-      }
-    } catch (_) {}
-
-    const mem = this.memoryCache.get<any[]>(key);
-    if (mem) {
-      this.hits++;
-      return mem;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      this.misses++;
+      return null;
     }
 
-    this.misses++;
-    return null;
+    entry.lastAccessed = Date.now();
+    this.hits++;
+    return entry.data;
   }
 
-  /**
-   * Stores the latest hot messages slice in the cache
-   */
-  public async setHotMessages(chatId: string, messages: any[], ttlSeconds = 3600): Promise<void> {
-    const key = `chat:hot_messages:${chatId}`;
-    this.memoryCache.set(key, messages, ttlSeconds);
-
-    try {
-      if (this.isRedisConnected && this.redisClient) {
-        await this.redisClient.set(key, JSON.stringify(messages), 'EX', ttlSeconds);
-      }
-    } catch (_) {}
-  }
-
-  /**
-   * Invalidates cached messages for a specific chat on message updates or deletes
-   */
-  public async invalidateChat(chatId: string): Promise<void> {
-    const key = `chat:hot_messages:${chatId}`;
-    this.memoryCache.del(key);
-    try {
-      if (this.isRedisConnected && this.redisClient) {
-        await this.redisClient.del(key);
-      }
-    } catch (_) {}
-  }
-
-  /**
-   * Appends an outgoing or incoming message to the hot cache directly
-   */
-  public async appendHotMessage(chatId: string, message: any): Promise<void> {
-    const existing = await this.getHotMessages(chatId);
-    if (existing) {
-      const filtered = existing.filter((m: any) => m.id !== message.id);
-      const updated = [...filtered, message].slice(-200);
-      await this.setHotMessages(chatId, updated);
+  public async setHotMessages(key: string, messages: any[], ttlSeconds: number = 300): Promise<void> {
+    // Evict least recently used if at capacity
+    if (this.cache.size >= this.maxEntries && !this.cache.has(key)) {
+      this.evictLRU();
     }
+
+    this.cache.set(key, {
+      data: messages,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+      lastAccessed: Date.now(),
+    });
   }
 
-  /**
-   * Caches peer information (User/Channel metadata)
-   */
-  public async getCachedPeer(peerId: string): Promise<any | null> {
-    const key = `peer:info:${peerId}`;
-    const mem = this.memoryCache.get(key);
-    if (mem) {
-      this.hits++;
-      return mem;
-    }
-    this.misses++;
-    return null;
-  }
-
-  public async setCachedPeer(peerId: string, peerData: any, ttlSeconds = 86400): Promise<void> {
-    const key = `peer:info:${peerId}`;
-    this.memoryCache.set(key, peerData, ttlSeconds);
-  }
-
-  /**
-   * Performance diagnostics and telemetry
-   */
-  public getStats() {
-    const total = this.hits + this.misses;
-    const hitRatio = total > 0 ? (this.hits / total) * 100 : 0;
-    return {
-      tier: this.isRedisConnected ? 'Redis + Memory' : 'In-Memory LRU',
-      hits: this.hits,
-      misses: this.misses,
-      hitRatio: `${hitRatio.toFixed(1)}%`,
-      inMemoryItemCount: this.memoryCache.size(),
-      isRedisActive: this.isRedisConnected,
-    };
+  public async invalidateChat(key: string): Promise<void> {
+    this.cache.delete(key);
   }
 
   public async clearAll(): Promise<void> {
-    this.memoryCache.clear();
+    this.cache.clear();
     this.hits = 0;
     this.misses = 0;
-    try {
-      if (this.isRedisConnected && this.redisClient) {
-        await this.redisClient.flushdb();
+    this.evictions = 0;
+  }
+
+  public getStats(): {
+    hits: number;
+    misses: number;
+    hitRatio: string;
+    keysCount: number;
+    evictions: number;
+    status: string;
+    engine: string;
+  } {
+    const total = this.hits + this.misses;
+    const ratio = total > 0 ? ((this.hits / total) * 100).toFixed(1) + '%' : '0%';
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      hitRatio: ratio,
+      keysCount: this.cache.size,
+      evictions: this.evictions,
+      status: 'online',
+      engine: 'In-Memory Redis-Compatible L1',
+    };
+  }
+
+  private purgeExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
       }
-    } catch (_) {}
+    }
+  }
+
+  private evictLRU(): void {
+    let oldestKey: string | null = null;
+    let oldestAccess = Infinity;
+
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.lastAccessed < oldestAccess) {
+        oldestAccess = entry.lastAccessed;
+        oldestKey = key;
+      }
+    }
+
+    if (oldestKey) {
+      this.cache.delete(oldestKey);
+      this.evictions++;
+    }
   }
 }
 
-export const redisCache = RedisCacheService.getInstance();
+export const redisCache = new RedisCacheService(2000);

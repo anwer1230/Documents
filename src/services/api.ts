@@ -186,7 +186,7 @@ export const privacyApi = {
   /**
    * Fetches privacy rules from Telegram Cloud (Api.account.GetPrivacy)
    */
-  getPrivacy: async (key: 'phoneNumber' | 'statusTimestamp' | 'forwards' | string) => {
+  getPrivacy: async (key: string) => {
     return request<PrivacyResponse>(`/api/telegram/privacy?key=${encodeURIComponent(key)}`);
   },
 
@@ -194,7 +194,7 @@ export const privacyApi = {
    * Sets privacy rules on Telegram Cloud (Api.account.SetPrivacy)
    */
   setPrivacy: async (
-    key: 'phoneNumber' | 'statusTimestamp' | 'forwards' | string,
+    key: string,
     rule: 'everybody' | 'contacts' | 'nobody' | any
   ) => {
     return request<PrivacyResponse>('/api/telegram/privacy', {
@@ -208,6 +208,84 @@ export const privacyApi = {
    */
   getPassword: async () => {
     return request<PasswordResponse>('/api/telegram/2fa/password');
+  },
+
+  /**
+   * Get Account Self-Destruct TTL
+   */
+  getAccountTTL: async () => {
+    return request<{ success: boolean; result?: { days: number } }>('/api/telegram/account/ttl');
+  },
+
+  /**
+   * Set Account Self-Destruct TTL
+   */
+  setAccountTTL: async (days: number) => {
+    return request<any>('/api/telegram/account/ttl', {
+      method: 'POST',
+      body: JSON.stringify({ days }),
+    });
+  },
+};
+
+// ============================================================================
+// Active Sessions & Authorizations API
+// ============================================================================
+
+export const authorizationsApi = {
+  getAuthorizations: async () => {
+    return request<any>('/api/telegram/authorizations');
+  },
+
+  resetAuthorization: async (hash: string | number) => {
+    return request<any>('/api/telegram/authorizations/reset', {
+      method: 'POST',
+      body: JSON.stringify({ hash }),
+    });
+  },
+
+  resetAllAuthorizations: async () => {
+    return request<any>('/api/telegram/authorizations/reset-all', {
+      method: 'POST',
+    });
+  },
+};
+
+// ============================================================================
+// WebAuthn / Passkeys Authentication API
+// ============================================================================
+
+export const webAuthnApi = {
+  getRegisterOptions: async () => {
+    return request<any>('/api/auth/webauthn/register-options');
+  },
+
+  verifyRegister: async (payload: { credentialId: string; rawId: string; deviceName?: string; username?: string }) => {
+    return request<any>('/api/auth/webauthn/register-verify', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getAuthOptions: async () => {
+    return request<any>('/api/auth/webauthn/auth-options');
+  },
+
+  verifyAuth: async (credentialId: string) => {
+    return request<any>('/api/auth/webauthn/auth-verify', {
+      method: 'POST',
+      body: JSON.stringify({ credentialId }),
+    });
+  },
+
+  getCredentials: async () => {
+    return request<{ success: boolean; credentials: any[] }>('/api/auth/webauthn/credentials');
+  },
+
+  deleteCredential: async (id: string) => {
+    return request<any>(`/api/auth/webauthn/credentials/${id}`, {
+      method: 'DELETE',
+    });
   },
 };
 
@@ -384,7 +462,14 @@ export const Api = {
 
   InputPrivacyKeyPhoneNumber: () => ({ _: 'inputPrivacyKeyPhoneNumber' }),
   InputPrivacyKeyStatusTimestamp: () => ({ _: 'inputPrivacyKeyStatusTimestamp' }),
+  InputPrivacyKeyProfilePhoto: () => ({ _: 'inputPrivacyKeyProfilePhoto' }),
   InputPrivacyKeyForwards: () => ({ _: 'inputPrivacyKeyForwards' }),
+  InputPrivacyKeyPhoneCall: () => ({ _: 'inputPrivacyKeyPhoneCall' }),
+  InputPrivacyKeyPhoneP2P: () => ({ _: 'inputPrivacyKeyPhoneP2P' }),
+  InputPrivacyKeyChatInvite: () => ({ _: 'inputPrivacyKeyChatInvite' }),
+  InputPrivacyKeyVoiceMessages: () => ({ _: 'inputPrivacyKeyVoiceMessages' }),
+  InputPrivacyKeyAbout: () => ({ _: 'inputPrivacyKeyAbout' }),
+  InputPrivacyKeyBirthday: () => ({ _: 'inputPrivacyKeyBirthday' }),
   InputPrivacyValueAllowAll: () => ({ _: 'inputPrivacyValueAllowAll' }),
   InputPrivacyValueAllowContacts: () => ({ _: 'inputPrivacyValueAllowContacts' }),
   InputPrivacyValueDisallowAll: () => ({ _: 'inputPrivacyValueDisallowAll' }),
@@ -398,6 +483,8 @@ export const api = {
   request,
   mtproto: mtprotoApi,
   privacy: privacyApi,
+  authorizations: authorizationsApi,
+  webAuthn: webAuthnApi,
   automation: automationApi,
   cache: cacheApi,
   Api,

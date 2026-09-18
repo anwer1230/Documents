@@ -2085,28 +2085,14 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
                 </button>
               </div>
 
-              {/* Current Active Session */}
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  {isAr ? 'هذا الجهاز' : 'This Device'}
-                </div>
-                <div className={`p-3 rounded-xl border ${
-                  themeConfig.isDark ? 'bg-[#0e1621] border-gray-700' : 'bg-gray-50 border-gray-200'
-                }`}>
-                  <div className="font-semibold text-sm">Telegram Web K (Chrome / Linux)</div>
-                  <div className="text-xs text-emerald-400 mt-0.5">{isAr ? 'نشط الآن • 127.0.0.1' : 'Active now • 127.0.0.1'}</div>
-                  <div className="text-[11px] text-gray-400 mt-1">MTProto 2.0 Layer 198 (Cloud Verified)</div>
-                </div>
+              {/* Full Interactive Sessions & Privacy Manager */}
+              <div className="pt-2">
+                <PrivacySettings
+                  isAr={isAr}
+                  themeConfig={themeConfig}
+                  className="rounded-2xl border border-gray-700/40"
+                />
               </div>
-
-              <button
-                onClick={() => {
-                  alert(isAr ? 'تم إنهاء كافة الجلسات الأخرى بنجاح!' : 'All other sessions terminated successfully!');
-                }}
-                className="w-full py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl text-xs font-semibold transition"
-              >
-                {isAr ? 'إنهاء كافة الجلسات الأخرى' : 'Terminate All Other Sessions'}
-              </button>
             </div>
           </div>
         )}

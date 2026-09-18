@@ -1,335 +1,281 @@
 import React, { useState } from 'react';
 import {
   X,
-  Hash,
-  Plus,
-  Lock,
-  Pin,
   MessageSquare,
+  Plus,
+  Pin,
+  Lock,
   Search,
   Check,
-  ChevronRight,
-  Shield,
-  Layers,
+  Hash,
 } from 'lucide-react';
-import { ForumTopic } from '../types';
+import { TelegramChat, ForumTopic } from '../types';
 
 interface ForumTopicsDrawerProps {
   isOpen: boolean;
   onClose: () => void;
-  topics: ForumTopic[];
+  chat: TelegramChat | null;
   selectedTopicId: number | null;
   onSelectTopic: (topicId: number | null) => void;
-  onCreateTopic: (title: string, iconColor: number) => Promise<void>;
-  chatTitle: string;
-  isDark: boolean;
-  lang: 'ar' | 'en';
+  onCreateTopic?: (title: string, color?: number) => void;
+  lang?: 'ar' | 'en';
+  isDark?: boolean;
 }
 
-const TOPIC_COLOR_PALETTE = [
+const TOPIC_COLORS = [
   0x6fb9f0, // Blue
   0xffd67e, // Amber
   0xcb86db, // Purple
   0x8eee98, // Green
-  0xff93b2, // Pink
-  0xfb6f5f, // Red
+  0xff93b2, // Rose
+  0xfb6f5f, // Coral
 ];
 
 export const ForumTopicsDrawer: React.FC<ForumTopicsDrawerProps> = ({
   isOpen,
   onClose,
-  topics,
+  chat,
   selectedTopicId,
   onSelectTopic,
   onCreateTopic,
-  chatTitle,
-  isDark,
-  lang,
+  lang = 'ar',
+  isDark = true,
 }) => {
   const isAr = lang === 'ar';
   const [searchQuery, setSearchQuery] = useState('');
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newTopicTitle, setNewTopicTitle] = useState('');
-  const [selectedColor, setSelectedColor] = useState(TOPIC_COLOR_PALETTE[0]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newColor, setNewColor] = useState(TOPIC_COLORS[0]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !chat) return null;
 
+  const topics: ForumTopic[] = chat.topics || [];
   const filteredTopics = topics.filter((t) =>
     t.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTopicTitle.trim() || isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      await onCreateTopic(newTopicTitle.trim(), selectedColor);
-      setNewTopicTitle('');
-      setShowCreateModal(false);
-    } catch (err) {
-      console.error('Failed to create topic:', err);
-    } finally {
-      setIsSubmitting(false);
+    if (!newTitle.trim()) return;
+    if (onCreateTopic) {
+      onCreateTopic(newTitle.trim(), newColor);
     }
-  };
-
-  const getHexColor = (colorNum?: number) => {
-    if (!colorNum) return '#3390ec';
-    return `#${colorNum.toString(16).padStart(6, '0')}`;
+    setNewTitle('');
+    setIsCreating(false);
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-80 sm:w-96 shadow-2xl flex flex-col border-l transition-all duration-300 animate-in slide-in-from-right">
+    <div
+      id="forum_topics_backdrop"
+      className="fixed inset-0 z-50 flex bg-black/40 backdrop-blur-xs transition-opacity"
+      onClick={onClose}
+    >
       <div
-        className={`h-full flex flex-col ${
-          isDark ? 'bg-[#17212b] border-gray-700/80 text-white' : 'bg-white border-gray-200 text-gray-900'
-        }`}
+        id="forum_topics_drawer"
+        dir={isAr ? 'rtl' : 'ltr'}
+        onClick={(e) => e.stopPropagation()}
+        className={`w-full max-w-md h-full flex flex-col shadow-2xl transition-all ${
+          isDark ? 'bg-[#18222d] text-white' : 'bg-white text-slate-900'
+        } ${isAr ? 'mr-auto' : 'ml-auto'}`}
       >
         {/* Header */}
         <div
           className={`px-4 py-3 border-b flex items-center justify-between shrink-0 ${
-            isDark ? 'bg-[#242f3d] border-gray-700/60' : 'bg-gray-50 border-gray-200'
+            isDark ? 'border-slate-800 bg-[#1c2733]' : 'border-slate-200 bg-slate-50'
           }`}
         >
           <div className="flex items-center gap-2">
-            <Layers className="w-5 h-5 text-[#3390ec]" />
+            <div className="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-500 flex items-center justify-center">
+              <MessageSquare className="w-4 h-4" />
+            </div>
             <div>
-              <h3 className="font-semibold text-sm">
-                {isAr ? 'مواضيع المنتدى' : 'Forum Topics'}
+              <h3 className="text-sm font-bold">
+                {isAr ? 'مواضيع المنتدى (Topics)' : 'Forum Topics'}
               </h3>
-              <p className="text-[11px] text-gray-400 truncate max-w-[200px]">
-                {chatTitle}
-              </p>
+              <p className="text-[11px] text-slate-400">{chat.title}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center gap-1">
+            {onCreateTopic && !isCreating && (
+              <button
+                id="create_topic_toggle_btn"
+                onClick={() => setIsCreating(true)}
+                className="p-1.5 rounded-lg text-sky-500 hover:bg-sky-500/10 transition-colors"
+                title={isAr ? 'موضوع جديد' : 'New Topic'}
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
+            <button
+              id="close_topics_drawer_btn"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Search & Actions Bar */}
-        <div className="p-3 border-b border-gray-700/30 flex items-center gap-2 shrink-0">
+        {/* Search & "All Topics" filter */}
+        <div className="p-3 space-y-2 border-b border-slate-800/60">
           <div
-            className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs ${
-              isDark ? 'bg-[#242f3d] border-gray-700 text-white' : 'bg-gray-100 border-gray-200 text-gray-900'
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${
+              isDark ? 'bg-[#131b24] border-slate-800 text-slate-200' : 'bg-slate-100 border-slate-200 text-slate-800'
             }`}
           >
-            <Search className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={isAr ? 'بحث في المواضيع...' : 'Search topics...'}
-              className="w-full bg-transparent outline-none text-xs"
+              className="w-full bg-transparent text-xs outline-hidden placeholder-slate-400"
             />
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="p-2 rounded-xl bg-[#3390ec] text-white hover:bg-[#2881da] transition shrink-0 shadow-sm"
-            title={isAr ? 'إنشاء موضوع جديد' : 'New Topic'}
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-        </div>
 
-        {/* Topics List */}
-        <div className="flex-1 overflow-y-auto divide-y divide-gray-700/20">
-          {/* General / All Messages Item */}
           <button
-            type="button"
-            onClick={() => {
-              onSelectTopic(null);
-              onClose();
-            }}
-            className={`w-full px-4 py-3 flex items-center gap-3 text-left transition ${
+            id="topic_all_btn"
+            onClick={() => onSelectTopic(null)}
+            className={`w-full px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
               selectedTopicId === null
-                ? isDark
-                  ? 'bg-white/10'
-                  : 'bg-blue-50'
+                ? 'bg-sky-500 text-white shadow-sm'
                 : isDark
-                ? 'hover:bg-white/5'
-                : 'hover:bg-gray-50'
+                ? 'bg-slate-800/60 hover:bg-slate-800 text-slate-300'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
             }`}
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shrink-0 shadow-sm">
-              <MessageSquare className="w-5 h-5" />
+            <div className="flex items-center gap-2">
+              <Hash className="w-4 h-4" />
+              <span>{isAr ? 'كافة المواضيع والرسائل' : 'All Topics & Messages'}</span>
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-sm">
-                  {isAr ? 'جميع الرسائل (العامة)' : 'All Messages (General)'}
-                </span>
-                {selectedTopicId === null && <Check className="w-4 h-4 text-[#3390ec]" />}
-              </div>
-              <p className="text-xs text-gray-400 truncate mt-0.5">
-                {isAr ? 'استعراض تدفق الرسائل العام للمنتدى' : 'View full forum stream'}
-              </p>
-            </div>
+            {selectedTopicId === null && <Check className="w-3.5 h-3.5" />}
           </button>
-
-          {filteredTopics.map((topic) => {
-            const isSelected = selectedTopicId === topic.id;
-            const topicColor = getHexColor(topic.iconColor);
-
-            return (
-              <button
-                key={topic.id}
-                type="button"
-                onClick={() => {
-                  onSelectTopic(topic.id);
-                  onClose();
-                }}
-                className={`w-full px-4 py-3 flex items-center gap-3 text-left transition ${
-                  isSelected
-                    ? isDark
-                      ? 'bg-white/10'
-                      : 'bg-blue-50'
-                    : isDark
-                    ? 'hover:bg-white/5'
-                    : 'hover:bg-gray-50'
-                }`}
-              >
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold shrink-0 shadow-sm"
-                  style={{ backgroundColor: topicColor }}
-                >
-                  {topic.iconEmojiId ? (
-                    <span className="text-lg">{topic.iconEmojiId}</span>
-                  ) : (
-                    <Hash className="w-5 h-5" />
-                  )}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="font-semibold text-sm truncate flex items-center gap-1.5">
-                      {topic.title}
-                      {topic.isPinned && <Pin className="w-3.5 h-3.5 text-amber-400 rotate-45" />}
-                      {topic.isClosed && <Lock className="w-3.5 h-3.5 text-gray-400" />}
-                    </span>
-                    {topic.unreadCount ? (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3390ec] text-white">
-                        {topic.unreadCount}
-                      </span>
-                    ) : isSelected ? (
-                      <Check className="w-4 h-4 text-[#3390ec]" />
-                    ) : null}
-                  </div>
-                  <p className="text-xs text-gray-400 truncate mt-0.5">
-                    {topic.isClosed
-                      ? isAr
-                        ? 'موضوع مغلق'
-                        : 'Closed topic'
-                      : topic.isPinned
-                      ? isAr
-                        ? 'موضوع مثبت'
-                        : 'Pinned topic'
-                      : isAr
-                      ? `معرف الموضوع: #${topic.id}`
-                      : `Topic #${topic.id}`}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-
-          {filteredTopics.length === 0 && (
-            <div className="p-8 text-center text-gray-400 text-xs">
-              {isAr ? 'لم يتم العثور على مواضيع مطابقة' : 'No topics found'}
-            </div>
-          )}
         </div>
 
-        {/* Modal: Create Topic */}
-        {showCreateModal && (
-          <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center">
-            <div
-              className={`w-full max-w-xs rounded-2xl p-4 shadow-2xl border ${
-                isDark ? 'bg-[#242f3d] border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-bold text-sm">
-                  {isAr ? 'إنشاء موضوع جديد' : 'New Forum Topic'}
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="p-1 rounded-full text-gray-400 hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+        {/* Create Topic Form */}
+        {isCreating && (
+          <form
+            onSubmit={handleCreate}
+            className={`p-3 border-b space-y-2.5 ${
+              isDark ? 'bg-[#1c2733]/80 border-slate-800' : 'bg-slate-50 border-slate-200'
+            }`}
+          >
+            <div className="flex items-center justify-between text-xs font-bold text-sky-500">
+              <span>{isAr ? 'إنشاء موضوع منتدى جديد' : 'Create New Forum Topic'}</span>
+              <button
+                type="button"
+                onClick={() => setIsCreating(false)}
+                className="text-slate-400 hover:text-slate-200 text-[11px]"
+              >
+                {isAr ? 'إلغاء' : 'Cancel'}
+              </button>
+            </div>
 
-              <form onSubmit={handleCreate} className="space-y-3">
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">
-                    {isAr ? 'عنوان الموضوع' : 'Topic Title'}
-                  </label>
-                  <input
-                    type="text"
-                    value={newTopicTitle}
-                    onChange={(e) => setNewTopicTitle(e.target.value)}
-                    placeholder={isAr ? 'مثال: التحديثات، الدعم...' : 'e.g. Announcements, Support...'}
-                    required
-                    className={`w-full px-3 py-2 rounded-xl text-xs outline-none border ${
-                      isDark ? 'bg-[#17212b] border-gray-700 text-white' : 'bg-gray-100 border-gray-300 text-gray-900'
+            <input
+              type="text"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder={isAr ? 'عنوان الموضوع...' : 'Topic title...'}
+              autoFocus
+              className={`w-full px-3 py-2 text-xs rounded-xl border outline-hidden ${
+                isDark ? 'bg-[#131b24] border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
+              }`}
+            />
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                {TOPIC_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setNewColor(c)}
+                    style={{ backgroundColor: `#${c.toString(16).padStart(6, '0')}` }}
+                    className={`w-5 h-5 rounded-full transition-transform ${
+                      newColor === c ? 'scale-125 ring-2 ring-white ring-offset-1' : 'opacity-80'
                     }`}
                   />
-                </div>
+                ))}
+              </div>
 
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">
-                    {isAr ? 'لون أيقونة الموضوع' : 'Icon Color'}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    {TOPIC_COLOR_PALETTE.map((color) => (
-                      <button
-                        key={color}
-                        type="button"
-                        onClick={() => setSelectedColor(color)}
-                        className={`w-7 h-7 rounded-lg transition-transform ${
-                          selectedColor === color ? 'scale-110 ring-2 ring-white shadow-md' : 'opacity-80'
-                        }`}
-                        style={{ backgroundColor: getHexColor(color) }}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateModal(false)}
-                    className="flex-1 py-2 rounded-xl border border-gray-600 text-xs font-medium hover:bg-white/5 transition"
-                  >
-                    {isAr ? 'إلغاء' : 'Cancel'}
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!newTopicTitle.trim() || isSubmitting}
-                    className="flex-1 py-2 rounded-xl bg-[#3390ec] text-white text-xs font-semibold hover:bg-[#2881da] transition disabled:opacity-50"
-                  >
-                    {isSubmitting
-                      ? isAr
-                        ? 'جارِ الإنشاء...'
-                        : 'Creating...'
-                      : isAr
-                      ? 'إنشاء'
-                      : 'Create'}
-                  </button>
-                </div>
-              </form>
+              <button
+                type="submit"
+                disabled={!newTitle.trim()}
+                className="px-3 py-1.5 bg-sky-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition"
+              >
+                {isAr ? 'إنشاء' : 'Create'}
+              </button>
             </div>
-          </div>
+          </form>
         )}
+
+        {/* Topics List */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+          {filteredTopics.length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-400">
+              {topics.length === 0
+                ? isAr
+                  ? 'لا توجد مواضيع في هذه المجموعة بعد.'
+                  : 'No topics in this group yet.'
+                : isAr
+                ? 'لا توجد نتائج مطابقة لبحثك.'
+                : 'No matching topics found.'}
+            </div>
+          ) : (
+            filteredTopics.map((topic) => {
+              const isSelected = selectedTopicId === topic.id;
+              const hexColor = topic.iconColor
+                ? `#${topic.iconColor.toString(16).padStart(6, '0')}`
+                : '#6fb9f0';
+
+              return (
+                <button
+                  key={topic.id}
+                  id={`topic_item_${topic.id}`}
+                  onClick={() => onSelectTopic(topic.id)}
+                  className={`w-full p-2.5 rounded-xl text-left flex items-center justify-between gap-3 transition-all ${
+                    isSelected
+                      ? 'bg-sky-500/15 border border-sky-500/40 text-sky-400 font-semibold'
+                      : isDark
+                      ? 'hover:bg-slate-800/60 text-slate-200 border border-transparent'
+                      : 'hover:bg-slate-100 text-slate-800 border border-transparent'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      style={{ backgroundColor: hexColor }}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-white shrink-0 text-xs font-bold shadow-xs"
+                    >
+                      {topic.iconEmojiId || topic.title.charAt(0).toUpperCase()}
+                    </div>
+
+                    <div className="min-w-0 text-left">
+                      <div className="flex items-center gap-1.5 truncate text-xs">
+                        <span className="truncate">{topic.title}</span>
+                        {topic.isGeneral && (
+                          <span className="text-[10px] px-1 rounded bg-slate-700/60 text-slate-300">
+                            {isAr ? 'عام' : 'General'}
+                          </span>
+                        )}
+                        {topic.isPinned && <Pin className="w-3 h-3 text-amber-400 shrink-0 rotate-45" />}
+                        {topic.isClosed && <Lock className="w-3 h-3 text-rose-400 shrink-0" />}
+                      </div>
+                    </div>
+                  </div>
+
+                  {topic.unreadCount && topic.unreadCount > 0 ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500 text-white shrink-0">
+                      {topic.unreadCount}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );
 };
+
+export default ForumTopicsDrawer;
