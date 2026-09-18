@@ -514,6 +514,40 @@ export class TelegramService {
     }
   }
 
+  public static async exportLoginToken(sessionToken: string): Promise<{ qrUrl: string; expires: number; tokenBase64: string; loggedIn?: boolean; user?: any }> {
+    const client = await this.getOrCreateClient(sessionToken);
+    try {
+      const result = await client.invoke(
+        new Api.auth.ExportLoginToken({
+          apiId: TELEGRAM_API_ID,
+          apiHash: TELEGRAM_API_HASH,
+          exceptIds: [],
+        })
+      );
+
+      if (result instanceof Api.auth.LoginToken) {
+        const b64 = Buffer.from(result.token).toString('base64url');
+        const qrUrl = `tg://login?token=${b64}`;
+        return { qrUrl, expires: result.expires, tokenBase64: b64 };
+      } else if (result instanceof Api.auth.LoginTokenSuccess && (result.authorization as any)?.user) {
+        const me = (result.authorization as any).user;
+        const s = activeSessions.get(sessionToken);
+        if (s) {
+          s.isLoggedIn = true;
+          s.user = me;
+        }
+        const sessionString = client.session.save() as unknown as string;
+        persistSession(sessionToken, sessionString);
+        this.saveAccount(sessionToken, me);
+        return { qrUrl: '', expires: 0, tokenBase64: '', loggedIn: true, user: sanitizeData(me) };
+      }
+      throw new Error('فشل معالجة رمز الدخول السريع');
+    } catch (err: any) {
+      console.error('Error exporting login token:', err);
+      throw err;
+    }
+  }
+
   public static async sendCode(sessionToken: string, phoneNumber: string) {
     const client = await this.getOrCreateClient(sessionToken);
     const cleanedPhone = phoneNumber.replace(/[\s\-\(\)]/g, '');

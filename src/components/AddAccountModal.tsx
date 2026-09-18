@@ -45,44 +45,6 @@ const COUNTRY_CODES = [
   { code: '+90', name: 'تركيا', flag: '🇹🇷' },
 ];
 
-const DEMO_PRESETS = [
-  {
-    firstName: 'سارة',
-    lastName: 'العتيبي',
-    username: 'sara_otb',
-    phone: '+966551234567',
-    bio: 'حساب العمل والمشاريع التقنية 💼',
-  },
-  {
-    firstName: 'فهد',
-    lastName: 'الحربي',
-    username: 'fahad_eng',
-    phone: '+966567890123',
-    bio: 'مهندس برمجيات | تواصل للمشاريع 🚀',
-  },
-  {
-    firstName: 'نوف',
-    lastName: 'الشمري',
-    username: 'nouf_sh',
-    phone: '+966509876543',
-    bio: 'مصممة واجهات تجربة المستخدم 🎨',
-  },
-  {
-    firstName: 'قناة التقنية',
-    lastName: 'العربية',
-    username: 'arab_tech_ch',
-    phone: '+971501122334',
-    bio: 'أحدث أخبار التقنية والتطبيقات الذكية ⚡',
-  },
-  {
-    firstName: 'فريق الدعم',
-    lastName: 'الفني',
-    username: 'support_team',
-    phone: '+201012345678',
-    bio: 'خدمة العملاء والمساعدة الفنية على مدار الساعة 🛠️',
-  },
-];
-
 export const AddAccountModal: React.FC<AddAccountModalProps> = ({
   isOpen,
   onClose,
@@ -93,7 +55,7 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
   isDark,
 }) => {
   const isAr = lang === 'ar';
-  const [method, setMethod] = useState<'phone' | 'bot' | 'demo'>('phone');
+  const [method, setMethod] = useState<'phone' | 'bot'>('phone');
 
   // Phone flow
   const [countryCode, setCountryCode] = useState('+966');
@@ -105,9 +67,6 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
 
   // Bot flow
   const [botToken, setBotToken] = useState('');
-
-  // Demo flow
-  const [selectedDemoIdx, setSelectedDemoIdx] = useState(0);
 
   // Status
   const [loading, setLoading] = useState(false);
@@ -374,38 +333,6 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
     }
   };
 
-  const handleCreateDemoAccount = async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const token = await ensureIsolatedSlot();
-      const preset = DEMO_PRESETS[selectedDemoIdx % DEMO_PRESETS.length];
-      const newAcc: TelegramAccount = {
-        id: 'acc_' + Date.now().toString(36),
-        sessionToken: token,
-        user: {
-          id: 'user_' + Math.random().toString(36).substring(2, 9),
-          firstName: preset.firstName,
-          lastName: preset.lastName,
-          username: preset.username,
-          phone: preset.phone,
-          bio: preset.bio,
-          status: 'online',
-        },
-        isLoggedIn: true,
-        isDemo: true,
-        addedAt: Date.now(),
-      };
-      onAccountAdded(newAcc);
-      onClose();
-    } catch (err: any) {
-      setError(err.message || 'فشل إنشاء الحساب');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const isFull = currentAccountsCount >= maxAccounts;
 
   return (
@@ -503,21 +430,6 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
                 >
                   <Bot className="w-4 h-4" />
                   {isAr ? 'رمز البوت' : 'Bot'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMethod('demo');
-                    setError(null);
-                  }}
-                  className={`flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 transition ${
-                    method === 'demo'
-                      ? 'bg-[#3390ec] text-white shadow-sm'
-                      : 'text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <Sparkles className="w-4 h-4" />
-                  {isAr ? 'حساب تجريبي' : 'Demo Profile'}
                 </button>
               </div>
 
@@ -747,61 +659,6 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({
                     )}
                   </button>
                 </form>
-              )}
-
-              {/* Demo Profile Method */}
-              {method === 'demo' && (
-                <div className="space-y-4">
-                  <p className="text-xs text-gray-400 leading-relaxed">
-                    {isAr
-                      ? 'اختر شخصية جاهزة لاختبار التبديل السلس والعزل الكامل بين المستخدمين حتى 6 حسابات:'
-                      : 'Select a preset profile to test seamless multi-account switching up to 6 users:'}
-                  </p>
-
-                  <div className="space-y-2 max-h-56 overflow-y-auto">
-                    {DEMO_PRESETS.map((preset, idx) => (
-                      <div
-                        key={preset.username}
-                        onClick={() => setSelectedDemoIdx(idx)}
-                        className={`p-3 rounded-xl border cursor-pointer transition flex items-center justify-between ${
-                          selectedDemoIdx === idx
-                            ? 'border-[#3390ec] bg-[#3390ec]/10 text-white'
-                            : isDark
-                            ? 'border-[#232e3c] bg-[#202b36] hover:bg-[#263442]'
-                            : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-[#3390ec] flex items-center justify-center text-white font-bold text-sm">
-                            {(preset.firstName || preset.username || 'TG').slice(0, 2)}
-                          </div>
-                          <div>
-                            <div className="font-bold text-sm">
-                              {preset.firstName} {preset.lastName}
-                            </div>
-                            <div className="text-xs text-gray-400 font-mono">@{preset.username}</div>
-                          </div>
-                        </div>
-                        {selectedDemoIdx === idx && (
-                          <CheckCircle2 className="w-5 h-5 text-[#3390ec]" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleCreateDemoAccount}
-                    disabled={loading}
-                    className="w-full py-3 bg-[#3390ec] hover:bg-[#2883df] text-white font-semibold rounded-xl transition flex items-center justify-center gap-2 shadow-md"
-                  >
-                    {loading ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <span>{isAr ? 'إنشاء وإضافة هذا المستخدم' : 'Add This User'}</span>
-                    )}
-                  </button>
-                </div>
               )}
             </>
           )}

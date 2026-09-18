@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
-import { INITIAL_CHATS, INITIAL_MESSAGES, CURRENT_DEMO_USER } from './utils/mockData';
+import { INITIAL_CHATS, INITIAL_MESSAGES } from './utils/mockData';
 import { LoginView } from './components/LoginView';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
@@ -74,13 +74,12 @@ export default function App() {
 
   // Active User Auth State
   const [currentUser, setCurrentUser] = useState<TelegramUser | null>(null);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   // Chat Data State (for currently active user)
-  const [chats, setChats] = useState<TelegramChat[]>(INITIAL_CHATS);
+  const [chats, setChats] = useState<TelegramChat[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string>('saved_messages');
-  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>(INITIAL_MESSAGES);
+  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>({});
   
   // UI & Navigation State
   const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
@@ -100,42 +99,9 @@ export default function App() {
 
   // Fetch Stories
   useEffect(() => {
-    const demoStories: TelegramPeerStories[] = [
-      {
-        peerId: 'me',
-        peerTitle: 'قصتي',
-        hasUnread: true,
-        stories: [
-          {
-            id: 'st_1',
-            peerId: 'me',
-            date: Date.now() - 3600000,
-            caption: 'مرحباً بكم في تيليجرام! استمتع بجميع الميزات الحقيقية.',
-            mediaType: 'photo',
-            reactionsCount: 12,
-          },
-        ],
-      },
-      {
-        peerId: 'telegram',
-        peerTitle: 'Telegram',
-        hasUnread: true,
-        stories: [
-          {
-            id: 'st_2',
-            peerId: 'telegram',
-            date: Date.now() - 7200000,
-            caption: 'تحديث جديد: دعم القصص والتفاعلات والتعرف على النصوص (OCR)!',
-            mediaType: 'photo',
-            reactionsCount: 45,
-          },
-        ],
-      },
-    ];
-
     const fetchStories = async () => {
-      if (!currentUser || currentUser.id === 'demo_user' || isDemoMode) {
-        setPeerStoriesList(demoStories);
+      if (!currentUser) {
+        setPeerStoriesList([]);
         return;
       }
 
@@ -143,18 +109,18 @@ export default function App() {
         const res = await fetch('/api/telegram/stories');
         if (res.ok) {
           const data = await res.json();
-          if (data.peerStories && data.peerStories.length > 0) {
+          if (data.peerStories && Array.isArray(data.peerStories)) {
             setPeerStoriesList(data.peerStories);
             return;
           }
         }
       } catch (err) {
-        // Fallback gracefully without warning
+        // Silent error
       }
-      setPeerStoriesList(demoStories);
+      setPeerStoriesList([]);
     };
     fetchStories();
-  }, [currentUser, isDemoMode]);
+  }, [currentUser]);
 
   const handleOpenStory = (peerId: string) => {
     setActiveStoryPeerId(peerId);
@@ -222,7 +188,7 @@ export default function App() {
 
   // Bot Callback Handler (Telegram Web K protocol)
   const handleBotCallback = async (messageId: string, callbackData: string) => {
-    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+    if (currentUser) {
       try {
         const res = await fetch('/api/telegram/bot-callback', {
           method: 'POST',
@@ -341,26 +307,54 @@ export default function App() {
     const initAuthAndAccounts = async () => {
       try {
         // Fetch server-side saved accounts
-        const accRes = await fetch('/api/telegram/accounts');
+        // Sanitize any legacy demo remnants from localStorage
+        try {
+          const rawAccounts = localStorage.getItem('tg_multi_accounts');
+          if (rawAccounts) {
+            const parsed = JSON.parse(rawAccounts);
+            const filtered = Array.isArray(parsed)
+              ? parsed.filter((a: any) => !a.isDemo && !String(a.id).startsWith('acc_demo') && !String(a.sessionToken).startsWith('demo_'))
+              : [];
+            localStorage.setItem('tg_multi_accounts', JSON.stringify(filtered));
+          }
+          const activeUserRaw = localStorage.getItem('tg_active_user');
+          if (activeUserRaw) {
+            const u = JSON.parse(activeUserRaw);
+            if (u.id === 'demo_user' || u.id === 'me' || u.username === 'tg_user') {
+              localStorage.removeItem('tg_active_user');
+              localStorage.removeItem('tg_active_session_token');
+            }
+          }
+        } catch {}
+
+        const localToken = localStorage.getItem('tg_active_session_token');
+        const headers: Record<string, string> = {};
+        if (localToken && !localToken.startsWith('demo_')) {
+          headers['x-session-token'] = localToken;
+        }
+
+        const accRes = await fetch('/api/telegram/accounts', { headers });
         let serverAccounts: TelegramAccount[] = [];
         let serverActiveId: string | undefined;
 
         if (accRes.ok) {
           const accData = await accRes.json();
           if (Array.isArray(accData.accounts) && accData.accounts.length > 0) {
-            serverAccounts = accData.accounts.map((a: any) => ({
-              id: a.id,
-              sessionToken: a.sessionToken,
-              user: a.user,
-              isLoggedIn: a.isLoggedIn,
-              addedAt: a.addedAt,
-            }));
+            serverAccounts = accData.accounts
+              .filter((a: any) => !a.isDemo && !String(a.id).startsWith('acc_demo') && !String(a.sessionToken).startsWith('demo_'))
+              .map((a: any) => ({
+                id: a.id,
+                sessionToken: a.sessionToken,
+                user: a.user,
+                isLoggedIn: a.isLoggedIn,
+                addedAt: a.addedAt,
+              }));
             serverActiveId = accData.activeAccountId;
           }
         }
 
         // Fetch current status
-        const statusRes = await fetch('/api/telegram/status');
+        const statusRes = await fetch('/api/telegram/status', { headers });
         const statusData = await statusRes.json();
 
         if (statusData.isLoggedIn && statusData.user) {
@@ -375,7 +369,7 @@ export default function App() {
 
           const activeAccount: TelegramAccount = {
             id: serverActiveId || 'acc_primary',
-            sessionToken: statusData.sessionToken,
+            sessionToken: statusData.sessionToken || localToken || '',
             user: mainUser,
             isLoggedIn: true,
             addedAt: Date.now(),
@@ -383,49 +377,34 @@ export default function App() {
 
           const mergedAccounts = [
             activeAccount,
-            ...serverAccounts.filter(a => a.sessionToken !== statusData.sessionToken),
-            ...accounts.filter(a => a.sessionToken !== statusData.sessionToken && !serverAccounts.some(s => s.id === a.id)),
+            ...serverAccounts.filter((a) => a.sessionToken !== activeAccount.sessionToken),
           ].slice(0, MAX_TELEGRAM_ACCOUNTS);
 
           setAccounts(mergedAccounts);
           setActiveAccountId(activeAccount.id);
           setCurrentUser(mainUser);
-          setIsDemoMode(false);
-          loadMtprotoDialogs(statusData.sessionToken);
+          localStorage.setItem('tg_active_user', JSON.stringify(mainUser));
+          localStorage.setItem('tg_multi_accounts', JSON.stringify(mergedAccounts));
+          loadMtprotoDialogs(activeAccount.sessionToken);
         } else if (serverAccounts.length > 0) {
           // If server has accounts saved, switch to active one
-          const activeAcc = serverAccounts.find(a => a.id === serverActiveId) || serverAccounts[0];
+          const activeAcc = serverAccounts.find((a) => a.id === serverActiveId) || serverAccounts[0];
           setAccounts(serverAccounts);
           setActiveAccountId(activeAcc.id);
           setCurrentUser(activeAcc.user);
-          setIsDemoMode(false);
+          localStorage.setItem('tg_active_user', JSON.stringify(activeAcc.user));
+          localStorage.setItem('tg_multi_accounts', JSON.stringify(serverAccounts));
           loadMtprotoDialogs(activeAcc.sessionToken);
-        } else if (accounts.length > 0) {
-          // Use locally saved accounts
-          const currentAcc = accounts.find(a => a.id === activeAccountId) || accounts[0];
-          setActiveAccountId(currentAcc.id);
-          setCurrentUser(currentAcc.user);
-          setIsDemoMode(!!currentAcc.isDemo);
         } else {
-          // Check single stored session fallback
-          const savedSession = localStorage.getItem('tg_active_user');
-          if (savedSession) {
-            try {
-              const u = JSON.parse(savedSession);
-              const demoAcc: TelegramAccount = {
-                id: 'acc_demo_init',
-                sessionToken: 'demo_token_' + Math.random().toString(36).substring(2, 9),
-                user: u,
-                isLoggedIn: true,
-                isDemo: true,
-                addedAt: Date.now(),
-              };
-              setAccounts([demoAcc]);
-              setActiveAccountId(demoAcc.id);
-              setCurrentUser(u);
-              setIsDemoMode(true);
-            } catch {}
-          }
+          // No active sessions exist. Ensure clean state for LoginView.
+          setCurrentUser(null);
+          setActiveAccountId('');
+          setAccounts([]);
+          setChats([]);
+          setMessagesMap({});
+          localStorage.removeItem('tg_active_user');
+          localStorage.removeItem('tg_active_session_token');
+          localStorage.removeItem('tg_multi_accounts');
         }
       } catch (err) {
         console.error('Failed to check Telegram status:', err);
@@ -514,7 +493,7 @@ export default function App() {
 
   // Perform MTProto Gap Recovery (orchestrating Api.updates.GetDifference & sync_batch)
   const recoverGap = useCallback(async () => {
-    if (!activeAccountId || isDemoMode || isRecoveringGapRef.current) return;
+    if (!activeAccountId || isRecoveringGapRef.current) return;
     isRecoveringGapRef.current = true;
 
     try {
@@ -609,7 +588,7 @@ export default function App() {
     } finally {
       isRecoveringGapRef.current = false;
     }
-  }, [activeAccountId, isDemoMode, applySyncBatchMessages]);
+  }, [activeAccountId, applySyncBatchMessages]);
 
   // Connect WebSocket & listen to real-time events
   useEffect(() => {
@@ -784,7 +763,7 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = (user: TelegramUser, isDemo: boolean = false, authenticatedSessionToken?: string) => {
+  const handleLoginSuccess = (user: TelegramUser, authenticatedSessionToken?: string) => {
     const finalSessionToken =
       authenticatedSessionToken ||
       localStorage.getItem('tg_active_session_token') ||
@@ -797,18 +776,15 @@ export default function App() {
       sessionToken: finalSessionToken,
       user,
       isLoggedIn: true,
-      isDemo,
       addedAt: Date.now(),
     };
 
     setAccounts([newAcc]);
     setActiveAccountId(newAcc.id);
     setCurrentUser(user);
-    setIsDemoMode(isDemo);
     localStorage.setItem('tg_active_user', JSON.stringify(user));
-    if (!isDemo) {
-      loadMtprotoDialogs(finalSessionToken);
-    }
+    localStorage.setItem('tg_multi_accounts', JSON.stringify([newAcc]));
+    loadMtprotoDialogs(finalSessionToken);
   };
 
   // Switch between up to 6 isolated user accounts
@@ -846,7 +822,6 @@ export default function App() {
     // 3. Set newly active user & account
     setActiveAccountId(target.id);
     setCurrentUser(target.user);
-    setIsDemoMode(!!target.isDemo);
 
     // 4. Restore target account's isolated chats and messages
     const restored = accountsDataMap[target.id];
@@ -855,21 +830,12 @@ export default function App() {
       setMessagesMap(restored.messagesMap);
       setSelectedChatId(restored.selectedChatId || restored.chats[0]?.id || 'saved_messages');
     } else {
-      // Clean isolated initial chat list for new user
-      if (target.isDemo) {
-        setChats(INITIAL_CHATS);
-        setMessagesMap(INITIAL_MESSAGES);
-        setSelectedChatId('saved_messages');
-      } else {
-        setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
-        setSelectedChatId('saved_messages');
-      }
+      setChats(INITIAL_CHATS.filter((c) => c.id === 'saved_messages'));
+      setSelectedChatId('saved_messages');
     }
 
-    // 5. If it's a real MTProto cloud account, load its isolated dialogs
-    if (!target.isDemo) {
-      loadMtprotoDialogs(target.sessionToken);
-    }
+    // 5. Load isolated MTProto dialogs for this cloud account
+    loadMtprotoDialogs(target.sessionToken);
   };
 
   // Add new account (up to 6)
@@ -903,17 +869,10 @@ export default function App() {
     // Switch to new account immediately with isolated state
     setActiveAccountId(newAccount.id);
     setCurrentUser(newAccount.user);
-    setIsDemoMode(!!newAccount.isDemo);
 
-    if (newAccount.isDemo) {
-      setChats(INITIAL_CHATS);
-      setMessagesMap(INITIAL_MESSAGES);
-      setSelectedChatId('saved_messages');
-    } else {
-      setChats(INITIAL_CHATS.filter(c => c.id === 'saved_messages'));
-      setSelectedChatId('saved_messages');
-      loadMtprotoDialogs(newAccount.sessionToken);
-    }
+    setChats(INITIAL_CHATS.filter((c) => c.id === 'saved_messages'));
+    setSelectedChatId('saved_messages');
+    loadMtprotoDialogs(newAccount.sessionToken);
   };
 
   // Remove/disconnect an account
@@ -940,7 +899,10 @@ export default function App() {
       } else {
         setCurrentUser(null);
         setActiveAccountId('');
-        setIsDemoMode(false);
+        localStorage.removeItem('tg_active_user');
+        localStorage.removeItem('tg_active_session_token');
+        setChats([]);
+        setMessagesMap({});
       }
     }
   };
@@ -952,16 +914,21 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    if (activeAccountId) {
-      await handleRemoveAccount(activeAccountId);
-    } else {
-      try {
-        await fetch('/api/telegram/logout', { method: 'POST' });
-      } catch {}
-      localStorage.removeItem('tg_active_user');
-      setCurrentUser(null);
-      setIsDemoMode(false);
-    }
+    try {
+      if (activeAccountId) {
+        await fetch(`/api/telegram/accounts/${activeAccountId}`, { method: 'DELETE' });
+      }
+      await fetch('/api/telegram/logout', { method: 'POST' });
+    } catch {}
+    localStorage.removeItem('tg_active_user');
+    localStorage.removeItem('tg_active_session_token');
+    localStorage.removeItem('tg_multi_accounts');
+    localStorage.removeItem('tg_accounts_data_map');
+    setCurrentUser(null);
+    setActiveAccountId('');
+    setAccounts([]);
+    setChats([]);
+    setMessagesMap({});
   };
 
   // Chat selection with real-time mark as read and dynamic channel loading
@@ -1042,7 +1009,7 @@ export default function App() {
     }).catch(() => {});
 
     // If real MTProto session active, attempt loading live messages
-    if (activeAccountId && !isDemoMode) {
+    if (activeAccountId) {
       try {
         const res = await fetch(`/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30`);
         if (res.ok) {
@@ -1188,11 +1155,16 @@ export default function App() {
     );
 
     // If connected via real MTProto, send to backend
-    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+    if (currentUser) {
       try {
+        const activeAcc = accounts.find((a) => a.id === activeAccountId);
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (activeAcc?.sessionToken) {
+          headers['x-session-token'] = activeAcc.sessionToken;
+        }
         await fetch('/api/telegram/send-message', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             peerId: selectedChatId,
             text,
@@ -1202,196 +1174,13 @@ export default function App() {
         // Also inform MTProto about action
         fetch('/api/telegram/set-typing', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ peerId: selectedChatId, action: 'typing' }),
         }).catch(() => {});
       } catch (err) {
         console.error('Failed to send MTProto message:', err);
       }
     }
-
-    // Trigger realistic MTProto "typing..." indicator from the other party
-    const targetChat = chats.find((c) => c.id === selectedChatId);
-    if (targetChat && targetChat.type !== 'saved' && targetChat.type !== 'channel') {
-      const typingName =
-        targetChat.type === 'group' || targetChat.type === 'supergroup'
-          ? 'سارة خالد'
-          : targetChat.title;
-
-      // Start typing shortly after message sent
-      setTimeout(() => {
-        triggerTyping(selectedChatId, 3200, typingName);
-      }, 400);
-
-      // Automated interactive response after typing finishes
-      setTimeout(() => {
-        let replyText = '';
-        let senderId = 'contact_' + selectedChatId;
-        let senderName = targetChat.title;
-        let emojiReaction = '👍';
-        let replyMarkup: TelegramReplyMarkup | undefined = undefined;
-
-        if (selectedChatId === 'bot_ai_assistant' || targetChat.type === 'bot' || targetChat.isBot) {
-          senderId = 'smart_helper_bot';
-          senderName = targetChat.title || 'المساعد الذكي';
-          emojiReaction = '⚡';
-
-          if (text.startsWith('/start')) {
-            replyText =
-              themeConfig.language === 'ar'
-                ? '🤖 مرحباً بك في منصة بوتات تليجرام المتكاملة (Telegram Web K)!\n\nيمكنك استخدام الأزرار التفاعلية أدناه لتشغيل تطبيقات الويب المصغرة وإدارة العمليات:'
-                : '🤖 Welcome to the Telegram Web K bot platform!\n\nUse the interactive buttons below to launch mini apps and manage operations:';
-            replyMarkup = {
-              type: 'inline',
-              inlineKeyboard: [
-                [
-                  {
-                    text: '🚀 تشغيل تطبيق الويب (Mini App)',
-                    webApp: { url: 'https://telegram.org' },
-                  },
-                ],
-                [
-                  { text: '⚙️ الإعدادات', callbackData: 'bot_settings' },
-                  { text: '📊 الإحصائيات الحية', callbackData: 'bot_stats' },
-                ],
-                [
-                  { text: '🔍 استعلام فوري', switchInlineQuery: 'search ' },
-                ],
-              ],
-            };
-          } else if (text.startsWith('/keyboard')) {
-            replyText =
-              themeConfig.language === 'ar'
-                ? '⌨️ تم تفعيل لوحة الأزرار التفاعلية (Reply Keyboard). اضغط على أي خيار أدناه:'
-                : '⌨️ Reply keyboard activated. Tap any button below:';
-            replyMarkup = {
-              type: 'keyboard',
-              keyboard: [
-                [{ text: '🚀 فحص السرعة' }, { text: '📊 الإحصائيات' }],
-                [{ text: '⚙️ الإعدادات' }, { text: '❓ مساعدة' }],
-              ],
-            };
-          } else if (text.startsWith('/app')) {
-            replyText =
-              themeConfig.language === 'ar'
-                ? '📱 افتح تطبيق الويب المصغر التفاعلي عبر الزر التالي:'
-                : '📱 Launch the interactive mini app using the button below:';
-            replyMarkup = {
-              type: 'inline',
-              inlineKeyboard: [
-                [{ text: '⚡ فتح تطبيق الويب المصغر', webApp: { url: 'https://wallet.tg' } }],
-              ],
-            };
-          } else if (text.startsWith('/help')) {
-            replyText =
-              themeConfig.language === 'ar'
-                ? '📖 **دليل أوامر البوت (Telegram Web K):**\n\n/start - تشغيل البوت وعرض الأزرار\n/app - فتح تطبيق ويب مصغر\n/keyboard - تفعيل لوحة الأزرار\n/settings - ضبط الخيارات\n/help - عرض هذه القائمة'
-                : '📖 **Bot Commands Manual (Telegram Web K):**\n\n/start - Start the bot & show buttons\n/app - Open Mini App\n/keyboard - Show Reply Keyboard\n/settings - Settings\n/help - Show this manual';
-            replyMarkup = {
-              type: 'inline',
-              inlineKeyboard: [
-                [{ text: '🌐 وثائق تليجرام الرسمية للبوتات', url: 'https://core.telegram.org/bots' }],
-              ],
-            };
-          } else {
-            replyText =
-              themeConfig.language === 'ar'
-                ? `تم استلام طلبك: "${text}".\nأنا جاهز لأداء أي مهمة تطلبها، اضغط على أحد الخيارات:`
-                : `Received: "${text}".\nReady to assist. Select an action below:`;
-            replyMarkup = {
-              type: 'inline',
-              inlineKeyboard: [
-                [{ text: '⚙️ الإعدادات', callbackData: 'bot_settings' }, { text: '📊 الإحصائيات', callbackData: 'bot_stats' }],
-              ],
-            };
-          }
-        } else if (selectedChatId === 'bot_botfather') {
-          senderId = 'BotFather';
-          senderName = 'BotFather';
-          replyText = 'I can help you create and manage Telegram bots. Please choose an action:';
-          replyMarkup = {
-            type: 'inline',
-            inlineKeyboard: [
-              [{ text: '➕ Create New Bot (/newbot)', callbackData: 'bf_newbot' }, { text: '🤖 My Bots (/mybots)', callbackData: 'bf_mybots' }],
-            ],
-          };
-        } else if (selectedChatId === 'bot_wallet') {
-          senderId = 'wallet';
-          senderName = 'Telegram Wallet';
-          replyText = '💳 **محفظة تليجرام**\n\nالرصيد المحدث:\n🔹 145.50 TON (~$800.25 USD)\n\nاختر العملية المطلوبة:';
-          replyMarkup = {
-            type: 'inline',
-            inlineKeyboard: [
-              [{ text: '⚡ فتح المحفظة المصغرة', webApp: { url: 'https://wallet.tg' } }],
-              [{ text: '📥 إيداع TON', callbackData: 'wallet_deposit' }, { text: '📤 إرسال أموال', callbackData: 'wallet_send' }],
-            ],
-          };
-        } else if (selectedChatId === 'chat_ahmed') {
-          senderId = 'ahmed_mansour';
-          senderName = 'أحمد المنصور';
-          replyText = 'ممتاز جداً! التصميم مطابق لتليجرام الأصلي وسرعة الاستجابة ممتازة 👍';
-          emojiReaction = '🔥';
-        } else if (targetChat.type === 'group' || targetChat.type === 'supergroup') {
-          senderId = 'user_sara';
-          senderName = 'سارة خالد';
-          replyText = 'أهلاً بك! تم إطلاق تحديث مؤشرات الكتابة الحية (typing...) مع خوادم MTProto بنجاح! ✨';
-          emojiReaction = '🚀';
-        } else {
-          senderId = 'contact_' + selectedChatId;
-          senderName = targetChat.title;
-          replyText =
-            themeConfig.language === 'ar'
-              ? 'مرحباً! تلقيت رسالتك للتو عبر اتصال MTProto السحابي.'
-              : 'Hello! I just received your message via MTProto cloud connection.';
-          emojiReaction = '❤️';
-        }
-
-        const autoReply: TelegramMessage = {
-          id: 'reply_' + Date.now(),
-          chatId: selectedChatId,
-          senderId,
-          senderName,
-          text: replyText,
-          timestamp: Date.now(),
-          isOut: false,
-          status: 'read',
-          replyMarkup,
-          reactions: [{ emoji: emojiReaction, count: 1, userReacted: false }],
-        };
-
-        setMessagesMap((prev) => ({
-          ...prev,
-          [selectedChatId]: [...(prev[selectedChatId] || []), autoReply],
-        }));
-
-        setChats((prev) =>
-          prev.map((c) => {
-            if (c.id === selectedChatId) {
-              return {
-                ...c,
-                lastMessage: {
-                  text: replyText,
-                  timestamp: Date.now(),
-                  senderName: targetChat.type !== 'private' ? senderName : undefined,
-                  isOut: false,
-                },
-              };
-            }
-            return c;
-          })
-        );
-      }, 3600);
-    }
-  };
-
-  // Manual Trigger for MTProto typing simulation on the active chat
-  const handleSimulateTyping = () => {
-    if (!selectedChatId || !activeChat || activeChat.type === 'saved' || activeChat.type === 'channel') return;
-    const typingName =
-      activeChat.type === 'group' || activeChat.type === 'supergroup'
-        ? 'فهد المهندس'
-        : activeChat.title;
-    triggerTyping(selectedChatId, 4000, typingName);
   };
 
   // Toggle emoji reaction
@@ -1399,12 +1188,17 @@ export default function App() {
     if (!selectedChatId) return;
 
     // Send to real MTProto backend
-    if (!isDemoMode && currentUser?.id !== 'demo_user') {
+    if (currentUser) {
       const numId = Number(messageId.replace(/\D/g, ''));
       if (numId) {
+        const activeAcc = accounts.find((a) => a.id === activeAccountId);
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (activeAcc?.sessionToken) {
+          headers['x-session-token'] = activeAcc.sessionToken;
+        }
         fetch('/api/telegram/send-reaction', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             peerId: selectedChatId,
             messageId: numId,
@@ -1640,7 +1434,6 @@ export default function App() {
           messages={currentMessages}
           currentUser={currentUser}
           typingStatus={selectedChatId ? typingMap[selectedChatId] || null : null}
-          onSimulateTyping={handleSimulateTyping}
           onSendMessage={handleSendMessage}
           onReactMessage={handleReactMessage}
           onPinMessage={handlePinMessage}

@@ -60,7 +60,6 @@ interface ChatWindowProps {
   messages: TelegramMessage[];
   currentUser?: TelegramUser;
   typingStatus?: TypingStatus | null;
-  onSimulateTyping?: () => void;
   onSendMessage: (text: string, replyTo?: TelegramMessage, media?: any, options?: { topicId?: number; scheduledDate?: number }) => void;
   onReactMessage: (messageId: string, emoji: string) => void;
   onPinMessage: (messageId: string) => void;
@@ -95,7 +94,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   messages,
   currentUser,
   typingStatus,
-  onSimulateTyping,
   onSendMessage,
   onReactMessage,
   onPinMessage,
@@ -544,26 +542,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
             {/* Right Header Actions */}
             <div className="flex items-center gap-1">
-              {/* Quick MTProto Typing Simulator Button */}
-              {onSimulateTyping && chat.type !== 'saved' && (
-                <button
-                  onClick={onSimulateTyping}
-                  className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition font-medium ${
-                    typingStatus && typingStatus.chatId === chat.id && Date.now() < typingStatus.expiresAt
-                      ? 'bg-[#3390ec] text-white border-[#3390ec] shadow-sm animate-pulse'
-                      : isDark
-                      ? 'bg-[#242f3d]/70 text-[#3390ec] border-[#3390ec]/30 hover:bg-[#3390ec]/20'
-                      : 'bg-blue-50 text-[#3390ec] border-blue-200 hover:bg-blue-100'
-                  }`}
-                  title={isAr ? 'محاكاة نشاط الطرف الآخر (MTProto)' : 'Simulate MTProto activity'}
-                >
-                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden sm:inline">
-                    {isAr ? 'محاكاة نشاط' : 'Simulate'}
-                  </span>
-                </button>
-              )}
-
               {/* In-chat search */}
               {inChatSearch ? (
                 <div className="flex items-center gap-1 bg-[#242f3d]/30 px-2 py-1 rounded-lg">

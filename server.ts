@@ -426,9 +426,42 @@ async function startServer() {
     }
   });
 
-  // Real MTProto Send Verification Code
-  app.post('/api/telegram/send-code', async (req, res) => {
+  // Real MTProto QR Code Login
+  app.post('/api/telegram/qr/export', async (req, res) => {
+    let token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
+    if (!token) {
+      const slot = TelegramService.createAccountSlot();
+      token = slot.sessionToken;
+    }
+    try {
+      const result = await TelegramService.exportLoginToken(token);
+      res.json({ ...result, sessionToken: token });
+    } catch (err: any) {
+      console.error('Error in qr/export:', err);
+      res.status(500).json({ error: err.message || 'فشل توليد رمز QR لتسجيل الدخول' });
+    }
+  });
+
+  app.post('/api/telegram/qr/check', async (req, res) => {
     const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
+    if (!token) {
+      return res.status(400).json({ error: 'رمز الجلسة مطلوب' });
+    }
+    try {
+      const result = await TelegramService.exportLoginToken(token);
+      res.json({ ...result, sessionToken: token });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Real MTProto Send Verification Code
+  app.post(['/api/telegram/send-code', '/api/auth/sendCode'], async (req, res) => {
+    let token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
+    if (!token) {
+      const slot = TelegramService.createAccountSlot();
+      token = slot.sessionToken;
+    }
     const { phoneNumber } = req.body;
     if (!phoneNumber) {
       return res.status(400).json({ error: 'رقم الهاتف مطلوب' });
@@ -447,7 +480,7 @@ async function startServer() {
   });
 
   // Real MTProto Complete Sign In
-  app.post('/api/telegram/sign-in', async (req, res) => {
+  app.post(['/api/telegram/sign-in', '/api/auth/signIn'], async (req, res) => {
     const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
     const { phoneCode, phoneCodeHash, phoneNumber } = req.body;
     if (!phoneCode) {
@@ -456,6 +489,13 @@ async function startServer() {
 
     try {
       const result = await TelegramService.signIn(token, phoneCode, phoneCodeHash, phoneNumber);
+      if (result && (result as any).needs2FA) {
+        return res.json({
+          requiresPassword: true,
+          message: (result as any).message,
+          sessionToken: (result as any).sessionToken || token,
+        });
+      }
       res.json({ ...result, sessionToken: result.sessionToken || token });
     } catch (err: any) {
       console.error('Error in sign-in:', err);
@@ -467,7 +507,7 @@ async function startServer() {
   });
 
   // Real MTProto 2FA Password
-  app.post('/api/telegram/sign-in-password', async (req, res) => {
+  app.post(['/api/telegram/sign-in-password', '/api/auth/signInWithPassword'], async (req, res) => {
     const token = (req.body && req.body.sessionToken) || (req as any).sessionToken;
     const { password } = req.body;
     if (!password) {

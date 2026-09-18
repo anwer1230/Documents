@@ -3,7 +3,6 @@ export interface TelegramAccount {
   sessionToken: string;
   user: TelegramUser;
   isLoggedIn: boolean;
-  isDemo?: boolean;
   addedAt: number;
 }
 
