@@ -101,6 +101,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const [showQuickReactions, setShowQuickReactions] = useState(false);
   const [showHeartBurst, setShowHeartBurst] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
   const lastTouchTapRef = React.useRef<number>(0);
 
   const isOutgoing = message.isOutgoing;
@@ -132,11 +133,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       };
     }
 
-    // In group/supergroup/channel chats, prevent group's avatar from leaking into the sender's personal avatar
-    const effectiveAvatar =
-      isGroupChat && message.senderAvatar && activeChat?.avatar && message.senderAvatar === activeChat.avatar
-        ? undefined
-        : message.senderAvatar;
+    // Direct real sender avatar from Telegram
+    const effectiveAvatar = message.senderAvatar;
 
     // Prevent group's title from leaking into the sender's personal name
     const effectiveName =
@@ -157,7 +155,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     message.senderName,
     message.senderAvatar,
     message.senderUsername,
-    activeChat?.avatar,
     activeChat?.title,
     isGroupChat,
     isArabic,
@@ -389,6 +386,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
     openUserProfile({
       ...senderInfo,
+      avatar: message.senderAvatar || senderInfo.avatar,
       sourceChatId: activeChat?.id,
       sourceChatTitle: activeChat?.title,
       isBlocked: isUserBlocked(senderInfo.id),
@@ -398,11 +396,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   };
 
   const senderDisplayAvatar = React.useMemo(() => {
-    if (isGroupChat && message.senderAvatar && activeChat?.avatar && message.senderAvatar === activeChat.avatar) {
-      return senderInfo.avatar;
-    }
     return message.senderAvatar || senderInfo.avatar;
-  }, [isGroupChat, message.senderAvatar, activeChat?.avatar, senderInfo.avatar]);
+  }, [message.senderAvatar, senderInfo.avatar]);
+
+  React.useEffect(() => {
+    setAvatarError(false);
+  }, [senderDisplayAvatar]);
 
   const senderDisplayName = React.useMemo(() => {
     if (isGroupChat && message.senderName && activeChat?.title && message.senderName === activeChat.title) {
@@ -512,12 +511,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           title={senderDisplayName || (isArabic ? 'الملف الشخصي' : 'Profile')}
           className="w-8 h-8 rounded-full overflow-hidden shrink-0 self-end mb-1 cursor-pointer hover:scale-110 active:scale-95 transition-transform ring-1 ring-white/10 shadow-sm focus:outline-none"
         >
-          {senderDisplayAvatar ? (
+          {senderDisplayAvatar && !avatarError ? (
             <img
               src={senderDisplayAvatar}
               alt={senderDisplayName}
               className="w-full h-full object-cover"
+              loading="lazy"
               referrerPolicy="no-referrer"
+              onError={() => setAvatarError(true)}
             />
           ) : (
             <div

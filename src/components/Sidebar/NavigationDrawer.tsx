@@ -20,6 +20,24 @@ import {
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
+const PEER_GRADIENTS = [
+  'from-[#e17076] to-[#f0858a]',
+  'from-[#faa774] to-[#fbb88c]',
+  'from-[#a695e7] to-[#b8a9ec]',
+  'from-[#7bc862] to-[#8ed676]',
+  'from-[#6ec9cb] to-[#539ec2]',
+  'from-[#65aadd] to-[#a6ccf5]',
+  'from-[#ee7aae] to-[#f4a1c5]',
+];
+
+function getPeerGradient(name: string = '') {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) % PEER_GRADIENTS.length;
+  }
+  return PEER_GRADIENTS[Math.abs(hash)] || PEER_GRADIENTS[0];
+}
+
 export const NavigationDrawer: React.FC = () => {
   const {
     isDrawerOpen,
@@ -37,7 +55,12 @@ export const NavigationDrawer: React.FC = () => {
   } = useTelegram();
 
   const [showAccounts, setShowAccounts] = React.useState(false);
+  const [avatarError, setAvatarError] = React.useState(false);
   const isArabic = settings.language === 'ar';
+
+  React.useEffect(() => {
+    setAvatarError(false);
+  }, [currentUser.avatar]);
 
   if (!isDrawerOpen) return null;
 
@@ -56,11 +79,20 @@ export const NavigationDrawer: React.FC = () => {
         {/* User Profile Header */}
         <div className="p-4 bg-[#202b36] border-b border-[#242f3d]">
           <div className="flex items-center justify-between mb-3">
-            <div className="w-14 h-14 rounded-full bg-[#2481cc] flex items-center justify-center font-bold text-xl overflow-hidden border-2 border-white/20">
-              {currentUser.avatar ? (
-                <img src={currentUser.avatar} alt="Avatar" className="w-full h-full object-cover" />
+            <div className={`w-14 h-14 rounded-full flex items-center justify-center font-bold text-xl overflow-hidden border-2 border-white/20 ${
+              currentUser.avatar && !avatarError ? 'bg-[#202b36]' : `bg-gradient-to-tr ${getPeerGradient(displayName)}`
+            }`}>
+              {currentUser.avatar && !avatarError ? (
+                <img
+                  src={currentUser.avatar}
+                  alt={displayName}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  onError={() => setAvatarError(true)}
+                />
               ) : (
-                displayName.charAt(0).toUpperCase()
+                (displayName || 'U').charAt(0).toUpperCase()
               )}
             </div>
             <button

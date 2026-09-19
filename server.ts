@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import fs from 'fs';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -232,6 +233,31 @@ async function startServer() {
       return false;
     }
   };
+
+  // =========================================================================
+  // Stage 1: Avatar Disk & LRU Memory Cache Storage
+  // =========================================================================
+  const AVATAR_CACHE_DIR = path.join(process.cwd(), '.cache', 'avatars');
+  if (!fs.existsSync(AVATAR_CACHE_DIR)) {
+    try {
+      fs.mkdirSync(AVATAR_CACHE_DIR, { recursive: true });
+    } catch (_) {}
+  }
+  const avatarMemoryCache = new Map<string, Buffer>();
+  const MAX_MEMORY_AVATARS = 500;
+  function setAvatarMemoryCache(key: string, buf: Buffer) {
+    if (avatarMemoryCache.size >= MAX_MEMORY_AVATARS) {
+      const firstKey = avatarMemoryCache.keys().next().value;
+      if (firstKey) avatarMemoryCache.delete(firstKey);
+    }
+    avatarMemoryCache.set(key, buf);
+  }
+
+  // Telegram In-memory Entity Cache (users, chats, channels for instant avatar resolution)
+  const entityCache = new Map<string, any>();
+
+  // In-flight avatar downloads deduplication map
+  const inFlightAvatarDownloads = new Map<string, Promise<Buffer | null>>();
 
   // MTProto Active Authenticated Clients Store
   const authenticatedTelegramClients = new Map<string, TelegramClient>();
@@ -493,16 +519,25 @@ async function startServer() {
     }
     const myIdStr = String(me.id);
 
-    // 1. Download User Profile Photo as Base64 Data URL (safe against cross-DC AUTH_BYTES_INVALID)
-    let myAvatar = '';
+    // 1. Download User Profile Photo & Cache for Avatar Streaming
+    let myAvatar = `/api/telegram/avatar/me`;
     try {
       const photoBuf: any = await client.downloadProfilePhoto('me', { isBig: false });
       if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
         myAvatar = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
+        // Cache photo on disk and in memory
+        const diskPathMe = path.join(AVATAR_CACHE_DIR, 'me.jpg');
+        const diskPathMyId = path.join(AVATAR_CACHE_DIR, `${myIdStr}.jpg`);
+        await fs.promises.writeFile(diskPathMe, photoBuf).catch(() => {});
+        await fs.promises.writeFile(diskPathMyId, photoBuf).catch(() => {});
+        setAvatarMemoryCache('me', photoBuf);
+        setAvatarMemoryCache(myIdStr, photoBuf);
       }
     } catch (photoErr: any) {
       console.warn('[MTProto] Could not download user profile photo (handled safely):', photoErr?.message || photoErr);
     }
+    entityCache.set('me', me);
+    entityCache.set(myIdStr, me);
 
     // 2. Fetch User About / Bio from FullUser
     let userBio = 'Telegram Official Account';
@@ -550,6 +585,7 @@ async function startServer() {
         const uid = String(entity.id);
         if (!seenUserIds.has(uid)) {
           seenUserIds.add(uid);
+          entityCache.set(uid, entity);
           try {
             if (entity.inputEntity) {
               userInputs.push(entity.inputEntity);
@@ -558,13 +594,23 @@ async function startServer() {
             }
           } catch (_) {}
 
+          const hasUserPhoto = Boolean(
+            entity?.photo &&
+            !(entity.photo instanceof Api.UserProfilePhotoEmpty) &&
+            !(entity.photo instanceof Api.ChatPhotoEmpty) &&
+            entity.photo.className !== 'UserProfilePhotoEmpty' &&
+            entity.photo.className !== 'ChatPhotoEmpty' &&
+            entity.photo._ !== 'userProfilePhotoEmpty' &&
+            entity.photo._ !== 'chatPhotoEmpty'
+          );
+
           const uName = [entity.firstName || entity.first_name, entity.lastName || entity.last_name].filter(Boolean).join(' ') || entity.title || entity.username || 'مستخدم تيليجرام';
           usersList.push({
             id: uid,
             name: uName,
             username: entity.username || undefined,
             phone: entity.phone ? (entity.phone.startsWith('+') ? entity.phone : `+${entity.phone}`) : undefined,
-            avatar: '',
+            avatar: hasUserPhoto ? `/api/telegram/avatar/${uid}` : '',
             isOnline: Boolean(entity.status?.className === 'UserStatusOnline'),
             isVerified: Boolean(entity.verified),
             isBot: Boolean(entity.bot),
@@ -670,6 +716,27 @@ async function startServer() {
         };
       }
 
+      if (entity) {
+        entityCache.set(dialogIdStr, entity);
+        if (entity.id) {
+          entityCache.set(String(entity.id), entity);
+        }
+      }
+
+      const hasChatPhoto = Boolean(
+        entity?.photo &&
+        !(entity.photo instanceof Api.ChatPhotoEmpty) &&
+        !(entity.photo instanceof Api.UserProfilePhotoEmpty) &&
+        entity.photo.className !== 'ChatPhotoEmpty' &&
+        entity.photo.className !== 'UserProfilePhotoEmpty' &&
+        entity.photo._ !== 'chatPhotoEmpty' &&
+        entity.photo._ !== 'userProfilePhotoEmpty'
+      );
+
+      const computedChatAvatar = isMe
+        ? myAvatar
+        : (hasChatPhoto ? `/api/telegram/avatar/${dialogIdStr}` : '');
+
       const chatId = isMe ? 'chat_saved_messages' : `chat_${dialogIdStr}`;
 
       chats.push({
@@ -678,7 +745,7 @@ async function startServer() {
         type: chatType,
         title: chatTitle,
         username,
-        avatar: isMe ? myAvatar : '',
+        avatar: computedChatAvatar,
         isVerified: Boolean(entity?.verified),
         isPinned: Boolean(dialog.pinned),
         unreadCount: dialog.unreadCount || 0,
@@ -720,33 +787,7 @@ async function startServer() {
       });
     }
 
-    // 4. Download Avatars in fast parallel batches with 1.2s timeout per avatar
-    const avatarDownloadPromises = chats.slice(0, 30).map(async (chat, idx) => {
-      if (chat.type === 'saved' && myAvatar) {
-        chat.avatar = myAvatar;
-        return;
-      }
-      const rawDialog = rawDialogs[idx];
-      const targetEntity = rawDialog?.entity || (rawDialog?.id ? rawDialog.id : undefined);
-      if (!targetEntity) return;
-
-      try {
-        let timer: any;
-        const timeoutPromise = new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), 1200);
-        });
-        const downloadPromise = client.downloadProfilePhoto(targetEntity, { isBig: false }).catch(() => null);
-        const photoBuf: any = await Promise.race([downloadPromise, timeoutPromise]);
-        clearTimeout(timer);
-        if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
-          chat.avatar = `data:image/jpeg;base64,${photoBuf.toString('base64')}`;
-        }
-      } catch (_) {}
-    });
-
-    await Promise.allSettled(avatarDownloadPromises);
-
-    // 5. Fetch Recent Messages for Top 15 Active Chats with 1.2s timeout per chat
+    // 4. Fetch Recent Messages for Top 15 Active Chats with 1.2s timeout per chat (Fast On-Demand Avatar Streaming Enabled)
     const messageFetchPromises = chats.slice(0, 15).map(async (chat, idx) => {
       try {
         const rawDialog = rawDialogs[idx];
@@ -784,6 +825,9 @@ async function startServer() {
           }
 
           const senderUser = m.sender || m._sender;
+          if (senderUser && senderUser.id) {
+            entityCache.set(String(senderUser.id), senderUser);
+          }
           let realSenderName = m.out ? userProfile.name : undefined;
           if (!realSenderName && senderUser) {
             const fullName = [senderUser.firstName || senderUser.first_name, senderUser.lastName || senderUser.last_name].filter(Boolean).join(' ');
@@ -797,8 +841,25 @@ async function startServer() {
           }
 
           const senderUsername = senderUser?.username ? (senderUser.username.startsWith('@') ? senderUser.username : `@${senderUser.username}`) : undefined;
-          const senderIdStr = m.out ? userProfile.id : String(m.fromId?.userId || m.fromId?.channelId || m.fromId?.chatId || senderUser?.id || (chat.type === 'private' ? chat.id : `sender_${m.id}`));
-          const resolvedSenderAvatar = m.out ? userProfile.avatar : (chat.type === 'private' ? chat.avatar : undefined);
+          const senderIdStr = m.out ? userProfile.id : String(m.fromId?.userId || m.fromId?.channelId || m.fromId?.chatId || senderUser?.id || (chat.type === 'private' ? chat.peerId : `sender_${m.id}`));
+
+          if (senderUser) {
+            entityCache.set(senderIdStr, senderUser);
+          }
+
+          const hasSenderPhoto = Boolean(
+            senderUser?.photo &&
+            !(senderUser.photo instanceof Api.UserProfilePhotoEmpty) &&
+            !(senderUser.photo instanceof Api.ChatPhotoEmpty) &&
+            senderUser.photo.className !== 'UserProfilePhotoEmpty' &&
+            senderUser.photo.className !== 'ChatPhotoEmpty' &&
+            senderUser.photo._ !== 'userProfilePhotoEmpty' &&
+            senderUser.photo._ !== 'chatPhotoEmpty'
+          );
+
+          const resolvedSenderAvatar = m.out
+            ? userProfile.avatar
+            : (hasSenderPhoto ? `/api/telegram/avatar/${senderIdStr}` : (chat.type === 'private' ? chat.avatar : undefined));
 
           msgsList.push({
             id: String(m.id),
@@ -835,6 +896,130 @@ async function startServer() {
       messages: messagesRecord,
     };
   };
+
+  // =========================================================================
+  // Stage 1: On-Demand Avatar Streaming & Caching Layer (LRU & Disk Cache)
+  // GET /api/telegram/avatar/:peerId
+  // =========================================================================
+  app.get('/api/telegram/avatar/:peerId', async (req, res) => {
+    const rawPeerId = req.params.peerId;
+    if (!rawPeerId) {
+      return res.status(404).send('Missing peer ID');
+    }
+
+    // Clean peer ID (remove chat_ prefix, handle saved/me, sanitize for file path)
+    let peerId = rawPeerId.replace(/^chat_/, '');
+    if (peerId === 'saved' || peerId === 'saved_messages') {
+      peerId = 'me';
+    }
+    const safeDiskFileName = peerId.replace(/[^a-zA-Z0-9_\-+]/g, '_');
+    const diskPath = path.join(AVATAR_CACHE_DIR, `${safeDiskFileName}.jpg`);
+
+    // 1. Check in-memory LRU cache
+    if (avatarMemoryCache.has(peerId)) {
+      const cachedBuf = avatarMemoryCache.get(peerId)!;
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.setHeader('Content-Type', 'image/jpeg');
+      return res.end(cachedBuf);
+    }
+
+    // 2. Check disk cache (.cache/avatars/${peerId}.jpg)
+    if (fs.existsSync(diskPath)) {
+      try {
+        const diskBuf = await fs.promises.readFile(diskPath);
+        if (diskBuf && diskBuf.length > 0) {
+          setAvatarMemoryCache(peerId, diskBuf);
+          res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+          res.setHeader('Content-Type', 'image/jpeg');
+          return res.end(diskBuf);
+        }
+      } catch (_) {}
+    }
+
+    // 3. Deduplicate concurrent requests for the same peerId
+    let downloadPromise = inFlightAvatarDownloads.get(peerId);
+    if (!downloadPromise) {
+      downloadPromise = (async (): Promise<Buffer | null> => {
+        // Resolve active TelegramClient
+        const sessionString = (req.query.sessionString as string) || (req.headers['x-telegram-session'] as string) || (req.headers['x-session-string'] as string);
+        const phone = (req.query.phone as string) || (req.headers['x-telegram-phone'] as string);
+        let client = await getClientForSession(sessionString, phone);
+        if (!client || !client.connected) {
+          for (const c of authenticatedTelegramClients.values()) {
+            if (c && c.connected) {
+              client = c;
+              break;
+            }
+          }
+        }
+        if (!client || !client.connected) {
+          for (const sess of realTelegramSessions.values()) {
+            if (sess.client && sess.client.connected) {
+              client = sess.client;
+              break;
+            }
+          }
+        }
+        if (!client || !client.connected) {
+          return null;
+        }
+
+        // Resolve target entity (User, Chat, Channel)
+        let targetEntity = entityCache.get(peerId);
+        if (!targetEntity) {
+          if (peerId === 'me') {
+            targetEntity = 'me';
+          } else {
+            try {
+              const num = Number(peerId);
+              if (!isNaN(num) && num !== 0) {
+                targetEntity = await client.getEntity(num as any).catch(async () => {
+                  return await client.getEntity(peerId).catch(() => null);
+                });
+              } else {
+                targetEntity = await client.getEntity(peerId).catch(() => null);
+              }
+            } catch (_) {
+              targetEntity = null;
+            }
+          }
+        }
+
+        if (!targetEntity && peerId !== 'me') {
+          return null;
+        }
+
+        try {
+          const entityToDownload = targetEntity || peerId;
+          const photoBuf: any = await client.downloadProfilePhoto(entityToDownload, { isBig: false }).catch(() => null);
+          if (photoBuf && Buffer.isBuffer(photoBuf) && photoBuf.length > 0) {
+            // Write to disk cache
+            await fs.promises.writeFile(diskPath, photoBuf).catch(() => {});
+            // Write to memory cache
+            setAvatarMemoryCache(peerId, photoBuf);
+            return photoBuf;
+          }
+        } catch (err: any) {
+          console.warn(`[Avatar Stream] Error downloading photo for peer ${peerId}:`, err?.message || err);
+        }
+        return null;
+      })();
+
+      inFlightAvatarDownloads.set(peerId, downloadPromise);
+    }
+
+    const resultBuf = await downloadPromise.finally(() => {
+      inFlightAvatarDownloads.delete(peerId);
+    });
+
+    if (resultBuf && resultBuf.length > 0) {
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.setHeader('Content-Type', 'image/jpeg');
+      return res.end(resultBuf);
+    }
+
+    return res.status(404).send('Avatar not found');
+  });
 
   // 4.1 Proactive MTProto Session Validator (auth.check / validateSession)
   app.post('/api/telegram/session/validate', async (req, res) => {
@@ -1805,17 +1990,30 @@ async function startServer() {
       if (client && client.connected && Array.isArray(userIds) && userIds.length > 0) {
         const inputUsers = userIds.map((id: any) => new Api.InputUser({ userId: (Number(id) || 0) as any, accessHash: 0 as any }));
         const rawUsers: any = await client.invoke(new Api.users.GetUsers({ id: inputUsers }));
-        const mappedUsers = (Array.isArray(rawUsers) ? rawUsers : []).map((u: any) => ({
-          id: String(u.id),
-          name: [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Telegram User',
-          username: u.username || undefined,
-          phone: u.phone ? `+${u.phone}` : undefined,
-          avatar: '',
-          isOnline: Boolean(u.status?.className === 'UserStatusOnline'),
-          isVerified: Boolean(u.verified),
-          isPremium: Boolean(u.premium),
-          isBot: Boolean(u.bot),
-        }));
+        const mappedUsers = (Array.isArray(rawUsers) ? rawUsers : []).map((u: any) => {
+          const uidStr = String(u.id);
+          entityCache.set(uidStr, u);
+          const hasUserPhoto = Boolean(
+            u?.photo &&
+            !(u.photo instanceof Api.UserProfilePhotoEmpty) &&
+            !(u.photo instanceof Api.ChatPhotoEmpty) &&
+            u.photo.className !== 'UserProfilePhotoEmpty' &&
+            u.photo.className !== 'ChatPhotoEmpty' &&
+            u.photo._ !== 'userProfilePhotoEmpty' &&
+            u.photo._ !== 'chatPhotoEmpty'
+          );
+          return {
+            id: uidStr,
+            name: [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Telegram User',
+            username: u.username || undefined,
+            phone: u.phone ? `+${u.phone}` : undefined,
+            avatar: hasUserPhoto ? `/api/telegram/avatar/${uidStr}` : '',
+            isOnline: Boolean(u.status?.className === 'UserStatusOnline'),
+            isVerified: Boolean(u.verified),
+            isPremium: Boolean(u.premium),
+            isBot: Boolean(u.bot),
+          };
+        });
         return res.json({ success: true, rpc: 'users.getUsers', users: mappedUsers });
       }
     } catch (err: any) {
@@ -1897,6 +2095,9 @@ async function startServer() {
           }
 
           const senderUser = m.sender || m._sender;
+          if (senderUser && senderUser.id) {
+            entityCache.set(String(senderUser.id), senderUser);
+          }
           let realSenderName = m.out ? myName : undefined;
           if (!realSenderName && senderUser) {
             const fullName = [senderUser.firstName || senderUser.first_name, senderUser.lastName || senderUser.last_name].filter(Boolean).join(' ');
@@ -1908,6 +2109,24 @@ async function startServer() {
 
           const senderUsername = senderUser?.username ? (senderUser.username.startsWith('@') ? senderUser.username : `@${senderUser.username}`) : undefined;
           const senderIdStr = m.out ? myIdStr : String(m.fromId?.userId || m.fromId?.channelId || m.fromId?.chatId || senderUser?.id || peerId);
+
+          if (senderUser) {
+            entityCache.set(senderIdStr, senderUser);
+          }
+
+          const hasSenderPhoto = Boolean(
+            senderUser?.photo &&
+            !(senderUser.photo instanceof Api.UserProfilePhotoEmpty) &&
+            !(senderUser.photo instanceof Api.ChatPhotoEmpty) &&
+            senderUser.photo.className !== 'UserProfilePhotoEmpty' &&
+            senderUser.photo.className !== 'ChatPhotoEmpty' &&
+            senderUser.photo._ !== 'userProfilePhotoEmpty' &&
+            senderUser.photo._ !== 'chatPhotoEmpty'
+          );
+
+          const resolvedSenderAvatar = m.out
+            ? '/api/telegram/avatar/me'
+            : (hasSenderPhoto ? `/api/telegram/avatar/${senderIdStr}` : undefined);
 
           let entities: any = undefined;
           if (Array.isArray(m.entities) && m.entities.length > 0) {
@@ -1961,6 +2180,7 @@ async function startServer() {
             senderId: senderIdStr,
             senderName: realSenderName,
             senderUsername,
+            senderAvatar: resolvedSenderAvatar,
             text: m.message || (mediaData ? `[${mediaData.type}]` : ''),
             timestamp: timeStr,
             date: dateStr,

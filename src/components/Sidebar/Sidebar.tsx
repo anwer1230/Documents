@@ -22,6 +22,48 @@ function getPeerGradient(name: string = '') {
 }
 
 /**
+ * Avatar with onError fallback to Telegram peer gradient & initial letter
+ */
+function ChatAvatarItem({ chat, isSaved }: { chat: any; isSaved: boolean }) {
+  const [imgError, setImgError] = React.useState(false);
+
+  React.useEffect(() => {
+    setImgError(false);
+  }, [chat.avatar]);
+
+  if (isSaved) {
+    return (
+      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-base text-white overflow-hidden shadow-xs bg-[#2481cc]">
+        <Bookmark className="w-5 h-5 fill-white text-white" />
+      </div>
+    );
+  }
+
+  const showAvatar = Boolean(chat.avatar && !imgError);
+
+  return (
+    <div
+      className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-base text-white overflow-hidden shadow-xs ${
+        showAvatar ? 'bg-[#242f3d]' : `bg-gradient-to-tr ${getPeerGradient(chat.title)}`
+      }`}
+    >
+      {showAvatar ? (
+        <img
+          src={chat.avatar}
+          alt={chat.title}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        (chat.title || 'U').charAt(0).toUpperCase()
+      )}
+    </div>
+  );
+}
+
+/**
  * Renders text with search query matches highlighted
  */
 function HighlightMatch({ text, query }: { text: string; query: string }) {
@@ -278,28 +320,7 @@ export const Sidebar: React.FC = () => {
               >
                 {/* Avatar */}
                 <div className="relative shrink-0">
-                  <div
-                    className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-base text-white overflow-hidden shadow-xs ${
-                      isSaved
-                        ? 'bg-[#2481cc]'
-                        : chat.avatar
-                        ? 'bg-[#242f3d]'
-                        : `bg-gradient-to-tr ${getPeerGradient(chat.title)}`
-                    }`}
-                  >
-                    {isSaved ? (
-                      <Bookmark className="w-5 h-5 fill-white text-white" />
-                    ) : chat.avatar ? (
-                      <img
-                        src={chat.avatar}
-                        alt={chat.title}
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      chat.title.charAt(0).toUpperCase()
-                    )}
-                  </div>
+                  <ChatAvatarItem chat={chat} isSaved={isSaved} />
                   {chat.isOnline && !isSaved && (
                     <span className="absolute bottom-0 right-0 rtl:right-auto rtl:left-0 w-3.5 h-3.5 bg-[#4fae4e] border-2 border-[#17212b] rounded-full" />
                   )}

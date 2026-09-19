@@ -181,9 +181,10 @@ export function resolveTelegramUser(
   // 2. Synthesize consistent realistic identity
   const seed = cleanId || cleanName || 'telegram_user';
   const avatarIndex = getHashIndex(seed, REAL_USER_AVATARS.length);
-  const assignedAvatar = senderAvatar && senderAvatar.startsWith('http')
-    ? senderAvatar
-    : REAL_USER_AVATARS[avatarIndex];
+  const assignedAvatar =
+    senderAvatar && (senderAvatar.startsWith('http') || senderAvatar.startsWith('/api/') || senderAvatar.startsWith('data:'))
+      ? senderAvatar
+      : REAL_USER_AVATARS[avatarIndex];
 
   const derivedUsername =
     senderUsername?.replace(/^@/, '') ||
