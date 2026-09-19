@@ -35,7 +35,7 @@ export interface ProfileUserInfo {
   isMuted?: boolean;
   sourceChatId?: string;
   sourceChatTitle?: string;
-  senderRole?: 'owner' | 'admin' | 'member';
+  senderRole?: 'owner' | 'admin' | 'member' | 'banned' | 'restricted';
   senderRank?: string;
 }
 

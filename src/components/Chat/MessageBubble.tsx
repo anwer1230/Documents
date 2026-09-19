@@ -109,9 +109,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const isArabic = settings.language === 'ar';
 
   const isGroupChat =
-    activeChat?.type === 'group' ||
-    activeChat?.type === 'supergroup' ||
-    activeChat?.type === 'forum' ||
+    (activeChat?.type as string) === 'group' ||
+    (activeChat?.type as string) === 'supergroup' ||
+    (activeChat?.type as string) === 'forum' ||
     activeChat?.type === 'channel';
 
   // Resolve authentic Telegram user profile for message sender
