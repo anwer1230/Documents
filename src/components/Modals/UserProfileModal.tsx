@@ -69,8 +69,6 @@ export const UserProfileModal: React.FC = () => {
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [isContactMuted, setIsContactMuted] = useState(false);
 
-  if (activeModal !== ('user-profile' as any)) return null;
-
   const isArabic = settings.language === 'ar';
   const user = selectedProfileUser || {
     id: currentUser.id,
@@ -84,15 +82,6 @@ export const UserProfileModal: React.FC = () => {
     isOnline: true,
   };
 
-  const isMe = user.id === currentUser.id || user.id === 'user_me';
-  const isBot =
-    (user as any).is_bot === true ||
-    Boolean(user.username && user.username.toLowerCase().endsWith('bot')) ||
-    user.id === 'user_botfather' ||
-    user.id === 'user_telegramaibot';
-
-  const commonGroups = getCommonGroupsForUser(user.id, user.name);
-
   // Shared media from this user in the active chat
   const userSharedMedia = useMemo(() => {
     if (!activeChatId || !messages[activeChatId]) return [];
@@ -105,6 +94,17 @@ export const UserProfileModal: React.FC = () => {
         m.media.url
     );
   }, [activeChatId, messages, user.id, user.name]);
+
+  if (activeModal !== ('user-profile' as any)) return null;
+
+  const isMe = user.id === currentUser.id || user.id === 'user_me';
+  const isBot =
+    (user as any).is_bot === true ||
+    Boolean(user.username && user.username.toLowerCase().endsWith('bot')) ||
+    user.id === 'user_botfather' ||
+    user.id === 'user_telegramaibot';
+
+  const commonGroups = getCommonGroupsForUser(user.id, user.name);
 
   const handleCopyUsername = () => {
     if (user.username && navigator.clipboard) {

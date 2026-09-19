@@ -10,7 +10,8 @@
     "postinstall": "npm run build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.cjs",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && eslint src",
+    "lint:hooks": "eslint src",
     "build:apk": "./gradlew assembleDebug || gradle assembleDebug",
     "build:apk:release": "./gradlew assembleRelease || gradle assembleRelease"
   },
@@ -50,5 +51,9 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript-eslint": "^8.70.0"
+  }
 }
