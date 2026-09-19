@@ -79,3 +79,15 @@ export interface JoinProgress {
   currentLink?: string;
   logs: string[];
 }
+
+export interface AutoReplyRule {
+  id: string;
+  keyword: string;
+  replyText: string;
+  matchType: 'contains' | 'exact' | 'regex';
+  scope: 'all' | 'private' | 'groups';
+  isEnabled: boolean;
+  timesTriggered?: number;
+  createdAt?: string;
+  lastUsed?: string;
+}

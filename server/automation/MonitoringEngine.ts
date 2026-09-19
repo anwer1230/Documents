@@ -79,6 +79,41 @@ export class MonitoringEngine {
         }
 
         const rawText = message.text;
+
+        // Auto Reply Check (الردود التلقائية)
+        try {
+          const autoReplyData = StorageManager.loadAutoReplyRules(userId);
+          if (autoReplyData.enabled && autoReplyData.rules.length > 0) {
+            const isPrivate = Boolean(message.isPrivate);
+            for (const rule of autoReplyData.rules) {
+              if (!rule.isEnabled || !rule.keyword || !rule.replyText) continue;
+              if (rule.scope === 'private' && !isPrivate) continue;
+              if (rule.scope === 'groups' && isPrivate) continue;
+
+              let isMatched = false;
+              if (rule.matchType === 'exact') {
+                isMatched = rawText.trim().toLowerCase() === rule.keyword.trim().toLowerCase();
+              } else if (rule.matchType === 'regex') {
+                try {
+                  isMatched = new RegExp(rule.keyword, 'i').test(rawText);
+                } catch (_) {}
+              } else {
+                isMatched = TextNormalizer.matchKeyword(rawText, rule.keyword);
+              }
+
+              if (isMatched) {
+                await message.reply({ message: rule.replyText });
+                rule.timesTriggered = (rule.timesTriggered || 0) + 1;
+                rule.lastUsed = new Date().toISOString();
+                StorageManager.saveAutoReplyRules(userId, { rules: autoReplyData.rules });
+                break;
+              }
+            }
+          }
+        } catch (autoErr) {
+          console.warn('[MonitoringEngine] Auto reply evaluation error:', autoErr);
+        }
+
         const currentKeywords = this.getKeywords(userId);
         if (currentKeywords.length === 0) return;
 

@@ -29,6 +29,7 @@ export const AutoResponderModal: React.FC = () => {
   const [scope, setScope] = useState<'all' | 'private' | 'groups'>('all');
 
   useEffect(() => {
+    backgroundSyncService.syncWithBackend();
     const unsub = backgroundSyncService.subscribe(() => {
       setRules([...backgroundSyncService.getAutoReplyRules()]);
       setIsGlobalActive(backgroundSyncService.isAutoResponderActive());

@@ -53,6 +53,33 @@ export class BackgroundSyncService {
 
   public processIncomingMessage(...args: any[]): void {}
 
+  public async syncWithBackend(): Promise<void> {
+    try {
+      const res = await fetch('/api/automation/auto-replies');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.rules)) {
+          this.autoReplyRules = data.rules;
+          if (data.enabled !== undefined) {
+            this.autoResponderActive = data.enabled;
+          }
+          this.notify();
+        }
+      }
+    } catch (_) {}
+  }
+
+  private persistToBackend(): void {
+    fetch('/api/automation/auto-replies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: this.autoResponderActive,
+        rules: this.autoReplyRules,
+      }),
+    }).catch(() => {});
+  }
+
   // Auto-Responder
   public getAutoReplyRules(): AutoReplyRule[] {
     return this.autoReplyRules;
@@ -74,11 +101,13 @@ export class BackgroundSyncService {
     };
     this.autoReplyRules.push(fullRule);
     this.notify();
+    this.persistToBackend();
   }
 
   public toggleGlobalAutoResponder(active?: boolean): void {
     this.autoResponderActive = active !== undefined ? active : !this.autoResponderActive;
     this.notify();
+    this.persistToBackend();
   }
 
   public toggleRule(ruleId: string): void {
@@ -86,12 +115,14 @@ export class BackgroundSyncService {
     if (rule) {
       rule.isEnabled = !rule.isEnabled;
       this.notify();
+      this.persistToBackend();
     }
   }
 
   public deleteRule(ruleId: string): void {
     this.autoReplyRules = this.autoReplyRules.filter((r) => r.id !== ruleId);
     this.notify();
+    this.persistToBackend();
   }
 
   // Live Link Discover

@@ -15,6 +15,8 @@ import {
   HelpCircle,
   Radio,
   Link2,
+  MessageSquare,
+  RotateCw,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
@@ -207,6 +209,44 @@ export const NavigationDrawer: React.FC = () => {
             </div>
             <span className="text-[10px] bg-[#2481cc]/20 text-[#2481cc] border border-[#2481cc]/40 font-mono px-2 py-0.5 rounded-full font-bold">
               PRO
+            </span>
+          </button>
+
+          {/* Auto Responder System */}
+          <button
+            onClick={() => {
+              setActiveModal('auto-responder');
+              setIsDrawerOpen(false);
+            }}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 text-sm text-gray-200 transition-colors group"
+          >
+            <div className="flex items-center gap-4">
+              <MessageSquare className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span className="font-medium text-white">
+                {isArabic ? 'الردود التلقائية الذكية' : 'Auto Replies'}
+              </span>
+            </div>
+            <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-medium px-2 py-0.5 rounded-full">
+              {isArabic ? 'ذكي' : 'Smart'}
+            </span>
+          </button>
+
+          {/* Rotating Broadcast System */}
+          <button
+            onClick={() => {
+              setActiveModal('sender');
+              setIsDrawerOpen(false);
+            }}
+            className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 text-sm text-gray-200 transition-colors group"
+          >
+            <div className="flex items-center gap-4">
+              <RotateCw className="w-5 h-5 text-amber-400 group-hover:rotate-90 transition-transform" />
+              <span className="font-medium text-white">
+                {isArabic ? 'النشر الدوري المتسلسل' : 'Rotating Broadcast'}
+              </span>
+            </div>
+            <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/40 font-mono px-2 py-0.5 rounded-full font-bold">
+              5X
             </span>
           </button>
 

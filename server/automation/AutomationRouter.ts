@@ -248,5 +248,28 @@ export function createAutomationRouter(
     res.json({ ok: true, state });
   });
 
+  // 9. Auto Replies: Get Rules
+  router.get('/auto-replies', (req: Request, res: Response) => {
+    try {
+      const userId = (req.query?.userId as string) || (req.headers['x-user-id'] as string) || 'default_user';
+      const data = StorageManager.loadAutoReplyRules(userId);
+      res.json({ ok: true, success: true, enabled: data.enabled, rules: data.rules });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, success: false, error: e.message });
+    }
+  });
+
+  // 10. Auto Replies: Save Rules & Toggle
+  router.post('/auto-replies', (req: Request, res: Response) => {
+    try {
+      const userId = (req.body?.userId as string) || (req.headers['x-user-id'] as string) || 'default_user';
+      const { enabled, rules } = req.body;
+      const saved = StorageManager.saveAutoReplyRules(userId, { enabled, rules });
+      res.json({ ok: true, success: true, enabled: saved.enabled, rules: saved.rules });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, success: false, error: e.message });
+    }
+  });
+
   return router;
 }

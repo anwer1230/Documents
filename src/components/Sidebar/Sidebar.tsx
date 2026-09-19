@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Menu, Search, Plus, Bookmark, Check, CheckCheck, Pin, VolumeX, BadgeCheck, Lock, X, Radio, Link2 } from 'lucide-react';
+import { Menu, Search, Plus, Bookmark, Check, CheckCheck, Pin, VolumeX, BadgeCheck, Lock, X, Radio, Link2, MessageSquare } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 
 // Authentic Telegram 7-Peer Color Palettes for default avatars
@@ -192,6 +192,14 @@ export const Sidebar: React.FC = () => {
           title={isArabic ? 'نظام الإرسال والمراقبة' : 'Broadcast & Monitoring'}
         >
           <Radio className="w-5 h-5" />
+        </button>
+
+        <button
+          onClick={() => setActiveModal('auto-responder')}
+          className="p-2 rounded-full hover:bg-white/10 text-[#708499] hover:text-emerald-400 transition-colors shrink-0"
+          title={isArabic ? 'الردود التلقائية الذكية' : 'Auto Replies'}
+        >
+          <MessageSquare className="w-5 h-5" />
         </button>
       </div>
 

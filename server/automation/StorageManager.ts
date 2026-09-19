@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { AutomationConfig } from './types';
+import { AutomationConfig, AutoReplyRule } from './types';
 
 const BASE_DATA_DIR = path.join(process.cwd(), 'data', 'automation');
 
@@ -94,5 +94,35 @@ export class StorageManager {
       console.warn('[StorageManager] Error reading all user configs:', e);
     }
     return configs;
+  }
+
+  public static loadAutoReplyRules(userId: string): { enabled: boolean; rules: AutoReplyRule[] } {
+    try {
+      const userDir = this.ensureUserDir(userId);
+      const filePath = path.join(userDir, 'auto_replies.json');
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn(`[StorageManager] Failed to load auto replies for ${userId}:`, e);
+    }
+    return { enabled: true, rules: [] };
+  }
+
+  public static saveAutoReplyRules(userId: string, data: { enabled?: boolean; rules?: AutoReplyRule[] }): { enabled: boolean; rules: AutoReplyRule[] } {
+    const userDir = this.ensureUserDir(userId);
+    const filePath = path.join(userDir, 'auto_replies.json');
+    const existing = this.loadAutoReplyRules(userId);
+    const updated = {
+      enabled: data.enabled !== undefined ? data.enabled : existing.enabled,
+      rules: data.rules !== undefined ? data.rules : existing.rules,
+    };
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8');
+    } catch (e) {
+      console.error(`[StorageManager] Failed to save auto replies for ${userId}:`, e);
+    }
+    return updated;
   }
 }
