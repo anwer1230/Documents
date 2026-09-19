@@ -892,7 +892,7 @@ export const ChatInput: React.FC = () => {
       )}
 
       {/* Channel Unjoined Action Bar */}
-      {activeChat?.type === 'channel' && activeChat.isMember === false ? (
+      {ChatObject.isChannel(activeChat) && activeChat?.isMember === false ? (
         <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
           <button
             onClick={handleChannelJoin}
@@ -913,7 +913,7 @@ export const ChatInput: React.FC = () => {
             {activeChat.isMuted ? <BellOff className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
           </button>
         </div>
-      ) : activeChat?.type === 'channel' && activeChat.isRestricted ? (
+      ) : ChatObject.isChannel(activeChat) && activeChat?.isRestricted && !activeChat?.isCreator ? (
         /* Channel Admin-Only (Joined) Mute Bottom Bar */
         <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
           <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/20 border border-white/5 flex items-center gap-2 text-xs text-gray-400">

@@ -583,8 +583,15 @@ async function startServer() {
       const entity: any = dialog.entity;
       const dialogIdStr = String(dialog.id || (entity ? entity.id : Date.now()));
       const isMe = entity?.self || dialogIdStr === myIdStr || dialog.isUser && String(entity?.id) === myIdStr;
-      const isChannel = Boolean(dialog.isChannel);
-      const isGroup = Boolean(dialog.isGroup);
+      
+      // Authentic Telegram Distinction:
+      // In GramJS/MTProto, dialog.isChannel is true for BOTH broadcast channels AND supergroups/megagroups!
+      // A supergroup (public/private group) has entity.megagroup = true and entity.broadcast = false.
+      // Broadcast channels have entity.broadcast = true.
+      const isMegagroup = Boolean(entity?.megagroup || (dialog.isChannel && dialog.isGroup));
+      const isBroadcast = Boolean(entity?.broadcast || (dialog.isChannel && !dialog.isGroup && !entity?.megagroup && entity?.broadcast !== false));
+      const isGroup = Boolean(dialog.isGroup || isMegagroup || entity?.className === 'Chat' || entity?._ === 'chat' || (dialog.isChannel && !isBroadcast));
+      const isChannel = !isGroup && (isBroadcast || (Boolean(dialog.isChannel) && !isMegagroup));
 
       let chatType: 'saved' | 'private' | 'group' | 'channel' | 'bot' = 'private';
       let chatTitle = '';
@@ -595,10 +602,11 @@ async function startServer() {
         hasSavedMessages = true;
       } else if (entity?.bot) {
         chatType = 'bot';
+      } else if (isGroup) {
+        // Groups/Supergroups take precedence over generic channel wrapper
+        chatType = 'group';
       } else if (isChannel) {
         chatType = 'channel';
-      } else if (isGroup) {
-        chatType = 'group';
       }
 
       if (!chatTitle) {
@@ -679,6 +687,13 @@ async function startServer() {
         draft: dialog.draft?.text || undefined,
         draftTimestamp: dialog.draft?.date ? new Date(dialog.draft.date * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
         lastMessage: lastMsgFormatted,
+        isBroadcast,
+        isMegagroup,
+        isCreator: Boolean(entity?.creator),
+        canSendMessages: chatType === 'group' || chatType === 'private' || chatType === 'saved' || chatType === 'bot' || Boolean(entity?.creator || entity?.admin_rights?.post_messages),
+        adminRights: entity?.adminRights || entity?.admin_rights,
+        defaultBannedRights: entity?.defaultBannedRights || entity?.default_banned_rights,
+        bannedRights: entity?.bannedRights || entity?.banned_rights,
       });
     }
 
@@ -1516,17 +1531,22 @@ async function startServer() {
     }
 
     // Dynamic resolution for arbitrary handles
+    const isGroupCue = cleanQuery.includes('group') || cleanQuery.includes('chat') || cleanQuery.includes('dev') || cleanQuery.includes('community') || cleanQuery.includes('talk') || cleanQuery.includes('discuss');
+    const dynamicType = isGroupCue ? 'group' : 'channel';
+
     res.json({
       success: true,
       inviteInfo: {
         id: `chat_${cleanQuery}`,
-        type: 'channel',
+        type: dynamicType,
+        isMegagroup: isGroupCue,
+        isBroadcast: !isGroupCue,
         title: cleanQuery.charAt(0).toUpperCase() + cleanQuery.slice(1),
         username: cleanQuery,
         avatar: 'https://images.unsplash.com/photo-1614680376593-902f749f7ffc?w=150&auto=format&fit=crop&q=80',
         memberCount: Math.floor(1200 + Math.random() * 85000),
         onlineCount: Math.floor(80 + Math.random() * 2400),
-        description: `Public Telegram channel for @${cleanQuery} resolved via MTProto Layer 184.`,
+        description: `Public Telegram ${dynamicType} for @${cleanQuery} resolved via MTProto Layer 184.`,
         isVerified: false,
         inviteHash: `hash_${cleanQuery}`,
       },
@@ -3562,7 +3582,7 @@ async function startServer() {
       }
 
       const hashSum = hash.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
-      const isChannel = hashSum % 2 === 0;
+      const isChannel = hash.toLowerCase().includes('channel') || hash.toLowerCase().includes('news') || hash.toLowerCase().includes('announcement');
       const count = 120 + (hashSum % 14500);
 
       return res.json({
@@ -3576,6 +3596,8 @@ async function startServer() {
           : 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?w=150',
         participantsCount: count,
         isChannel,
+        isGroup: !isChannel,
+        isMegagroup: !isChannel,
         isPublic: false,
         isVerified: hashSum % 3 === 0,
         isScam: false,
@@ -3600,7 +3622,7 @@ async function startServer() {
       }
 
       const hashSum = hash.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0);
-      const isChannel = hashSum % 2 === 0;
+      const isChannel = hash.toLowerCase().includes('channel') || hash.toLowerCase().includes('news') || hash.toLowerCase().includes('announcement');
       const newChatId = `chat_inv_${hash.slice(0, 8)}`;
 
       return res.json({
@@ -3608,6 +3630,8 @@ async function startServer() {
         chatId: newChatId,
         title: isChannel ? `قناة تيليجرام (${hash.slice(0, 6)})` : `مجموعة الدعم والمناقشة (${hash.slice(0, 6)})`,
         isChannel,
+        isGroup: !isChannel,
+        isMegagroup: !isChannel,
         joinedDate: new Date().toISOString(),
         message: 'Joined successfully via invite link',
       });

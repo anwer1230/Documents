@@ -341,6 +341,14 @@ export interface Chat {
   isReadOnly?: boolean;
   slowModeSeconds?: number;
   botPrivacyDisabled?: boolean;
+  // Authentic Telegram MTProto flags
+  isBroadcast?: boolean;
+  isMegagroup?: boolean;
+  isCreator?: boolean;
+  adminRights?: any;
+  defaultBannedRights?: any;
+  bannedRights?: any;
+  canSendMessages?: boolean;
   // Secret Chat Specifics
   isSecret?: boolean;
   ttlSeconds?: number;

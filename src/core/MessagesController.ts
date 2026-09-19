@@ -13,6 +13,7 @@ import { MessagesStorage } from './MessagesStorage';
 import { ConnectionsManager } from './ConnectionsManager';
 import { DialogsController } from './messenger/DialogsController';
 import { UserConfig } from './messenger/UserConfig';
+import { ChatObject } from './ChatObject';
 
 export interface ChatParticipantInfo {
   userId: string;
@@ -353,7 +354,7 @@ export class MessagesController {
       };
     }
 
-    if (chat.isReadOnly) {
+    if (chat.isReadOnly && ChatObject.isChannel(chat)) {
       return {
         canSend: false,
         reason: 'هذه القناة للقراءة فقط، النشر مقتصر على المشرفين',
@@ -361,11 +362,18 @@ export class MessagesController {
       };
     }
 
-    if (chat.type === 'channel') {
+    // Authentic Telegram Channel Restriction:
+    // Only broadcast channels restrict posting to admins.
+    // Public/private groups & supergroups allow all members to post by default!
+    if (ChatObject.isChannel(chat)) {
       const chatRoles = this.participantsMap.get(chat.id);
       const userRole = chatRoles?.get(currentUserId);
+      const isCreatorOrAdmin = Boolean(
+        chat.isCreator ||
+        (userRole && (userRole.role === 'creator' || userRole.role === 'admin'))
+      );
 
-      if (!userRole || (userRole.role !== 'creator' && userRole.role !== 'admin')) {
+      if (!isCreatorOrAdmin) {
         return {
           canSend: false,
           reason: 'القنوات مخصصة لبث الرسائل بواسطة المشرفين فقط',

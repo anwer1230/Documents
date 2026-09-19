@@ -278,6 +278,42 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   chatWallpaper: 'default',
 };
 
+export const sanitizeChat = (c: Chat): Chat => {
+  if (!c) return c;
+  const titleLower = (c.title || '').toLowerCase();
+  const hasGroupKeywords =
+    titleLower.includes('مجموعة') ||
+    titleLower.includes('group') ||
+    titleLower.includes('نقاش') ||
+    titleLower.includes('قروب') ||
+    titleLower.includes('مجتمع') ||
+    titleLower.includes('chat') ||
+    titleLower.includes('دردشة');
+  const hasChannelKeywords =
+    titleLower.includes('قناة') ||
+    titleLower.includes('channel') ||
+    titleLower.includes('news') ||
+    titleLower.includes('أخبار') ||
+    titleLower.includes('اخبار');
+
+  const isActuallyGroup =
+    c.isMegagroup ||
+    (c.type === 'channel' && hasGroupKeywords && !hasChannelKeywords) ||
+    (c.type === 'channel' && c.isBroadcast === false);
+
+  if (isActuallyGroup && c.type !== 'group') {
+    return {
+      ...c,
+      type: 'group',
+      isMegagroup: true,
+      isBroadcast: false,
+      isRestricted: false,
+      isReadOnly: false,
+    };
+  }
+  return c;
+};
+
 export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // 1. Resilient Multi-Tier Encrypted Session Persistence & State
   const [accounts, setAccounts] = useState<UserAccount[]>(() => {
@@ -357,7 +393,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const initialActiveAcc = accounts.find((a) => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNTS[0] || null;
 
   const [currentUser, setCurrentUser] = useState<User>(() => initialActiveAcc?.user || CURRENT_USER);
-  const [chats, setChats] = useState<Chat[]>(() => (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0 ? initialActiveAcc.chats : INITIAL_CHATS));
+  const [chats, setChats] = useState<Chat[]>(() => {
+    const raw = initialActiveAcc?.chats && initialActiveAcc.chats.length > 0 ? initialActiveAcc.chats : INITIAL_CHATS;
+    return raw.map(sanitizeChat);
+  });
   const [messages, setMessages] = useState<Record<string, Message[]>>(() => (initialActiveAcc?.messages && Object.keys(initialActiveAcc.messages).length > 0 ? initialActiveAcc.messages : INITIAL_MESSAGES));
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
@@ -1337,7 +1376,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     showToast(settings.language === 'ar' ? 'تم تحديث الملف الشخصي' : 'Profile updated', '✅');
   };
 
-  const activeChat = chats.find((c) => c.id === activeChatId) || null;
+  const rawActiveChat = chats.find((c) => c.id === activeChatId) || null;
+  const activeChat = useMemo(() => {
+    if (!rawActiveChat) return null;
+    return sanitizeChat(rawActiveChat);
+  }, [rawActiveChat]);
 
   // Register NotificationEngine routing & audio triggers
   useEffect(() => {
@@ -1931,7 +1974,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           });
         }
 
-        setChats(finalChats);
+        setChats(finalChats.map(sanitizeChat));
 
         // Auto-select active chat if desktop and no chat is selected, but preserve null on mobile
         setActiveChatId((prev) => {

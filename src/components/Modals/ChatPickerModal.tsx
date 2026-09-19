@@ -93,7 +93,7 @@ export const ChatPickerModal: React.FC<ChatPickerModalProps> = ({
             id: d.id,
             title: d.title,
             username: d.username,
-            type: d.isChannel ? 'channel' : 'group',
+            type: d.isGroup || d.megagroup ? 'group' : (d.isChannel && d.broadcast !== false ? 'channel' : 'group'),
             memberCount: d.participantsCount,
             unreadCount: d.unreadCount,
             link: d.link || (d.username ? `https://t.me/${d.username}` : `@${d.id}`),
