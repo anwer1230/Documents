@@ -177,10 +177,10 @@ async function startServer() {
   interface ActiveTelegramSession {
     client?: TelegramClient;
     phone: string;
-    phoneCodeHash: string;
-    deliveryType: string;
-    apiId: number;
-    apiHash: string;
+    phoneCodeHash?: string;
+    deliveryType?: string;
+    apiId?: number;
+    apiHash?: string;
     createdAt: number;
   }
   const realTelegramSessions = new Map<string, ActiveTelegramSession>();
@@ -380,7 +380,7 @@ async function startServer() {
 
       const all = loadPersistedSessions();
       const cleanPhone = formatE164Phone(phone) || phone.trim();
-      const existing = all[cleanPhone] || {};
+      const existing: Partial<TelegramPersistedSession> = all[cleanPhone] || {};
 
       all[cleanPhone] = {
         phone: cleanPhone,
