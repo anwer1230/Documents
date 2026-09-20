@@ -110,7 +110,7 @@ export const TelemetryLogModal: React.FC<TelemetryLogModalProps> = ({ isOpen, on
       window.removeEventListener('tg_telemetry_updated', handleUpdate);
       window.removeEventListener('tg_telemetry_status_changed', handleStatus);
     };
-  }, [isOpen, refreshLogs]);
+  }, [isOpen]);
 
   // Check if we need to auto-persist when events >= 50
   useEffect(() => {

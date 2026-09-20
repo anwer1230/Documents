@@ -27,6 +27,7 @@ export interface MonitoredLinkItem {
   failReason?: string;
   autoJoined: boolean;
   username?: string;
+  extractedTitle?: string;
   joinedAt?: string;
 }
 

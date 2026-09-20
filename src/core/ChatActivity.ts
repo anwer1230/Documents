@@ -33,6 +33,7 @@ export interface BottomPanelState {
   isMuted: boolean;
   hasDiscussion: boolean;
   linkedChatId?: number | string;
+  discussionChatId?: number | string;
   isLeft: boolean;
 }
 
@@ -53,10 +54,14 @@ export class ChatActivity {
     this.addNotificationObservers();
   }
 
+  private lastState: BottomPanelState | null = null;
+  private lastLoadedChatId: string | number | null = null;
+
   public setChat(chat: AnyChat | null): void {
     this.currentChat = chat;
     this.notifyStateChanged();
-    if (chat && chat.id) {
+    if (chat && chat.id && chat.id !== this.lastLoadedChatId) {
+      this.lastLoadedChatId = chat.id;
       MessagesController.getInstance(this.currentAccount).loadChatInfo(chat.id).catch(() => {});
     }
   }
@@ -68,14 +73,37 @@ export class ChatActivity {
   public addStateListener(listener: (state: BottomPanelState) => void): () => void {
     this.stateListeners.add(listener);
     // Emit initial state
-    listener(this.updateBottomPanel());
+    const initial = this.updateBottomPanel();
+    this.lastState = initial;
+    listener(initial);
     return () => {
       this.stateListeners.delete(listener);
     };
   }
 
+  private isStateEqual(a: BottomPanelState | null, b: BottomPanelState | null): boolean {
+    if (!a || !b) return a === b;
+    return (
+      a.mode === b.mode &&
+      a.canSend === b.canSend &&
+      a.restrictedText === b.restrictedText &&
+      a.isBroadcast === b.isBroadcast &&
+      a.isMegagroup === b.isMegagroup &&
+      a.isAdmin === b.isAdmin &&
+      a.isMuted === b.isMuted &&
+      a.hasDiscussion === b.hasDiscussion &&
+      a.linkedChatId === b.linkedChatId &&
+      a.discussionChatId === b.discussionChatId &&
+      a.isLeft === b.isLeft
+    );
+  }
+
   private notifyStateChanged(): void {
     const state = this.updateBottomPanel();
+    if (this.isStateEqual(this.lastState, state)) {
+      return;
+    }
+    this.lastState = state;
     this.stateListeners.forEach((listener) => listener(state));
   }
 
@@ -119,6 +147,7 @@ export class ChatActivity {
         isMuted,
         hasDiscussion,
         linkedChatId,
+        discussionChatId: linkedChatId,
         isLeft: true,
       };
     }
@@ -137,7 +166,8 @@ export class ChatActivity {
           isMuted,
           hasDiscussion,
           linkedChatId,
-          isLeft: false,
+        discussionChatId: linkedChatId,
+        isLeft: false,
         };
       } else {
         // Administrator in broadcast channel: can post messages
@@ -151,7 +181,8 @@ export class ChatActivity {
           isMuted,
           hasDiscussion,
           linkedChatId,
-          isLeft: false,
+        discussionChatId: linkedChatId,
+        isLeft: false,
         };
       }
     }

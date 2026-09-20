@@ -4,7 +4,7 @@ import {
   isPrivateTelegramLink,
   JoinAttemptLog,
 } from '../stores/useLinkJoinQueueStore';
-import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ActiveCall,
@@ -538,6 +538,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const chatsRef = useRef<Chat[]>([]);
   const messagesRef = useRef<Record<string, Message[]>>({});
   const currentUserRef = useRef<any>(null);
+  currentUserRef.current = currentUser;
+  chatsRef.current = chats;
 
   const [chats, setChats] = useState<Chat[]>(() => {
     if (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0) {
@@ -1065,12 +1067,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   // Offline-First Auto-Persistence: Ensure every chat and message is persisted to chatStore (localStorage + SQLite) immediately
+  const chatsLength = chats.length;
   useEffect(() => {
     if (chats && chats.length > 0) {
       chatStore.saveChats(chats);
     }
-  }, [chats]);
+  }, [chatsLength]);
 
+  const messagesCount = Object.keys(messages).length;
   useEffect(() => {
     if (messages && Object.keys(messages).length > 0) {
       for (const [chatId, msgs] of Object.entries(messages)) {
@@ -1079,7 +1083,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
     }
-  }, [messages]);
+  }, [messagesCount]);
 
   // Online / Offline Global Network Listeners for Auto Reconnect & Re-sync
   useEffect(() => {
@@ -1448,6 +1452,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   // Encrypted Auto-heal and persistent session synchronization (guarantees session is never lost on refresh/updates)
+  const accountsKey = useMemo(() => {
+    return `${isAuthenticated}:${activeAccountId}:${(accounts || []).map((a) => `${a.id}:${a.user?.id || ""}`).join(",")}`;
+  }, [isAuthenticated, activeAccountId, accounts]);
+
   useEffect(() => {
     try {
       if (isAuthenticated && typeof window !== 'undefined') {
@@ -1469,7 +1477,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (e) {
       console.warn('[TelegramContext] Encrypted session auto-heal notice:', e);
     }
-  }, [isAuthenticated, accounts, activeAccountId]);
+  }, [accountsKey]);
 
   // Auto-sync cloud data on mount or authentication
   useEffect(() => {
@@ -1856,7 +1864,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return messagesController.sortDialogs(updated, 'all');
   };
 
+  const totalUnreadCount = useMemo(() => {
+    return chats.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
+  }, [chats]);
+
   // Sync current account changes into accounts array & IndexedDB persistence
+  const accountSyncKey = useMemo(() => {
+    return `${activeAccountId}:${currentUser?.id || ""}:${currentUser?.phone || ""}:${settings.theme}:${settings.language}:${chats.length}:${totalUnreadCount}:${Object.keys(messages).length}`;
+  }, [activeAccountId, currentUser?.id, currentUser?.phone, settings.theme, settings.language, chats.length, totalUnreadCount, messages]);
+
   useEffect(() => {
     // 1. Persist chats to IndexedDB (via telegramDB in sqliteStorage)
     if (chats.length > 0) {
@@ -1866,7 +1882,6 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         console.warn('[IndexedDB StorageEngine] Error saving chats:', e);
       }
     }
-
     // 2. Persist messages to IndexedDB (via telegramDB & messageCache)
     try {
       for (const [chatId, msgs] of Object.entries(messages)) {
@@ -1877,8 +1892,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (e) {
       console.warn('[IndexedDB StorageEngine] Error saving messages:', e);
     }
-
     setAccounts((prev) => {
+      const active = prev.find((a) => a.id === activeAccountId);
+      if (
+        active &&
+        active.user === currentUser &&
+        active.settings === settings &&
+        active.chats === chats &&
+        active.messages === messages &&
+        active.unreadCount === totalUnreadCount
+      ) {
+        return prev;
+      }
       const next = prev.map((acc) => {
         if (acc.id === activeAccountId) {
           return {
@@ -1887,7 +1912,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             settings,
             chats,
             messages,
-            unreadCount: chats.reduce((sum, c) => sum + (c.unreadCount || 0), 0),
+            unreadCount: totalUnreadCount,
           };
         }
         return acc;
@@ -1908,7 +1933,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       return next;
     });
-  }, [currentUser, settings, chats, messages, activeAccountId]);
+  }, [accountSyncKey]);
 
   // Account Operations
   const switchAccount = async (targetAccountId: string) => {
@@ -2409,7 +2434,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const activeChat = chats.find((c) => c.id === activeChatId) || null;
+  const activeChat = useMemo(() => chats.find((c) => c.id === activeChatId) || null, [chats, activeChatId]);
   const onlineCount = (activeChatId && onlineCounts[activeChatId]) || (activeChat?.onlineCount || 0);
 
   // Register NotificationEngine routing & audio triggers
@@ -2445,12 +2470,14 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, []);
 
+  chatsRef.current = chats;
+
   useEffect(() => {
     notificationEngine.registerMuteChecker((chatId) => {
-      const target = chats.find((c) => c.id === chatId);
+      const target = chatsRef.current.find((c) => c.id === chatId);
       return !!target?.isMuted;
     });
-  }, [chats]);
+  }, []);
 
   useEffect(() => {
     notificationEngine.setSoundEffectsEnabled(settings.soundEffects);
@@ -2501,13 +2528,13 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Sync Unread count to Document Title and App Badge
+  // Sync Unread count to Document Title and App Badge
   useEffect(() => {
-    const totalUnread = chats.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
     const baseTitle = 'Telegram';
-    if (totalUnread > 0) {
-      document.title = `(${totalUnread}) ${baseTitle}`;
+    if (totalUnreadCount > 0) {
+      document.title = `(${totalUnreadCount}) ${baseTitle}`;
       if ('setAppBadge' in navigator) {
-        (navigator as any).setAppBadge(totalUnread).catch(() => {});
+        (navigator as any).setAppBadge(totalUnreadCount).catch(() => {});
       }
     } else {
       document.title = baseTitle;
@@ -2515,7 +2542,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         (navigator as any).clearAppBadge().catch(() => {});
       }
     }
-  }, [chats]);
+  }, [totalUnreadCount]);
 
   // Toast Helper
   const showToast = (text: string, icon?: string) => {
@@ -2529,12 +2556,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Close context menus on global click
   useEffect(() => {
     const handleClick = () => {
-      if (chatContextMenu) setChatContextMenu(null);
-      if (messageContextMenu) setMessageContextMenu(null);
+      setChatContextMenu((prev) => (prev !== null ? null : prev));
+      setMessageContextMenu((prev) => (prev !== null ? null : prev));
     };
     window.addEventListener('click', handleClick);
     return () => window.removeEventListener('click', handleClick);
-  }, [chatContextMenu, messageContextMenu]);
+  }, []);
 
   // Handle HTML language and theme class
   useEffect(() => {
@@ -4978,7 +5005,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const searchTelegramGlobal = async (query: string): Promise<any[]> => {
+  const getLastReadPosition = useCallback((chatId: string) => chatStore.getLastReadPosition(chatId), []);
+  const saveLastReadPosition = useCallback((chatId: string, data: any) => chatStore.saveLastReadPosition(chatId, data), []);
+  const searchTelegramGlobal = useCallback(async (query: string): Promise<any[]> => {
     if (!query || !query.trim()) return [];
     try {
       const res = await fetch('/api/telegram/search', {
@@ -5000,7 +5029,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.error('[MTProto] SearchGlobal network error:', err);
       return [];
     }
-  };
+  }, []);
 
   const createChatFolder = async (folderData: {
     title: string;
@@ -5058,11 +5087,15 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const markChatAsRead = (chatId: string) => {
+  currentUserRef.current = currentUser;
+
+  const markChatAsRead = useCallback((chatId: string) => {
     if (!chatId) return;
-    setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
-    );
+    setChats((prev) => {
+      const target = prev.find((c) => c.id === chatId);
+      if (!target || target.unreadCount === 0) return prev;
+      return prev.map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c));
+    });
     setMessages((prev) => {
       const currentList = prev[chatId];
       if (!currentList || currentList.length === 0) return prev;
@@ -5074,10 +5107,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
     });
     messagesController.markDialogAsRead(chatId, 'max');
-
     try {
-      const activeSessionStr = localStorage.getItem('tg_session_string') || '';
-      const activePhone = currentUser.phone || '';
+      const activeSessionStr = typeof window !== 'undefined' ? (localStorage.getItem('tg_session_string') || '') : '';
+      const activePhone = currentUserRef.current?.phone || '';
       if (activeSessionStr || activePhone) {
         fetch('/api/telegram/messages/read-history', {
           method: 'POST',
@@ -5086,7 +5118,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }).catch(() => {});
       }
     } catch (_) {}
-  };
+  }, []);
 
   const markChatReadUnread = (chatId: string) => {
     let newUnread = 0;
@@ -6011,23 +6043,21 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [isAuthenticated, activeChatId, currentUser.phone, settings.soundEffects]);
 
   // Synchronize channel/supergroup difference whenever a supergroup is opened
-  useEffect(() => {
-    if (!activeChatId || !isAuthenticated) return;
-    const targetChat = chats.find((c) => c.id === activeChatId);
-    const isSupergroup =
-      targetChat &&
-      (targetChat.type === 'channel' ||
-        targetChat.isChannel ||
-        targetChat.megagroup ||
-        activeChatId.startsWith('chat_-100') ||
-        activeChatId.startsWith('-100'));
+  const isSupergroupActive = Boolean(
+    activeChat &&
+      (activeChat.type === 'channel' ||
+        activeChat.isChannel ||
+        activeChat.megagroup ||
+        (activeChatId && (activeChatId.startsWith('chat_-100') || activeChatId.startsWith('-100'))))
+  );
 
-    if (isSupergroup) {
-      import('../core/MessagesController').then(({ MessagesController }) => {
-        MessagesController.getInstance().checkChannelDifference(activeChatId);
-      }).catch(() => {});
-    }
-  }, [activeChatId, isAuthenticated, chats]);
+  // Synchronize channel/supergroup difference whenever a supergroup is opened
+  useEffect(() => {
+    if (!activeChatId || !isAuthenticated || !isSupergroupActive) return;
+    import('../core/MessagesController').then(({ MessagesController }) => {
+      MessagesController.getInstance().checkChannelDifference(activeChatId);
+    }).catch(() => {});
+  }, [activeChatId, isAuthenticated, isSupergroupActive]);
 
   // High-performance eager hydration from IndexedDB Message Cache & live on-demand fetch for activeChatId
   useEffect(() => {
@@ -6615,7 +6645,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     }, 5 * 60 * 1000);
     return () => clearInterval(updateInterval);
-  }, [checkForAppUpdates, isAuthenticated]);
+  }, [isAuthenticated]);
 
   return (
     <TelegramContext.Provider
@@ -6736,8 +6766,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         chatStore,
         lastReadPositions: chatStore.lastReadPositions,
         ScrollPositions: chatStore.ScrollPositions,
-        getLastReadPosition: (chatId: string) => chatStore.getLastReadPosition(chatId),
-        saveLastReadPosition: (chatId: string, data: any) => chatStore.saveLastReadPosition(chatId, data),
+        getLastReadPosition,
+        saveLastReadPosition,
         resolveTelegramLink,
         syncCloudData,
         syncInitializationRoutine,

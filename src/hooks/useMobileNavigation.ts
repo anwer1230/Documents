@@ -182,69 +182,7 @@ export function useMobileNavigation() {
     selectedMessageIds.length,
   ]);
 
-  // Handle hardware / browser back button popstate
-  useEffect(() => {
-    const handlePopState = () => {
-      // 1. Close Context menus
-      if (chatContextMenu) {
-        setChatContextMenu(null);
-        return;
-      }
-      if (messageContextMenu) {
-        setMessageContextMenu(null);
-        return;
-      }
-
-      // 2. Close Media Viewer Lightbox
-      if (viewerMedia) {
-        setViewerMedia(null);
-        return;
-      }
-
-      // 3. Clear Multi-select
-      if (selectedMessageIds.length > 0) {
-        clearSelectedMessages();
-        return;
-      }
-
-      // 4. Close Active Modals (Settings, Calls, Invites, New chat)
-      if (activeModal !== 'none') {
-        setActiveModal('none');
-        return;
-      }
-
-      // 5. Close Drawer
-      if (isDrawerOpen) {
-        setIsDrawerOpen(false);
-        return;
-      }
-
-      // 6. Close Right Info Panel
-      if (isRightPanelOpen) {
-        setIsRightPanelOpen(false);
-        return;
-      }
-
-      // 7. Cancel Editing / Replying
-      if (editingMessage) {
-        setEditingMessage(null);
-        return;
-      }
-      if (replyingTo) {
-        setReplyingTo(null);
-        return;
-      }
-
-      // 8. Navigate from Chat back to Chat List on Mobile
-      if (activeChatId && window.innerWidth < 768) {
-        setActiveChatId(null);
-        return;
-      }
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [
+  const stateRef = useRef({
     chatContextMenu,
     messageContextMenu,
     viewerMedia,
@@ -265,27 +203,9 @@ export function useMobileNavigation() {
     setEditingMessage,
     setReplyingTo,
     setActiveChatId,
-  ]);
+  });
 
-  // Handle Escape keyboard key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (chatContextMenu) setChatContextMenu(null);
-        if (messageContextMenu) setMessageContextMenu(null);
-        if (viewerMedia) setViewerMedia(null);
-        if (selectedMessageIds.length > 0) clearSelectedMessages();
-        if (activeModal !== 'none') setActiveModal('none');
-        if (isDrawerOpen) setIsDrawerOpen(false);
-        if (isRightPanelOpen) setIsRightPanelOpen(false);
-        if (editingMessage) setEditingMessage(null);
-        if (replyingTo) setReplyingTo(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
+  stateRef.current = {
     chatContextMenu,
     messageContextMenu,
     viewerMedia,
@@ -295,6 +215,7 @@ export function useMobileNavigation() {
     isRightPanelOpen,
     editingMessage,
     replyingTo,
+    activeChatId,
     setChatContextMenu,
     setMessageContextMenu,
     setViewerMedia,
@@ -304,7 +225,94 @@ export function useMobileNavigation() {
     setIsRightPanelOpen,
     setEditingMessage,
     setReplyingTo,
-  ]);
+    setActiveChatId,
+  };
+
+  // Handle hardware / browser back button popstate
+  useEffect(() => {
+    const handlePopState = () => {
+      const s = stateRef.current;
+      // 1. Close Context menus
+      if (s.chatContextMenu) {
+        s.setChatContextMenu(null);
+        return;
+      }
+      if (s.messageContextMenu) {
+        s.setMessageContextMenu(null);
+        return;
+      }
+
+      // 2. Close Media Viewer Lightbox
+      if (s.viewerMedia) {
+        s.setViewerMedia(null);
+        return;
+      }
+
+      // 3. Clear Multi-select
+      if (s.selectedMessageIds.length > 0) {
+        s.clearSelectedMessages();
+        return;
+      }
+
+      // 4. Close Active Modals (Settings, Calls, Invites, New chat)
+      if (s.activeModal !== 'none') {
+        s.setActiveModal('none');
+        return;
+      }
+
+      // 5. Close Drawer
+      if (s.isDrawerOpen) {
+        s.setIsDrawerOpen(false);
+        return;
+      }
+
+      // 6. Close Right Info Panel
+      if (s.isRightPanelOpen) {
+        s.setIsRightPanelOpen(false);
+        return;
+      }
+
+      // 7. Cancel Editing / Replying
+      if (s.editingMessage) {
+        s.setEditingMessage(null);
+        return;
+      }
+      if (s.replyingTo) {
+        s.setReplyingTo(null);
+        return;
+      }
+
+      // 8. Navigate from Chat back to Chat List on Mobile
+      if (s.activeChatId && window.innerWidth < 768) {
+        s.setActiveChatId(null);
+        return;
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Handle Escape keyboard key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const s = stateRef.current;
+        if (s.chatContextMenu) s.setChatContextMenu(null);
+        if (s.messageContextMenu) s.setMessageContextMenu(null);
+        if (s.viewerMedia) s.setViewerMedia(null);
+        if (s.selectedMessageIds.length > 0) s.clearSelectedMessages();
+        if (s.activeModal !== 'none') s.setActiveModal('none');
+        if (s.isDrawerOpen) s.setIsDrawerOpen(false);
+        if (s.isRightPanelOpen) s.setIsRightPanelOpen(false);
+        if (s.editingMessage) s.setEditingMessage(null);
+        if (s.replyingTo) s.setReplyingTo(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   return {
     isRefreshing,

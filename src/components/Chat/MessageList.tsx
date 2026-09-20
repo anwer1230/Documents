@@ -639,7 +639,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         clearTimeout(t);
       };
     }
-  }, [activeChatId, groupedItems.length, performInitialScroll, markChatAsRead]);
+  }, [activeChatId, groupedItems.length]);
 
   // Save read position when unmounting or switching chats (NOT on every message receive!)
   useEffect(() => {
@@ -692,7 +692,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         setShowScrollBottom(true);
       }
     }
-  }, [currentMessages.length, scrollToBottom]);
+  }, [currentMessages.length]);
 
   // Handle scroll events from the virtualized container
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
@@ -722,12 +722,14 @@ export const MessageList: React.FC<MessageListProps> = ({
         lastScrollSaveTimeRef.current = now;
 
         let lastReadMsgId: string | undefined = undefined;
-        if (isNearBottom && currentMessages.length > 0) {
-          lastReadMsgId = currentMessages[currentMessages.length - 1]?.id;
-        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < groupedItems.length) {
+        const msgs = currentMessagesRef.current;
+        const items = groupedItemsRef.current;
+        if (isNearBottom && msgs.length > 0) {
+          lastReadMsgId = msgs[msgs.length - 1]?.id;
+        } else if (lastVisibleIndexRef.current >= 0 && lastVisibleIndexRef.current < items.length) {
           for (let i = lastVisibleIndexRef.current; i >= 0; i--) {
-            if (groupedItems[i]?.message?.id) {
-              lastReadMsgId = groupedItems[i].message.id;
+            if (items[i]?.message?.id) {
+              lastReadMsgId = items[i].message.id;
               break;
             }
           }
@@ -750,7 +752,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (scrollTop < 80 && !isLoadingOlder && hasMoreOnServer) {
       handleLoadOlder();
     }
-  }, [activeChatId, unreadStreamCount, isLoadingOlder, hasMoreOnServer, handleLoadOlder, currentMessages, groupedItems]);
+  }, [activeChatId, unreadStreamCount, isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
 
   // Virtualized row rendering window callback
   const handleRowsRendered = useCallback((
@@ -761,9 +763,10 @@ export const MessageList: React.FC<MessageListProps> = ({
     // Live update position as user scrolls past messages
     if (activeChatId && !isUserNearBottomRef.current) {
       let visibleMsgId: string | undefined = undefined;
-      for (let i = Math.min(visibleRows.stopIndex, groupedItems.length - 1); i >= visibleRows.startIndex; i--) {
-        if (groupedItems[i]?.message?.id) {
-          visibleMsgId = groupedItems[i].message.id;
+      const items = groupedItemsRef.current;
+      for (let i = Math.min(visibleRows.stopIndex, items.length - 1); i >= visibleRows.startIndex; i--) {
+        if (items[i]?.message?.id) {
+          visibleMsgId = items[i].message.id;
           break;
         }
       }
@@ -781,7 +784,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (visibleRows.startIndex <= 2 && !isLoadingOlder && hasMoreOnServer) {
       handleLoadOlder();
     }
-  }, [activeChatId, groupedItems, isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
+  }, [activeChatId, isLoadingOlder, hasMoreOnServer, handleLoadOlder]);
 
   // Jump to specific message handler (search, reply, pin)
   useEffect(() => {

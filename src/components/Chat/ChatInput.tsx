@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Send,
   Paperclip,
@@ -118,17 +118,48 @@ export const ChatInput: React.FC = () => {
     LocaleController.setLocale(isArabic ? 'ar' : 'en');
   }, [isArabic]);
 
+  const activeChatKey = useMemo(() => {
+    if (!activeChat) return "";
+    return `${activeChat.id}:${activeChat.type}:${Boolean(activeChat.isMember)}:${Boolean(activeChat.isMuted)}:${Boolean(activeChat.isRestricted)}:${Boolean(activeChat.isAdmin)}:${Boolean((activeChat as any).canSendMessages)}:${(activeChat as any).linked_chat_id || (activeChat as any).linkedChatId || ""}`;
+  }, [
+    activeChat?.id,
+    activeChat?.type,
+    activeChat?.isMember,
+    activeChat?.isMuted,
+    activeChat?.isRestricted,
+    activeChat?.isAdmin,
+    (activeChat as any)?.canSendMessages,
+    (activeChat as any)?.linked_chat_id,
+    (activeChat as any)?.linkedChatId,
+  ]);
+
   useEffect(() => {
     if (chatActivityRef.current) {
       chatActivityRef.current.setChat(activeChat);
     }
-  }, [activeChat]);
+  }, [activeChatKey]);
 
   useEffect(() => {
     const activity = chatActivityRef.current;
     if (!activity) return;
     const unsub = activity.addStateListener((st) => {
-      setBottomPanelState(st);
+      setBottomPanelState((prev) => {
+        if (
+          prev.mode === st.mode &&
+          prev.canSend === st.canSend &&
+          prev.restrictedText === st.restrictedText &&
+          prev.isBroadcast === st.isBroadcast &&
+          prev.isMegagroup === st.isMegagroup &&
+          prev.isAdmin === st.isAdmin &&
+          prev.isMuted === st.isMuted &&
+          prev.hasDiscussion === st.hasDiscussion &&
+          prev.linkedChatId === st.linkedChatId &&
+          prev.isLeft === st.isLeft
+        ) {
+          return prev;
+        }
+        return st;
+      });
     });
     return () => {
       unsub();
@@ -197,21 +228,21 @@ export const ChatInput: React.FC = () => {
   }, [activeChatId]);
 
   // Real-time listener for cross-tab / cross-session draft sync
+  const isEditing = Boolean(editingMessage);
   useEffect(() => {
     const unsubscribe = draftSyncService.subscribe((chatId, draft) => {
-      if (chatId === activeChatId && !editingMessage) {
-        const currentVal = textareaRef.current?.value ?? text;
-        const incomingText = draft?.text || '';
+      if (chatId === activeChatId && !isEditing) {
+        const currentVal = textareaRef.current?.value ?? "";
+        const incomingText = draft?.text || "";
         if (currentVal !== incomingText) {
           setText(incomingText);
         }
       }
     });
-
     return () => {
       unsubscribe();
     };
-  }, [activeChatId, editingMessage, text]);
+  }, [activeChatId, isEditing]);
 
   // Flush pending draft writes on unmount
   useEffect(() => {
@@ -240,10 +271,10 @@ export const ChatInput: React.FC = () => {
   // Sync editing message text into input
   useEffect(() => {
     if (editingMessage) {
-      setText(editingMessage.text);
+      setText((prev) => (prev !== editingMessage.text ? editingMessage.text : prev));
       if (textareaRef.current) textareaRef.current.focus();
     }
-  }, [editingMessage]);
+  }, [editingMessage?.id, editingMessage?.text]);
 
   const updateTextAndDraft = (newVal: string) => {
     setText(newVal);

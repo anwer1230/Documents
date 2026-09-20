@@ -660,7 +660,7 @@ export interface LiveDiscoveredLink {
   sourceChatId: string;
   senderName: string;
   timestamp: string;
-  status: 'pending' | 'joining' | 'joined' | 'failed' | 'already_member' | 'expired' | 'skipped_private_channel';
+  status: 'pending' | 'joining' | 'joined' | 'failed' | 'already_member' | 'expired' | 'skipped_private_channel' | 'skipped_duplicate';
   failReason?: string;
   autoJoined: boolean;
 }

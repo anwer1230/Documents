@@ -33,11 +33,12 @@ export const GroupAdminModal: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'members' | 'permissions' | 'slowmode'>('members');
 
   useEffect(() => {
-    if (activeChat && activeModal === ('group-admin' as any)) {
+    if (activeChat?.id && activeModal === ('group-admin' as any)) {
       setParticipants(messagesController.getParticipants(activeChat.id));
-      setAdminOnlyPosting(messagesController.isAdminOnlyPosting(activeChat.id));
+      const adminOnly = messagesController.isAdminOnlyPosting(activeChat.id);
+      setAdminOnlyPosting((prev) => (prev !== adminOnly ? adminOnly : prev));
     }
-  }, [activeChat, activeModal]);
+  }, [activeChat?.id, activeModal]);
 
   if (activeModal !== ('group-admin' as any) || !activeChat) return null;
 

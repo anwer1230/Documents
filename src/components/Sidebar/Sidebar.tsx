@@ -126,7 +126,7 @@ export const Sidebar: React.FC = () => {
       isMounted = false;
       clearTimeout(timer);
     };
-  }, [q, searchTelegramGlobal]);
+  }, [q]);
 
   // Edge Swipe to open drawer (DrKLO gesture)
   useEdgeSwipeDrawer(() => {

@@ -127,7 +127,7 @@ export const DatabaseBrowserView: React.FC = () => {
   // Initial load
   useEffect(() => {
     refreshTables();
-  }, [refreshTables]);
+  }, []);
 
   // Load selected table data
   const loadTableData = useCallback(async () => {
@@ -156,7 +156,7 @@ export const DatabaseBrowserView: React.FC = () => {
 
   useEffect(() => {
     loadTableData();
-  }, [loadTableData]);
+  }, [selectedTable, page, pageSize, tableSearch, sortCol, sortDir]);
 
   // Reset page when switching tables or changing search
   const handleSelectTable = (name: string) => {

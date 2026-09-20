@@ -60,11 +60,14 @@ export const LinkMonitorModal: React.FC<LinkMonitorModalProps> = ({ isOpen, onCl
   const [joiningUrls, setJoiningUrls] = useState<Record<string, boolean>>({});
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
 
+  const capturedLinksCount = capturedLinks.length;
+  const latestCapturedUrl = capturedLinks[0]?.url || "";
+
   useEffect(() => {
-    setIsEnabled(autoJoinLinksEnabled);
+    setIsEnabled((prev) => (prev !== autoJoinLinksEnabled ? autoJoinLinksEnabled : prev));
     setLinks(capturedLinks);
     setLastUpdate(new Date().toLocaleTimeString('ar-SA'));
-  }, [autoJoinLinksEnabled, capturedLinks, isOpen]);
+  }, [autoJoinLinksEnabled, capturedLinksCount, latestCapturedUrl, isOpen]);
 
   // Live Cooldown & Random Delay Jitter Countdown
   useEffect(() => {

@@ -16,7 +16,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
 
   useEffect(() => {
     loadSettings();
-  }, [loadSettings]);
+  }, []);
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[var(--tg-theme-surface,#17212b)] text-[var(--tg-text-color,#ffffff)] font-sans">

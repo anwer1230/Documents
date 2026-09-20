@@ -147,7 +147,7 @@ export function useGemini(options: UseGeminiOptions = {}): UseGeminiReturn {
         console.warn('[useGemini] Automatic status check failed:', err?.message || err);
       });
     }
-  }, [autoCheckStatus, checkStatus]);
+  }, [autoCheckStatus]);
 
   const generateText = useCallback(
     async (

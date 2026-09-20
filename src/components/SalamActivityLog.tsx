@@ -43,6 +43,8 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
   filterChatId,
 }) => {
   const { setActiveChatId, setActiveModal, chats, showToast } = useTelegram();
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
 
   // Logs state
   const [activities, setActivities] = useState<SalamActivityItem[]>(() => {
@@ -63,12 +65,15 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
+  const activitiesLength = activities.length;
+  const latestActivityTimestamp = activities[0]?.timestamp || "";
+
   // Sync to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(activities.slice(0, 100)));
     } catch {}
-  }, [activities]);
+  }, [activitiesLength, latestActivityTimestamp]);
 
   // Fetch from server /api/salam_activities
   const fetchServerActivities = useCallback(async () => {
@@ -117,7 +122,7 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
       if (id === NotificationCenter.smartSenderWaitingIntervalStarted) {
         const chatId = args[0];
         const info = args[1] || {};
-        const chatTitle = chats.find((c) => String(c.id) === String(chatId))?.title || `مجموعة ${chatId}`;
+        const chatTitle = chatsRef.current.find((c) => String(c.id) === String(chatId))?.title || `مجموعة ${chatId}`;
         const newItem: SalamActivityItem = {
           id: `salam_${chatId}_${Date.now()}`,
           chatId,
@@ -240,7 +245,7 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
       nc.removeObserver(handleNotification, NotificationCenter.salamModeDecisionMade);
       nc.removeObserver(handleNotification, NotificationCenter.salamActivityReceived);
     };
-  }, [chats, fetchServerActivities]);
+  }, [fetchServerActivities]);
 
   // Statistics
   const stats = useMemo(() => {

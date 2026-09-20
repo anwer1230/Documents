@@ -53,7 +53,7 @@ export const AutoResponderModal: React.FC = () => {
     if (activeModal === ('auto-responder' as any)) {
       loadRules();
     }
-  }, [activeModal, loadRules]);
+  }, [activeModal]);
 
   if (activeModal !== ('auto-responder' as any)) return null;
 
