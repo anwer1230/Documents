@@ -3205,52 +3205,53 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         // Map Dialogs from MTProto messages.getDialogs
         let finalChats: Chat[] = [];
         if (data.chats && Array.isArray(data.chats) && data.chats.length > 0) {
-          finalChats = data.chats;
-        } else {
-          finalChats = chatStore.getCachedChats();
-          if (!finalChats || finalChats.length === 0) {
-            finalChats = INITIAL_CHATS;
-          }
-        }
+          finalChats = [...data.chats];
 
-        // Guarantee Saved Messages exists and has user avatar
-        const savedChatIdx = finalChats.findIndex((c) => c.id === 'chat_saved_messages' || c.type === 'saved');
-        if (savedChatIdx >= 0) {
-          finalChats[savedChatIdx] = {
-            ...finalChats[savedChatIdx],
-            avatar: updatedUser.avatar || finalChats[savedChatIdx].avatar,
-          };
-        } else {
-          finalChats.unshift({
-            id: 'chat_saved_messages',
-            type: 'saved',
-            title: 'الرسائل المحفوظة',
-            avatar: updatedUser.avatar || '',
-            isPinned: true,
-            unreadCount: 0,
-            description: 'سحابة التخزين الشخصية الرسمية من تيليجرام.',
-            lastMessage: {
-              id: `m_saved_${Date.now()}`,
-              senderName: 'You',
-              text: 'مرحباً بك في مساحتك السحابية الآمنة لحفظ الرسائل والملفات.',
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              isOutgoing: true,
-              status: 'read',
-            },
+          // Guarantee Saved Messages exists and has user avatar
+          const savedChatIdx = finalChats.findIndex((c) => c.id === 'chat_saved_messages' || c.type === 'saved');
+          if (savedChatIdx >= 0) {
+            finalChats[savedChatIdx] = {
+              ...finalChats[savedChatIdx],
+              avatar: updatedUser.avatar || finalChats[savedChatIdx].avatar,
+            };
+          } else {
+            finalChats.unshift({
+              id: 'chat_saved_messages',
+              type: 'saved',
+              title: 'الرسائل المحفوظة',
+              avatar: updatedUser.avatar || '',
+              isPinned: true,
+              unreadCount: 0,
+              description: 'سحابة التخزين الشخصية الرسمية من تيليجرام.',
+              lastMessage: {
+                id: `m_saved_${Date.now()}`,
+                senderName: 'You',
+                text: 'مرحباً بك في مساحتك السحابية الآمنة لحفظ الرسائل والملفات.',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                isOutgoing: true,
+                status: 'read',
+              },
+            });
+          }
+
+          const sortedFinalChats = messagesController.sortDialogs(finalChats, 'all');
+          setChats(sortedFinalChats);
+          chatStore.saveChats(sortedFinalChats);
+
+          // Preserve active chat if user already selected one, otherwise remain on Chat List (null)
+          setActiveChatId((prev) => {
+            if (prev && sortedFinalChats.some((c) => c.id === prev)) {
+              return prev;
+            }
+            return null;
           });
-        }
-
-        const sortedFinalChats = messagesController.sortDialogs(finalChats, 'all');
-        setChats(sortedFinalChats);
-        chatStore.saveChats(sortedFinalChats);
-
-        // Preserve active chat if user already selected one, otherwise remain on Chat List (null)
-        setActiveChatId((prev) => {
-          if (prev && sortedFinalChats.some((c) => c.id === prev)) {
-            return prev;
+        } else {
+          // If empty list or pending sync, do not destroy local chats with mock chats
+          const localCached = chatStore.getCachedChats();
+          if (localCached && localCached.length > 0) {
+            setChats(localCached);
           }
-          return null;
-        });
+        }
 
         // Delta-Update Mechanism: Merge newly received changed chunks into existing message lists
         if (data.messages && typeof data.messages === 'object' && Object.keys(data.messages).length > 0) {

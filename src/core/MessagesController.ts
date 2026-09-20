@@ -16,6 +16,8 @@ import { DialogsController } from './messenger/DialogsController';
 import { UserConfig } from './messenger/UserConfig';
 import { KeywordMonitor } from './messenger/KeywordMonitor';
 import { ChannelDifferenceService } from '../services/ChannelDifferenceService';
+import { SecureSessionStorage } from '../utils/SecureSessionStorage';
+import { ChatObject } from './ChatObject';
 
 export interface ChatParticipantInfo {
   userId: string;
@@ -84,6 +86,191 @@ export class MessagesController {
   private constructor(accountNum: number = 0) {
     this.currentAccount = accountNum;
     this.channelDifferenceService = ChannelDifferenceService.getInstance(accountNum);
+  }
+
+  public getCurrentAccount(): number {
+    return this.currentAccount;
+  }
+
+  /**
+   * Validates that this instance's currentAccount strictly matches the authenticated user
+   * registered via TelegramAuthScreen and confirmed in UserConfig.
+   * Ensures no Dialogs or Chats are loaded into memory or cached unless identity matching is verified.
+   */
+  public isAccountIdentityAuthorizedAndMatches(): boolean {
+    const userConfig = UserConfig.getInstance(this.currentAccount);
+    // 1. Must be authorized in UserConfig
+    if (!userConfig.isClientAuthorized() || !userConfig.currentUser) {
+      return false;
+    }
+    const currentUser = userConfig.currentUser;
+
+    // 2. Reject dummy/test accounts
+    if (
+      !currentUser.phone ||
+      currentUser.phone.startsWith('+999') ||
+      currentUser.phone === '0000000000' ||
+      currentUser.phone.toLowerCase().includes('test') ||
+      (currentUser as any).isDummy === true
+    ) {
+      return false;
+    }
+
+    // 3. Verify matching identity against TelegramAuthScreen session and storage
+    if (typeof window !== 'undefined') {
+      try {
+        const explicitlyLoggedOut = SecureSessionStorage.getItem<string>('tg_explicitly_logged_out');
+        if (explicitlyLoggedOut === 'true') {
+          return false;
+        }
+
+        const authScreenUser = SecureSessionStorage.getItem<any>('tg_auth_screen_registered_user');
+        const authSessionActive = SecureSessionStorage.getItem<string>('tg_auth_session_active');
+
+        // Check multi accounts storage
+        const multiAccounts =
+          SecureSessionStorage.getItem<any[]>('tg_multi_accounts_v3') ||
+          SecureSessionStorage.getItem<any[]>('tg_accounts');
+
+        if (Array.isArray(multiAccounts) && multiAccounts.length > 0) {
+          const accData = multiAccounts[this.currentAccount];
+          if (accData && accData.user) {
+            const accUser = accData.user;
+            const cleanCurPhone = (currentUser.phone || '').replace(/\D/g, '');
+            const cleanAccPhone = (accUser.phone || '').replace(/\D/g, '');
+            const curId = String(currentUser.id || '');
+            const accId = String(accUser.id || '');
+
+            const phoneMatches =
+              cleanCurPhone &&
+              cleanAccPhone &&
+              (cleanCurPhone === cleanAccPhone ||
+                cleanCurPhone.endsWith(cleanAccPhone) ||
+                cleanAccPhone.endsWith(cleanCurPhone));
+            const idMatches = curId && accId && curId === accId;
+
+            if (!phoneMatches && !idMatches) {
+              console.warn(
+                `[MessagesController:acc${this.currentAccount}] Account identity mismatch with multi_accounts store.`
+              );
+              return false;
+            }
+          }
+        }
+
+        // If TelegramAuthScreen recently registered a user, ensure it matches currentAccount identity
+        if (authScreenUser && authSessionActive === 'true') {
+          const cleanAuthPhone = (authScreenUser.phone || '').replace(/\D/g, '');
+          const cleanCurPhone = (currentUser.phone || '').replace(/\D/g, '');
+          const authId = String(authScreenUser.id || '');
+          const curId = String(currentUser.id || '');
+
+          if (this.currentAccount === UserConfig.selectedAccount || this.currentAccount === 0) {
+            const matchesPhone =
+              cleanAuthPhone &&
+              cleanCurPhone &&
+              (cleanAuthPhone === cleanCurPhone ||
+                cleanAuthPhone.endsWith(cleanCurPhone) ||
+                cleanCurPhone.endsWith(cleanAuthPhone));
+            const matchesId = authId && curId && authId === curId;
+
+            if (!matchesPhone && !matchesId && (!multiAccounts || multiAccounts.length <= 1)) {
+              console.warn(
+                `[MessagesController:acc${this.currentAccount}] Identity does not match user authenticated in TelegramAuthScreen.`
+              );
+              return false;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[MessagesController:acc${this.currentAccount}] Error verifying account identity:`, err);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Load chat information and notify listeners (ChatActivity, NotificationCenter)
+   */
+  public async loadChatInfo(
+    chatId: string | number,
+    fragment?: any,
+    force: boolean = false
+  ): Promise<any> {
+    const accountRef = this.currentAccount;
+    // Strict account identity check: Must match authenticated account from TelegramAuthScreen
+    if (!this.isAccountIdentityAuthorizedAndMatches()) {
+      console.warn(
+        `[MessagesController:acc${accountRef}] loadChatInfo rejected for chat ${chatId}: Account identity not verified with TelegramAuthScreen.`
+      );
+      return null;
+    }
+
+    try {
+      const conn = ConnectionsManager.getInstance(accountRef);
+      const userConfig = UserConfig.getInstance(accountRef);
+      const currentUserId = userConfig.getClientUserId();
+      const strId = String(chatId);
+      const isChan = strId.startsWith('-100') || this.chats.get(strId)?.broadcast;
+
+      let req: any;
+      if (isChan) {
+        req = new TLRPC.TL_channels_getFullChannel();
+        req.channel = { _: 'inputChannel', channel_id: strId.replace('-100', ''), access_hash: '0' };
+      } else {
+        req = new TLRPC.TL_messages_getFullChat();
+        req.chat_id = strId.replace('-', '');
+      }
+
+      // Fetch chat info through currentAccount's ConnectionsManager
+      const res = await conn.sendRequest<any>(req);
+
+      // Re-verify that the active session and account identity are still valid after network roundtrip
+      if (!this.isAccountIdentityAuthorizedAndMatches()) {
+        console.warn(
+          `[MessagesController:acc${accountRef}] Discarded chat info response for chat ${chatId}: Account identity invalidated during fetch.`
+        );
+        return null;
+      }
+
+      if (res && res.chats && Array.isArray(res.chats) && res.chats.length > 0) {
+        const fullChat = res.chats[0];
+        if (fullChat) {
+          // Reject saved-messages or private chats that do not belong to currentUserId
+          if (
+            fullChat.type === 'saved' &&
+            fullChat.peerId &&
+            fullChat.peerId !== currentUserId &&
+            String(fullChat.id) !== String(currentUserId)
+          ) {
+            console.warn(
+              `[MessagesController:acc${accountRef}] Discarded foreign saved-messages peer ${fullChat.peerId} for user ${currentUserId}`
+            );
+            return null;
+          }
+
+          const existingChat = this.chats.get(strId);
+          if (existingChat) {
+            Object.assign(existingChat, {
+              ...fullChat,
+              accountNum: accountRef,
+            });
+          }
+
+          NotificationCenter.getInstance(accountRef).postNotificationName(
+            NotificationCenter.chatInfoDidLoad,
+            chatId,
+            fullChat
+          );
+          return fullChat;
+        }
+      }
+      return res;
+    } catch (e) {
+      console.warn(`[MessagesController:acc${accountRef}] loadChatInfo failed for chat ${chatId}:`, e);
+      return null;
+    }
   }
 
   public getChannelDifferenceService(): ChannelDifferenceService {

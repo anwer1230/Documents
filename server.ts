@@ -11850,6 +11850,12 @@ Please provide the concise summary.`;
     (app as any).handle(req, res);
   });
 
+  app.post('/api/telegram/dialogs/join', (req, res) => {
+    // نقطة الانضمام الموحدة للمحادثات عبر MTProto
+    req.url = '/api/telegram/links/join';
+    (app as any).handle(req, res);
+  });
+
   // ==========================================
   // FIREBASE CLOUD MESSAGING CHAT NOTIFICATION CHANNELS & RINGTONES
   // ==========================================

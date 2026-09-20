@@ -5,6 +5,9 @@
  */
 
 import { TLRPC } from './TLRPC';
+import { Chat } from '../types';
+
+export type AnyChat = TLRPC.Chat | Chat | TelegramChatEntity;
 
 export interface ChatRights {
   view_messages?: boolean;
@@ -71,6 +74,21 @@ export interface TelegramChatEntity {
 }
 
 export class ChatObject {
+  /**
+   * Matches ChatObject.isBroadcast(TLRPC.Chat chat) in Telegram Android
+   */
+  public static isBroadcast(chat?: AnyChat | null): boolean {
+    return this.isChannelAndNotMegaGroup(chat);
+  }
+
+  /**
+   * Matches ChatObject.isLeft(TLRPC.Chat chat) in Telegram Android
+   */
+  public static isLeft(chat?: AnyChat | null): boolean {
+    if (!chat) return false;
+    return Boolean((chat as any).left || (chat as any).isLeft || (chat as any).kicked);
+  }
+
   /**
    * Check if chat is a broadcast channel (NOT a megagroup / supergroup)
    * Replicates ChatObject.isChannelAndNotMegaGroup(TLRPC.Chat) from Telegram Android

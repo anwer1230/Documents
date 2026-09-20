@@ -402,6 +402,8 @@ export class NotificationCenter {
   public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0001;
   public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0002;
   public static readonly UPDATE_MASK_SEND_STATE = 0x0004;
+  public static readonly UPDATE_MASK_CHAT = 0x0008;
+  public static readonly UPDATE_MASK_CHAT_ADMINS = 0x0010;
   public static readonly UPDATE_MASK_ALL = 0xffff;
 
   private static instances = new Map<number, NotificationCenter>();
