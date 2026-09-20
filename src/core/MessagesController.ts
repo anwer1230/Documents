@@ -785,8 +785,14 @@ export class MessagesController {
         NotificationCenter.dialogsNeedReload
       );
     } else if (update._ === 'TL_updateChannel' || update.type === 'update_channel') {
-      const channelId = update.channel_id || update.chatId;
+      const channelId = String(update.channel_id || update.chatId || update.id || '');
       if (channelId) {
+        const existing = this.chats.get(channelId);
+        if (existing) {
+          Object.assign(existing, update);
+        } else if (update.title) {
+          this.chats.set(channelId, update as any);
+        }
         NotificationCenter.getInstance(this.currentAccount).postNotificationName(
           NotificationCenter.chatInfoDidLoad,
           channelId,
@@ -794,7 +800,52 @@ export class MessagesController {
         );
         NotificationCenter.getInstance(this.currentAccount).postNotificationName(
           NotificationCenter.updateInterfaces,
-          NotificationCenter.UPDATE_MASK_SELECT_DIALOG
+          NotificationCenter.UPDATE_MASK_CHAT
+        );
+      }
+    } else if (update._ === 'TL_updateChannelParticipant' || update.type === 'update_channel_participant') {
+      const channelId = String(update.channel_id || update.chatId || '');
+      if (channelId) {
+        const existing = this.chats.get(channelId);
+        if (existing) {
+          if (update.admin_rights) existing.admin_rights = update.admin_rights;
+          if (update.banned_rights) existing.banned_rights = update.banned_rights;
+        }
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_CHAT_ADMINS
+        );
+      }
+    } else if (update._ === 'TL_updateChatDefaultBannedRights' || update.type === 'update_chat_default_banned_rights') {
+      const chatId = String(update.chat_id || update.peer?.chat_id || update.peer?.channel_id || '');
+      if (chatId) {
+        const existing = this.chats.get(chatId);
+        if (existing && update.default_banned_rights) {
+          existing.default_banned_rights = update.default_banned_rights;
+        }
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_CHAT
+        );
+      }
+    } else if (update._ === 'TL_updateChatParticipants' || update._ === 'TL_updateChatParticipantAdmin') {
+      const chatId = String(update.chat_id || update.participants?.chat_id || '');
+      if (chatId) {
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_CHAT_ADMINS
+        );
+      }
+    } else if (update._ === 'TL_updateChat' || update.type === 'update_chat') {
+      const chatId = String(update.chat_id || update.chat?.id || '');
+      if (chatId) {
+        const existing = this.chats.get(chatId);
+        if (existing && update.chat) {
+          Object.assign(existing, update.chat);
+        }
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_CHAT
         );
       }
     } else if (update._ === 'TL_updateNewChannelMessage') {
@@ -826,6 +877,58 @@ export class MessagesController {
       NotificationCenter.getInstance(this.currentAccount).postNotificationName(
         NotificationCenter.dialogsNeedReload
       );
+    }
+  }
+
+  public getChat(chatId: string | number): Chat | undefined {
+    return this.chats.get(String(chatId));
+  }
+
+  public putChat(chat: any, force: boolean = false): void {
+    if (!chat || !chat.id) return;
+    const id = String(chat.id);
+    const existing = this.chats.get(id);
+    if (!existing || force) {
+      this.chats.set(id, chat);
+    } else {
+      Object.assign(existing, chat);
+    }
+  }
+
+  /**
+   * Loads full channel/chat info using MTProto (TL_channels_getFullChannel / TL_messages_getFullChat)
+   */
+  public async loadFullChat(chatId: string | number, _force: boolean = false): Promise<any> {
+    try {
+      const conn = ConnectionsManager.getInstance(this.currentAccount);
+      const strId = String(chatId);
+      const isChan = strId.startsWith('-100') || this.chats.get(strId)?.broadcast;
+      let req: any;
+      if (isChan) {
+        req = new TLRPC.TL_channels_getFullChannel();
+        req.channel = { _: 'inputChannel', channel_id: strId.replace('-100', ''), access_hash: '0' };
+      } else {
+        req = new TLRPC.TL_messages_getFullChat();
+        req.chat_id = strId.replace('-', '');
+      }
+      const res = await conn.sendRequest<any>(req);
+      if (res && res.chats && res.chats.length > 0) {
+        const fullChat = res.chats[0];
+        this.putChat(fullChat, true);
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.chatInfoDidLoad,
+          strId,
+          fullChat
+        );
+        NotificationCenter.getInstance(this.currentAccount).postNotificationName(
+          NotificationCenter.updateInterfaces,
+          NotificationCenter.UPDATE_MASK_CHAT
+        );
+      }
+      return res;
+    } catch (e) {
+      console.warn('[MessagesController] loadFullChat failed:', e);
+      return null;
     }
   }
 

@@ -24,6 +24,7 @@ import {
   BellOff,
   Megaphone,
   ExternalLink,
+  MessageSquare,
 } from 'lucide-react';
 import { useTelegram } from '../../context/TelegramContext';
 import { AudioRecorder } from '../../utils/audioRecorder';
@@ -43,12 +44,15 @@ import { messagesController } from '../../core/MessagesController';
 import { ChatObject } from '../../core/ChatObject';
 import { UserObject } from '../../core/UserObject';
 import { NotificationCenter } from '../../core/NotificationCenter';
+import { ChatActivity, BottomPanelMode, BottomPanelState } from '../../core/ChatActivity';
+import { LocaleController } from '../../core/LocaleController';
 import confetti from 'canvas-confetti';
 
 export const ChatInput: React.FC = () => {
   const {
     activeChat,
     activeChatId,
+    setActiveChatId,
     currentUser,
     sendMessage,
     editMessageText,
@@ -92,6 +96,37 @@ export const ChatInput: React.FC = () => {
   const isMultiSelectMode = selectedMessageIds.length > 0;
   const isBotFather = activeChat?.username?.toLowerCase() === 'botfather';
   const isSavedMessages = activeChat?.type === 'saved';
+
+  // DrKLO/Telegram Android ChatActivity Controller Instance
+  const chatActivityRef = useRef<ChatActivity | null>(null);
+  if (!chatActivityRef.current) {
+    chatActivityRef.current = new ChatActivity(activeChat, 0);
+  }
+
+  const [bottomPanelState, setBottomPanelState] = useState<BottomPanelState>(() =>
+    chatActivityRef.current!.updateBottomPanel()
+  );
+
+  useEffect(() => {
+    LocaleController.setLocale(isArabic ? 'ar' : 'en');
+  }, [isArabic]);
+
+  useEffect(() => {
+    if (chatActivityRef.current) {
+      chatActivityRef.current.setChat(activeChat);
+    }
+  }, [activeChat]);
+
+  useEffect(() => {
+    const activity = chatActivityRef.current;
+    if (!activity) return;
+    const unsub = activity.addStateListener((st) => {
+      setBottomPanelState(st);
+    });
+    return () => {
+      unsub();
+    };
+  }, [activeChatId]);
 
   // Evaluate TLRPC permissions & ChatObject moderation rights
   const permissionCheck = React.useMemo(() => {
@@ -285,6 +320,13 @@ export const ChatInput: React.FC = () => {
         : `Joined "${activeChat.title}" successfully!`,
       '✨'
     );
+  };
+
+  const handleOpenDiscussion = (linkedChatId?: number | string) => {
+    if (!linkedChatId) return;
+    const targetId = String(linkedChatId);
+    setActiveChatId(targetId);
+    showToast(isArabic ? 'الانتقال إلى مجموعة المناقشة...' : 'Opening discussion group...', '💬');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -891,15 +933,15 @@ export const ChatInput: React.FC = () => {
         </div>
       )}
 
-      {/* Channel Unjoined Action Bar */}
-      {ChatObject.isChannel(activeChat) && activeChat?.isMember === false ? (
+      {/* 1. Channel / Group Not Joined: Official Join Action Bar */}
+      {bottomPanelState.mode === BottomPanelMode.JOIN_CHANNEL ? (
         <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
           <button
             onClick={handleChannelJoin}
             className="flex-1 py-3 px-4 rounded-2xl bg-[#2481cc] hover:bg-[#1c6fad] text-white font-bold text-sm shadow-lg flex items-center justify-center gap-2 transition-transform active:scale-98"
           >
             <Sparkles className="w-4 h-4" />
-            <span>{isArabic ? 'الانضمام إلى القناة' : 'JOIN CHANNEL'}</span>
+            <span>{bottomPanelState.restrictedText || (isArabic ? 'الانضمام إلى القناة' : 'JOIN CHANNEL')}</span>
           </button>
           <button
             onClick={() => toggleMuteChat(activeChat.id)}
@@ -913,38 +955,82 @@ export const ChatInput: React.FC = () => {
             {activeChat.isMuted ? <BellOff className="w-5 h-5" /> : <Bell className="w-5 h-5" />}
           </button>
         </div>
-      ) : ChatObject.isChannel(activeChat) && activeChat?.isRestricted && !activeChat?.isCreator ? (
-        /* Channel Admin-Only (Joined) Mute Bottom Bar */
-        <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
-          <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/20 border border-white/5 flex items-center gap-2 text-xs text-gray-400">
+      ) : bottomPanelState.mode === BottomPanelMode.BROADCAST_RESTRICTED ? (
+        /* 2. Official Telegram channelBroadcastRestrictedView from ChatActivity.java */
+        <div className="flex items-center justify-between gap-2.5 p-1 animate-in fade-in">
+          <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/25 border border-white/10 flex items-center gap-2.5 text-xs text-gray-300 min-w-0">
             <Megaphone className="w-4 h-4 text-sky-400 shrink-0" />
-            <span className="truncate">
-              {isArabic ? 'المشرفون فقط هم من يستطيعون النشر في هذه القناة' : 'Only admins can post in this channel'}
+            <span className="truncate font-medium">
+              {bottomPanelState.restrictedText || LocaleController.getString('ChannelBroadcastRestricted')}
             </span>
           </div>
+
+          {/* Discussion Button (if linked_chat_id exists) */}
+          {bottomPanelState.hasDiscussion && bottomPanelState.linkedChatId && (
+            <button
+              onClick={() => handleOpenDiscussion(bottomPanelState.linkedChatId)}
+              className="py-2.5 px-3 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-bold text-white flex items-center gap-1.5 transition-all shrink-0 active:scale-95"
+              title={isArabic ? 'الانتقال إلى مجموعة المناقشة' : 'Go to discussion group'}
+            >
+              <MessageSquare className="w-4 h-4 text-sky-400" />
+              <span>{LocaleController.getString('Discussion')}</span>
+            </button>
+          )}
+
+          {/* MUTE / UNMUTE Action Button */}
           <button
             onClick={() => toggleMuteChat(activeChat.id)}
-            className={`py-2.5 px-4 rounded-2xl border text-xs font-bold flex items-center gap-2 transition-colors shrink-0 ${
+            className={`py-2.5 px-3.5 rounded-2xl border text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 ${
               activeChat.isMuted
-                ? 'bg-rose-500/20 border-rose-500/30 text-rose-400'
+                ? 'bg-rose-500/20 border-rose-500/30 text-rose-400 hover:bg-rose-500/30'
                 : 'bg-[#2481cc]/20 border-[#2481cc]/40 text-sky-300 hover:bg-[#2481cc]/30'
             }`}
           >
             {activeChat.isMuted ? (
               <>
                 <BellOff className="w-4 h-4" />
-                <span>{isArabic ? 'إلغاء الكتم' : 'UNMUTE'}</span>
+                <span>{LocaleController.getString('ChannelUnmute')}</span>
               </>
             ) : (
               <>
                 <Bell className="w-4 h-4" />
-                <span>{isArabic ? 'كتم الإشعارات' : 'MUTE'}</span>
+                <span>{LocaleController.getString('ChannelMute')}</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : bottomPanelState.mode === BottomPanelMode.MEGAGROUP_RESTRICTED ? (
+        /* 3. Official Telegram channelRestrictedView for Megagroups from ChatActivity.java */
+        <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
+          <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/25 border border-rose-500/20 flex items-center gap-2.5 text-xs text-rose-300 min-w-0">
+            <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+            <span className="truncate font-medium">
+              {bottomPanelState.restrictedText || LocaleController.getString('ChannelRestricted')}
+            </span>
+          </div>
+          <button
+            onClick={() => toggleMuteChat(activeChat.id)}
+            className={`py-2.5 px-3.5 rounded-2xl border text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 ${
+              activeChat.isMuted
+                ? 'bg-rose-500/20 border-rose-500/30 text-rose-400 hover:bg-rose-500/30'
+                : 'bg-[#2481cc]/20 border-[#2481cc]/40 text-sky-300 hover:bg-[#2481cc]/30'
+            }`}
+          >
+            {activeChat.isMuted ? (
+              <>
+                <BellOff className="w-4 h-4" />
+                <span>{LocaleController.getString('ChannelUnmute')}</span>
+              </>
+            ) : (
+              <>
+                <Bell className="w-4 h-4" />
+                <span>{LocaleController.getString('ChannelMute')}</span>
               </>
             )}
           </button>
         </div>
       ) : !permissionCheck.canSend ? (
-        /* Authentic Telegram Bottom Overlay Container */
+        /* 4. Secondary fallback restriction overlay */
         <div className="flex items-center justify-between gap-3 p-1 animate-in fade-in">
           <div className="flex-1 py-2.5 px-3 rounded-2xl bg-black/25 border border-white/10 flex items-center gap-2.5 text-xs text-gray-300">
             {ChatObject.isChannel(activeChat) ? (
@@ -966,12 +1052,12 @@ export const ChatInput: React.FC = () => {
               {activeChat.isMuted ? (
                 <>
                   <BellOff className="w-4 h-4" />
-                  <span>{isArabic ? 'إلغاء الكتم' : 'UNMUTE'}</span>
+                  <span>{LocaleController.getString('ChannelUnmute')}</span>
                 </>
               ) : (
                 <>
                   <Bell className="w-4 h-4" />
-                  <span>{isArabic ? 'كتم الإشعارات' : 'MUTE'}</span>
+                  <span>{LocaleController.getString('ChannelMute')}</span>
                 </>
               )}
             </button>

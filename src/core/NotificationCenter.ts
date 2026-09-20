@@ -54,9 +54,17 @@ export class NotificationCenter {
   public static readonly chatInviteLoaded = 41;
   public static readonly chatInviteJoined = 42;
   public static readonly pendingJoinRequestsUpdated = 43;
-  public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0001;
-  public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0002;
-  public static readonly UPDATE_MASK_SEND_STATE = 0x0004;
+
+  // DrKLO/Telegram Android UPDATE_MASK constants for updateInterfaces
+  public static readonly UPDATE_MASK_CHAT = 0x0001;
+  public static readonly UPDATE_MASK_CHAT_ADMINS = 0x0002;
+  public static readonly UPDATE_MASK_CHAT_MEMBERS = 0x0004;
+  public static readonly UPDATE_MASK_STATUS = 0x0008;
+  public static readonly UPDATE_MASK_NAME = 0x0010;
+  public static readonly UPDATE_MASK_AVATAR = 0x0020;
+  public static readonly UPDATE_MASK_READ_DIALOG_MESSAGE = 0x0040;
+  public static readonly UPDATE_MASK_SELECT_DIALOG = 0x0080;
+  public static readonly UPDATE_MASK_SEND_STATE = 0x0100;
   public static readonly UPDATE_MASK_ALL = 0xffff;
 
   private static instances = new Map<number, NotificationCenter>();

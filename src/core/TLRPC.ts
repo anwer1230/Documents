@@ -232,14 +232,36 @@ export namespace TLRPC {
 
   // Chats & Channels
   export interface Chat {
-    _: 'chat' | 'chatForbidden' | 'chatEmpty';
-    id: number;
+    _: 'chat' | 'chatForbidden' | 'chatEmpty' | 'channel' | 'channelForbidden';
+    id: number | string;
     title: string;
     photo?: ChatPhoto;
-    participants_count: number;
-    date: number;
+    participants_count?: number;
+    date?: number;
     left?: boolean;
-    version: number;
+    version?: number;
+    broadcast?: boolean;        // علم القناة: true إذا كانت قناة بث
+    megagroup?: boolean;        // علم المجموعة الخارقة: true إذا كانت مجموعة
+    creator?: boolean;          // true إذا كان المستخدم الحالي هو المالك
+    username?: string;          // اسم المستخدم العام (null إذا كانت خاصة)
+    admin_rights?: TL_chatAdminRights; // صلاحيات المشرف
+    default_banned_rights?: TL_chatBannedRights; // القيود الافتراضية للمستخدمين
+    banned_rights?: TL_chatBannedRights; // القيود المفروضة على المستخدم الحالي
+    linked_chat_id?: number | string;      // معرف مجموعة النقاش المرتبطة
+    migrated_to?: any;
+    flags?: number;
+    slowmode_seconds?: number;
+    signatures?: boolean;
+    min?: boolean;
+    scam?: boolean;
+    fake?: boolean;
+    restricted?: boolean;
+    restriction_reason?: Array<{ platform: string; reason: string; text: string }>;
+    call_active?: boolean;
+    call_not_empty?: boolean;
+    noforwards?: boolean;
+    join_to_send?: boolean;
+    join_request?: boolean;
   }
 
   export type ChatPhoto =
@@ -1051,6 +1073,52 @@ export namespace TLRPC {
 
     public serializeToStream(stream: any): void {}
     public readParams(stream: any, exception: boolean): void {}
+  }
+
+  // ==========================================
+  // Full Chat & Channel Info Requests (Network Calls)
+  // ==========================================
+  export class TL_messages_getFullChat extends TLObject {
+    public static constructorId = 0x3b831c66;
+    public _: string = 'messages.getFullChat';
+    public chat_id: number | string = 0;
+
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_channels_getFullChannel extends TLObject {
+    public static constructorId = 0x08736a09;
+    public _: string = 'channels.getFullChannel';
+    public channel: InputChannel | string = { _: 'inputChannel', channel_id: 0, access_hash: '0' };
+
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_channels_getChannels extends TLObject {
+    public static constructorId = 0x0a7f6bbb;
+    public _: string = 'channels.getChannels';
+    public id: any[] = [];
+
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export class TL_messages_getPeerDialogs extends TLObject {
+    public static constructorId = 0xe470bcfd;
+    public _: string = 'messages.getPeerDialogs';
+    public peers: any[] = [];
+
+    public serializeToStream(stream: any): void {}
+    public readParams(stream: any, exception: boolean): void {}
+  }
+
+  export interface TL_messages_chatFull {
+    _: 'messages.chatFull';
+    full_chat: ChatFull;
+    chats: Chat[];
+    users: User[];
   }
 
   export interface TL_userFull {

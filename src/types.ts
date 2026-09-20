@@ -343,11 +343,19 @@ export interface Chat {
   botPrivacyDisabled?: boolean;
   // Authentic Telegram MTProto flags
   isBroadcast?: boolean;
+  broadcast?: boolean;
   isMegagroup?: boolean;
+  megagroup?: boolean;
   isCreator?: boolean;
+  creator?: boolean;
+  left?: boolean;
   adminRights?: any;
+  admin_rights?: any;
   defaultBannedRights?: any;
+  default_banned_rights?: any;
   bannedRights?: any;
+  banned_rights?: any;
+  linked_chat_id?: string | number;
   canSendMessages?: boolean;
   // Secret Chat Specifics
   isSecret?: boolean;
