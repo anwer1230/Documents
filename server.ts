@@ -1740,6 +1740,197 @@ async function startServer() {
     });
   });
 
+  // 7.1 Real MTProto Chat & Channel Join RPC (channels.joinChannel / messages.importChatInvite)
+  app.post('/api/telegram/dialogs/join', async (req, res) => {
+    const { link, phone, sessionString } = req.body;
+    if (!link || typeof link !== 'string') {
+      return res.status(400).json({ ok: false, error: 'LINK_REQUIRED', message: 'رابط القناة أو المجموعة مطلوب' });
+    }
+
+    try {
+      let client = await getClientForSession(sessionString, phone);
+      if (!client || !client.connected) {
+        for (const c of authenticatedTelegramClients.values()) {
+          if (c && c.connected) {
+            client = c;
+            break;
+          }
+        }
+      }
+      if (!client || !client.connected) {
+        for (const sess of realTelegramSessions.values()) {
+          if (sess.client && sess.client.connected) {
+            client = sess.client;
+            break;
+          }
+        }
+      }
+
+      if (!client || !client.connected) {
+        return res.status(401).json({
+          ok: false,
+          error: 'NOT_AUTHENTICATED',
+          message: 'حساب تيليجرام غير متصل حالياً. يرجى تسجيل الدخول أولاً لتنفيذ الانضمام الفعلي.',
+        });
+      }
+
+      const cleanUrl = link.trim();
+      const isPrivateInvite =
+        cleanUrl.includes('/+') ||
+        cleanUrl.includes('/joinchat/') ||
+        cleanUrl.includes('invite=') ||
+        cleanUrl.startsWith('tg://join');
+
+      if (isPrivateInvite) {
+        // Extract invite hash
+        let hash = '';
+        if (cleanUrl.includes('/+')) {
+          hash = cleanUrl.split('/+').pop()?.split(/[?#]/)[0] || '';
+        } else if (cleanUrl.includes('/joinchat/')) {
+          hash = cleanUrl.split('/joinchat/').pop()?.split(/[?#]/)[0] || '';
+        } else if (cleanUrl.includes('invite=')) {
+          const match = cleanUrl.match(/invite=([a-zA-Z0-9_-]+)/);
+          hash = match ? match[1] : '';
+        }
+        hash = hash.replace(/[^a-zA-Z0-9_-]/g, '');
+
+        if (!hash) {
+          return res.status(400).json({ ok: false, error: 'INVALID_INVITE_HASH', message: 'رابط الدعوة الخاصة غير صالح' });
+        }
+
+        try {
+          const result: any = await client.invoke(new Api.messages.ImportChatInvite({ hash }));
+          let chatTitle = 'مجموعة خاصة';
+          let chatId = `chat_${hash}`;
+          if (result && result.chats && result.chats.length > 0) {
+            const firstChat = result.chats[0];
+            chatTitle = firstChat.title || chatTitle;
+            chatId = `chat_${firstChat.id}`;
+            entityCache.set(String(firstChat.id), firstChat);
+          }
+
+          return res.json({
+            ok: true,
+            joined: true,
+            chatId,
+            title: chatTitle,
+            message: `تم الانضمام بنجاح إلى "${chatTitle}" عبر تيليجرام الرسمي`,
+          });
+        } catch (inviteErr: any) {
+          const errMsg = inviteErr?.message || inviteErr?.errorMessage || String(inviteErr);
+          if (errMsg.includes('INVITE_REQUEST_SENT')) {
+            return res.json({
+              ok: true,
+              pendingApproval: true,
+              requestSent: true,
+              message: 'تم إرسال طلب الانضمام إلى إدارة المجموعة وبانتظار الموافقة.',
+            });
+          }
+          if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+            return res.json({
+              ok: true,
+              alreadyJoined: true,
+              message: 'أنت عضو بالفعل في هذه المجموعة أو القناة.',
+            });
+          }
+          if (errMsg.includes('INVITE_HASH_EXPIRED')) {
+            return res.status(400).json({
+              ok: false,
+              error: 'INVITE_HASH_EXPIRED',
+              message: 'رابط الدعوة الخاص منتهي الصلاحية أو تم إبطاله.',
+            });
+          }
+          if (errMsg.includes('USERS_TOO_MUCH') || errMsg.includes('CHANNELS_TOO_MUCH')) {
+            return res.status(400).json({
+              ok: false,
+              error: 'LIMIT_EXCEEDED',
+              message: 'وصل حسابك إلى الحد الأقصى المسموح به من القنوات والمجموعات في تيليجرام.',
+            });
+          }
+          return res.status(400).json({
+            ok: false,
+            error: errMsg,
+            message: `تعذر الانضمام عبر الرابط الخاص: ${errMsg}`,
+          });
+        }
+      } else {
+        // Public Channel / Group username
+        const rawTarget = cleanUrl.split('/').pop()?.replace('@', '').split(/[?#]/)[0] || '';
+        if (!rawTarget || rawTarget.length < 2) {
+          return res.status(400).json({ ok: false, error: 'INVALID_CHANNEL_USERNAME', message: 'معرف القناة أو الرابط غير صالح' });
+        }
+
+        try {
+          const entity: any = await client.getEntity(rawTarget);
+          if (!entity) {
+            return res.status(404).json({ ok: false, error: 'CHANNEL_NOT_FOUND', message: 'تعذر العثور على القناة أو المجموعة على تيليجرام' });
+          }
+
+          entityCache.set(String(entity.id), entity);
+          entityCache.set(rawTarget.toLowerCase(), entity);
+
+          // Invoke channels.JoinChannel
+          await client.invoke(new Api.channels.JoinChannel({ channel: entity }));
+
+          const finalTitle = entity.title || `@${rawTarget}`;
+          const finalId = `chat_${entity.id}`;
+
+          return res.json({
+            ok: true,
+            joined: true,
+            chatId: finalId,
+            title: finalTitle,
+            username: entity.username || rawTarget,
+            message: `تم الانضمام الفعلي بنجاح إلى "${finalTitle}" على تيليجرام`,
+          });
+        } catch (joinErr: any) {
+          const errMsg = joinErr?.message || joinErr?.errorMessage || String(joinErr);
+          if (errMsg.includes('USER_ALREADY_PARTICIPANT')) {
+            return res.json({
+              ok: true,
+              alreadyJoined: true,
+              message: 'أنت منضم بالفعل إلى هذه القناة أو المجموعة.',
+            });
+          }
+          if (errMsg.includes('INVITE_REQUEST_SENT')) {
+            return res.json({
+              ok: true,
+              pendingApproval: true,
+              requestSent: true,
+              message: 'تم إرسال طلب الانضمام إلى القناة وبانتظار موافقة الإدارة.',
+            });
+          }
+          if (errMsg.includes('CHANNELS_TOO_MUCH')) {
+            return res.status(400).json({
+              ok: false,
+              error: 'CHANNELS_TOO_MUCH',
+              message: 'حسابك مشترك في الحد الأقصى للقنوات (500 قناة للحساب العادي أو 1000 للمميز).',
+            });
+          }
+          if (errMsg.includes('CHANNEL_PRIVATE')) {
+            return res.status(403).json({
+              ok: false,
+              error: 'CHANNEL_PRIVATE',
+              message: 'هذه القناة خاصة وتتطلب رابط دعوة سارٍ للانضمام.',
+            });
+          }
+          return res.status(400).json({
+            ok: false,
+            error: errMsg,
+            message: `فشل الانضمام عبر تيليجرام: ${errMsg}`,
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error('[MTProto] Join channel error:', err);
+      return res.status(500).json({
+        ok: false,
+        error: err?.message || 'INTERNAL_ERROR',
+        message: 'حدث خطأ غير متوقع أثناء معالجة الانضمام في خادم MTProto',
+      });
+    }
+  });
+
   // 7. Import Chat Invite (messages.importChatInvite / channels.joinChannel RPC)
   app.post('/api/telegram/links/join', (req, res) => {
     const { inviteInfo } = req.body;

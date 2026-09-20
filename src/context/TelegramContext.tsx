@@ -2319,10 +2319,12 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           country: country,
         };
 
-        // Always-on auto join for public links
-        setTimeout(() => {
-          executeLinkJoin(newCaptured, true);
-        }, 300);
+        // Auto-join for public links only if user explicitly enabled it
+        if (autoJoinLinksEnabled) {
+          setTimeout(() => {
+            executeLinkJoin(newCaptured, true);
+          }, 400);
+        }
 
         return [newCaptured, ...prev];
       });
@@ -2331,88 +2333,65 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const executeLinkJoin = async (link: CapturedLink, isAuto = true) => {
     const rawTarget = link.url.split('/').pop()?.replace('@', '').split('?')[0] || 'group';
-    const newChatId = `chat_${rawTarget.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
     const creationDate = link.creation_date || detectLinkCreationDate(link.url);
     const country = link.country || detectLinkCountry(link.url);
-    const groupTitle = link.extractedTitle?.replace(/^(قناة \/ مجموعة: |Channel \/ Group: )/, '') || `@${rawTarget}`;
+    let groupTitle = link.extractedTitle?.replace(/^(قناة \/ مجموعة: |Channel \/ Group: )/, '') || `@${rawTarget}`;
 
     const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const nowDateStr = new Date().toISOString().split('T')[0];
 
-    // Try joining via native MTProto API or classify according to channel requirements
-    let joinOutcome: 'joined' | 'pending_admin' | 'missing_info' = 'joined';
-    let detailMessage = 'تم الانضمام بنجاح ومزامنة الدردشة في حسابك';
+    // Real MTProto join execution
+    let joinOutcome: 'joined' | 'already_joined' | 'pending_admin' | 'failed' = 'failed';
+    let detailMessage = 'جاري محاولة الانضمام عبر تيليجرام الرسمي...';
 
-    if (rawTarget.toLowerCase().includes('pending') || rawTarget.toLowerCase().includes('admin') || rawTarget.toLowerCase().includes('hub')) {
-      joinOutcome = 'pending_admin';
-      detailMessage = 'تم إرسال طلب الانضمام وبانتظار موافقة مشرف المجموعة';
-    } else {
-      try {
-        const res = await fetch('/api/telegram/dialogs/join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ link: link.url }),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          if (data.requestSent || data.pendingApproval) {
-            joinOutcome = 'pending_admin';
-            detailMessage = 'تم إرسال طلب الانضمام وبانتظار موافقة مشرف المجموعة';
-          } else {
-            joinOutcome = 'joined';
-            detailMessage = 'تم الانضمام الفعلي بنجاح';
-          }
+    try {
+      const activeAccount = accounts.find((a) => a.isActive && a.sessionString) || accounts[0];
+      const res = await fetch('/api/telegram/dialogs/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          link: link.url,
+          phone: activeAccount?.phone || activeAccount?.user?.phone,
+          sessionString: activeAccount?.sessionString,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (data && data.ok) {
+        if (data.pendingApproval || data.requestSent) {
+          joinOutcome = 'pending_admin';
+          detailMessage = data.message || 'تم إرسال طلب الانضمام وبانتظار موافقة مشرف المجموعة';
+        } else if (data.alreadyJoined) {
+          joinOutcome = 'already_joined';
+          detailMessage = data.message || 'أنت عضو بالفعل في هذه القناة أو المجموعة';
         } else {
-          if (data.error && (data.error.includes('REQUEST_SENT') || data.error.includes('INVITE_REQUEST'))) {
-            joinOutcome = 'pending_admin';
-            detailMessage = 'بانتظار موافقة المشرف (طلب انضمام)';
-          } else if (data.error && data.error.includes('INVITE_HASH_EXPIRED')) {
-            joinOutcome = 'missing_info';
-            detailMessage = 'رابط منتهي الصلاحية أو غير صالح';
-          } else {
-            joinOutcome = 'joined';
-            detailMessage = 'تم الانضمام الفعلي بنجاح';
+          joinOutcome = 'joined';
+          if (data.title) {
+            groupTitle = data.title;
           }
+          detailMessage = data.message || 'تم الانضمام الفعلي بنجاح عبر خوادم تيليجرام الرسمية';
         }
-      } catch {
-        joinOutcome = 'joined';
-        detailMessage = 'تم الانضمام الفعلي بنجاح';
+      } else {
+        joinOutcome = 'failed';
+        detailMessage = data?.message || data?.error || 'تعذر الانضمام (الرابط غير صالح أو الحساب مقيد)';
       }
+    } catch (err: any) {
+      joinOutcome = 'failed';
+      detailMessage = err?.message || 'فشل الاتصال بخادم تيليجرام MTProto';
     }
 
-    if (joinOutcome === 'joined') {
-      // Add joined chat to list
-      setChats((prev) => {
-        const exists = prev.find((c) => c.id === newChatId || (c.username && c.username.toLowerCase() === rawTarget.toLowerCase()));
-        if (exists) return prev;
+    if (joinOutcome === 'joined' || joinOutcome === 'already_joined') {
+      // Trigger real cloud sync so Telegram cloud syncs the genuine channel, chats, and messages
+      syncCloudData().catch(() => {});
 
-        const newJoinedChat: Chat = {
-          id: newChatId,
-          type: 'group',
-          title: groupTitle,
-          username: rawTarget,
-          avatar: '',
-          unreadCount: 1,
-          description: `انضمام فوري عبر رادار الروابط (${link.url})`,
-          memberCount: link.memberCount || 15000,
-          lastMessage: {
-            id: `msg_join_${Date.now()}`,
-            senderName: 'النظام',
-            text: `🎉 تم الانضمام بنجاح وبشكل فوري عبر مراقب الروابط الذكي.`,
-            timestamp: nowTimeStr,
-            isOutgoing: false,
-            status: 'read',
-          },
-        };
-        return [newJoinedChat, ...prev];
-      });
-
-      // Update link record
+      // Update link record to genuinely joined
       setCapturedLinks((prev) =>
         prev.map((l) =>
           l.id === link.id || l.url === link.url
             ? {
                 ...l,
+                extractedTitle: groupTitle,
+                chat_title: groupTitle,
                 joined: true,
                 isJoinedActual: true,
                 isPendingApproval: false,
@@ -2421,7 +2400,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 status: 'joined',
                 status_text: '✅ منضم فعلياً',
                 joinStatus: 'joined',
-                joinStatusDetails: 'تم الانضمام فعلياً إلى المجموعة بنجاح',
+                joinStatusDetails: detailMessage,
                 creation_date: creationDate,
                 country: country,
               }
@@ -2429,20 +2408,19 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         )
       );
 
-      // Send detailed notification to Saved Messages
+      // Send authentic notification to Saved Messages
       sendNotificationToSavedMessages(
-        `🚀 **انضمام فوري: مجموعة تليجرام عامة**`,
+        `🚀 **انضمام فعلي ناجح عبر تيليجرام الرسمي**`,
         `🔗 **الرابط:** ${link.url}\n` +
-        `🏷 **المعرف / الاسم:** ${groupTitle}\n` +
-        `🕒 **الوقت بدقة:** ${nowTimeStr} (${nowDateStr})\n` +
-        `✅ **حالة الانضمام:** تم الانضمام فعلياً إلى المجموعة بنجاح!\n` +
+        `🏷 **القناة / المجموعة:** ${groupTitle}\n` +
+        `🕒 **الوقت:** ${nowTimeStr} (${nowDateStr})\n` +
+        `✅ **النتيجة:** ${detailMessage}\n` +
         `📍 **مصدر الرصد:** ${link.source_chat || link.sourceChatTitle || 'محادثة'}\n` +
-        `👤 **المرسل الأصلي:** ${link.sender || link.sourceSenderName || 'مستخدم'}\n` +
-        `🌍 **الدولة المقدرة:** ${country}`,
-        `✅ تم الانضمام فعلياً: ${groupTitle}`
+        `👤 **المرسل:** ${link.sender || link.sourceSenderName || 'مستخدم'}`,
+        `✅ انضمام فعلي: ${groupTitle}`
       );
 
-      showToast(`⚡ تم الانضمام فعلياً إلى: ${groupTitle}`, '🚀');
+      showToast(`⚡ ${detailMessage}: ${groupTitle}`, '🚀');
     } else if (joinOutcome === 'pending_admin') {
       // Pending admin approval
       setCapturedLinks((prev) =>
@@ -2457,39 +2435,6 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 status: 'admin_approval_pending',
                 status_text: '⏳ بانتظار موافقة المشرف',
                 joinStatus: 'pending_admin',
-                joinStatusDetails: 'تم إرسال طلب الانضمام وبانتظار موافقة المشرف',
-                creation_date: creationDate,
-                country: country,
-              }
-            : l
-        )
-      );
-
-      // Send detailed notification to Saved Messages
-      sendNotificationToSavedMessages(
-        `⏳ **طلب انضمام: مجموعة تليجرام عامة تتطلب موافقة**`,
-        `🔗 **الرابط:** ${link.url}\n` +
-        `🏷 **المعرف / الاسم:** ${groupTitle}\n` +
-        `🕒 **الوقت بدقة:** ${nowTimeStr} (${nowDateStr})\n` +
-        `⚠️ **حالة الانضمام:** بانتظار موافقة المشرف (يتطلب إذن الانضمام من إدارة المجموعة).\n` +
-        `📍 **مصدر الرصد:** ${link.source_chat || link.sourceChatTitle || 'محادثة'}\n` +
-        `👤 **المرسل الأصلي:** ${link.sender || link.sourceSenderName || 'مستخدم'}`,
-        `⏳ بانتظار موافقة المشرف: ${groupTitle}`
-      );
-
-      showToast(`⏳ يتطلب موافقة المشرف: ${groupTitle}`, '⏳');
-    } else {
-      // Missing info or restriction
-      setCapturedLinks((prev) =>
-        prev.map((l) =>
-          l.id === link.id || l.url === link.url
-            ? {
-                ...l,
-                joined: false,
-                isJoinedActual: false,
-                status: 'failed',
-                status_text: '⚠️ تعذر الانضمام',
-                joinStatus: 'error_missing_info',
                 joinStatusDetails: detailMessage,
                 creation_date: creationDate,
                 country: country,
@@ -2499,14 +2444,37 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       );
 
       sendNotificationToSavedMessages(
-        `⚠️ **تنبيه انضمام: مجموعة تليجرام عامة**`,
+        `⏳ **طلب انضمام: يتطلب موافقة المشرف**`,
         `🔗 **الرابط:** ${link.url}\n` +
-        `🏷 **المعرف:** ${groupTitle}\n` +
+        `🏷 **المعرف / الاسم:** ${groupTitle}\n` +
         `🕒 **الوقت:** ${nowTimeStr} (${nowDateStr})\n` +
-        `⚠️ **حالة الانضمام:** تعذر الانضمام (${detailMessage})\n` +
+        `⚠️ **الحالة:** تم إرسال طلب الانضمام وبانتظار موافقة الإدارة.\n` +
         `📍 **مصدر الرصد:** ${link.source_chat || link.sourceChatTitle || 'محادثة'}`,
-        `⚠️ تعذر الانضمام: ${groupTitle}`
+        `⏳ بانتظار موافقة المشرف: ${groupTitle}`
       );
+
+      showToast(`⏳ ${detailMessage}`, '⏳');
+    } else {
+      // Actual Failure (Do NOT create fake chat, do NOT say joined!)
+      setCapturedLinks((prev) =>
+        prev.map((l) =>
+          l.id === link.id || l.url === link.url
+            ? {
+                ...l,
+                joined: false,
+                isJoinedActual: false,
+                status: 'failed',
+                status_text: '❌ تعذر الانضمام',
+                joinStatus: 'failed',
+                joinStatusDetails: detailMessage,
+                creation_date: creationDate,
+                country: country,
+              }
+            : l
+        )
+      );
+
+      showToast(`⚠️ تعذر الانضمام: ${detailMessage}`, '⚠️');
     }
   };
 
@@ -2695,39 +2663,41 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const scannedMsgKeysRef = useRef<Set<string>>(new Set());
+
   const clearCapturedLinks = () => {
+    scannedMsgKeysRef.current.clear();
     setCapturedLinks([]);
     showToast(settings.language === 'ar' ? 'تم مسح سجل الروابط المرصودة' : 'Cleared links history', '🗑️');
   };
 
   const manualScanAllChatsForLinks = () => {
-    // Scan all messages across all chats
+    // Scan all messages across all chats with deduplication
     Object.entries(messages).forEach(([chatId, chatMessages]) => {
       const chat = chats.find((c) => c.id === chatId);
       const chatTitle = chat?.title || 'Chat';
       if (Array.isArray(chatMessages)) {
         (chatMessages as Message[]).forEach((msg) => {
+          if (!msg || !msg.text) return;
+          const msgKey = `${chatId}_${msg.id}_${msg.text.length}`;
+          if (scannedMsgKeysRef.current.has(msgKey)) return;
+          scannedMsgKeysRef.current.add(msgKey);
           extractAndProcessLinks(msg.text, chatId, chatTitle, msg.senderName);
         });
       }
     });
   };
 
-  // Continuous account-wide link monitor (Active & Always-on by default)
+  // Continuous account-wide link monitor (Active & controlled - does not loop on chats)
   useEffect(() => {
     const timer = setTimeout(() => {
       manualScanAllChatsForLinks();
     }, 1500);
 
-    const interval = setInterval(() => {
-      manualScanAllChatsForLinks();
-    }, 8000);
-
     return () => {
       clearTimeout(timer);
-      clearInterval(interval);
     };
-  }, [messages, chats]);
+  }, [messages]);
 
   const exportLinksReport = () => {
     const reportData = {

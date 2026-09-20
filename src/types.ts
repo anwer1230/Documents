@@ -521,10 +521,11 @@ export interface UserAccount {
   unreadCount?: number;
   isActive?: boolean;
   sessionString?: string;
+  phone?: string;
 }
 
 export type LinkCategory = 'whatsapp' | 'telegram_public' | 'telegram_private' | 'other';
-export type JoinStatusType = 'joined' | 'pending_admin' | 'already_joined' | 'error_missing_info' | 'not_applicable' | 'pending_scan';
+export type JoinStatusType = 'joined' | 'pending_admin' | 'already_joined' | 'error_missing_info' | 'not_applicable' | 'pending_scan' | 'failed';
 
 export interface CapturedLink {
   id: string;
