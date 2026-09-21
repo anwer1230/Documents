@@ -992,3 +992,44 @@ export interface AppUpdateState {
   }>;
   error?: string;
 }
+
+// Telegram Groups Health & Management Types
+export type GroupConnectionHealth = 'excellent' | 'good' | 'degraded' | 'disconnected';
+
+export type GroupPermissionStatus = 
+  | 'can_post'
+  | 'admin_only'
+  | 'banned'
+  | 'not_member'
+  | 'slowmode';
+
+export interface GroupPermissions {
+  canSendMessages: boolean;
+  canSendMedia: boolean;
+  canSendStickers: boolean;
+  canAddWebPagePreviews: boolean;
+  slowmodeDelaySeconds: number;
+}
+
+export interface TelegramGroup {
+  id: string;
+  title: string;
+  username?: string;
+  type: 'supergroup' | 'channel' | 'group';
+  memberCount: number;
+  onlineCount?: number;
+  avatarUrl?: string;
+  status: 'active' | 'paused' | 'restricted' | 'error';
+  connectionHealth: GroupConnectionHealth;
+  permissionStatus: GroupPermissionStatus;
+  latencyMs: number;
+  lastPingTimestamp: number;
+  lastActivityTime: string;
+  unreadCount: number;
+  permissions: GroupPermissions;
+  statusReason?: string;
+  inviteLink?: string;
+  isMonitored: boolean;
+}
+
+export type StatusFilter = 'all' | 'active' | 'restricted' | 'slowmode' | 'degraded';
