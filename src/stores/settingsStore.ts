@@ -75,7 +75,30 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: 'telegram-web-settings-storage',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => ({
+        getItem: (key: string) => {
+          try {
+            return localStorage.getItem(key);
+          } catch (e) {
+            console.warn('[settingsStore] Safe read error:', e);
+            return null;
+          }
+        },
+        setItem: (key: string, val: string) => {
+          try {
+            localStorage.setItem(key, val);
+          } catch (e) {
+            console.warn('[settingsStore] Safe write error:', e);
+          }
+        },
+        removeItem: (key: string) => {
+          try {
+            localStorage.removeItem(key);
+          } catch (e) {
+            console.warn('[settingsStore] Safe remove error:', e);
+          }
+        },
+      })),
     }
   )
 );

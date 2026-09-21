@@ -87,6 +87,14 @@ export class MessagesController {
   private constructor(accountNum: number = 0) {
     this.currentAccount = accountNum;
     this.channelDifferenceService = ChannelDifferenceService.getInstance(accountNum);
+    this.channelDifferenceService.setDelegate({
+      processUpdates: (updates, flag) => this.processUpdates(updates, flag),
+      getDialogs: () => this.getDialogs(),
+    });
+    ConnectionsManager.setDelegate(accountNum, {
+      onDifferenceNeeded: () => this.getDifference(),
+      onForcedLogout: (_acc, reason) => this.performForcedLogout(reason),
+    });
   }
 
   public getCurrentAccount(): number {
@@ -277,6 +285,10 @@ export class MessagesController {
   public getChannelDifferenceService(): ChannelDifferenceService {
     if (!this.channelDifferenceService) {
       this.channelDifferenceService = ChannelDifferenceService.getInstance(this.currentAccount);
+      this.channelDifferenceService.setDelegate({
+        processUpdates: (updates, flag) => this.processUpdates(updates, flag),
+        getDialogs: () => this.getDialogs(),
+      });
     }
     return this.channelDifferenceService;
   }

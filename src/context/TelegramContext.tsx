@@ -538,8 +538,6 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const chatsRef = useRef<Chat[]>([]);
   const messagesRef = useRef<Record<string, Message[]>>({});
   const currentUserRef = useRef<any>(null);
-  currentUserRef.current = currentUser;
-  chatsRef.current = chats;
 
   const [chats, setChats] = useState<Chat[]>(() => {
     if (initialActiveAcc?.chats && initialActiveAcc.chats.length > 0) {
@@ -570,6 +568,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
     return INITIAL_MESSAGES;
   });
+
+  // Synchronize mutable refs safely after state initialization (Variable Scope & Hoisting compliance)
+  currentUserRef.current = currentUser;
+  chatsRef.current = chats;
+  messagesRef.current = messages;
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => {
@@ -2027,7 +2030,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       SecureSessionStorage.setItem('tg_session_string', effectiveSessionString);
       localStorage.setItem('tg_session_string', effectiveSessionString);
-      localStorage.setItem('tg_phone', newUser.phone);
+      localStorage.setItem('tg_phone', newUser.phone || '');
       localStorage.setItem('tg_auth_session_active', 'true');
       localStorage.removeItem('tg_explicitly_logged_out');
       SecureSessionStorage.removeItem('tg_explicitly_logged_out');

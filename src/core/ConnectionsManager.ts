@@ -33,9 +33,19 @@ export interface MtprotoSession {
   phone?: string;
 }
 
+export interface ConnectionsManagerDelegate {
+  onDifferenceNeeded?: (accountNum: number) => void;
+  onForcedLogout?: (accountNum: number, reason: string) => void;
+}
+
 export class ConnectionsManager {
   private static instances = new Map<number, ConnectionsManager>();
   private static defaultInstance: ConnectionsManager;
+  private static delegates = new Map<number, ConnectionsManagerDelegate>();
+
+  public static setDelegate(accountNum: number, delegate: ConnectionsManagerDelegate): void {
+    this.delegates.set(accountNum, delegate);
+  }
   private accountNum: number;
   private currentDcId = 2;
   private connectionState: ConnectionState = 'CONNECTION_STATE_CONNECTED';
@@ -213,10 +223,15 @@ export class ConnectionsManager {
     this.isPaused = false;
     this.updateState('CONNECTION_STATE_UPDATING');
     
-    // Import and trigger difference reconciliation
-    import('./MessagesController').then(({ MessagesController }) => {
-      MessagesController.getInstance(this.accountNum).getDifference();
-    }).catch(() => {});
+    // Trigger difference reconciliation via registered delegate
+    const delegate = ConnectionsManager.delegates.get(this.accountNum);
+    if (delegate?.onDifferenceNeeded) {
+      try {
+        delegate.onDifferenceNeeded(this.accountNum);
+      } catch (err) {
+        console.warn('[ConnectionsManager] Difference delegate error:', err);
+      }
+    }
 
     setTimeout(() => {
       this.updateState('CONNECTION_STATE_CONNECTED');
@@ -305,11 +320,14 @@ export class ConnectionsManager {
         `[ConnectionsManager] Intercepted 401 / ${err.text} on account ${this.accountNum}. Triggering cleanup and session revocation.`
       );
       this.cleanup(false);
-      import('./MessagesController')
-        .then(({ MessagesController }) => {
-          MessagesController.getInstance(this.accountNum).performForcedLogout(err.text || 'AUTH_KEY_UNREGISTERED');
-        })
-        .catch(() => {});
+      const delegate = ConnectionsManager.delegates.get(this.accountNum);
+      if (delegate?.onForcedLogout) {
+        try {
+          delegate.onForcedLogout(this.accountNum, err.text || 'AUTH_KEY_UNREGISTERED');
+        } catch (logoutErr) {
+          console.warn('[ConnectionsManager] Forced logout delegate error:', logoutErr);
+        }
+      }
     }
   }
 

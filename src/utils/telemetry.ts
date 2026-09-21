@@ -9,31 +9,18 @@
  * - Only active in development or when manually enabled in production via localStorage.
  */
 
-export type TelemetryEventType =
-  | 'network_online'
-  | 'network_offline'
-  | 'latency_ping'
-  | 'sync_start'
-  | 'sync_success'
-  | 'sync_error'
-  | 'connection_state';
+import {
+  type TelemetryEventType,
+  type TelemetryCategory,
+  type TelemetryEvent,
+  MAX_TELEMETRY_LOGS,
+} from './telemetryTypes';
 
-export type TelemetryCategory = 'network' | 'latency' | 'sync';
-
-export interface TelemetryEvent {
-  id: string;
-  timestamp: string; // ISO 8601
-  type: TelemetryEventType;
-  category: TelemetryCategory;
-  reason?: string;
-  durationMs?: number;
-  serverDurationMs?: number;
-  details?: Record<string, any>;
-}
+export type { TelemetryEventType, TelemetryCategory, TelemetryEvent };
+export { MAX_TELEMETRY_LOGS };
 
 export const TELEMETRY_STORAGE_KEY = 'tg_telemetry_logs';
 export const TELEMETRY_ENABLED_KEY = 'tg_telemetry_enabled';
-export const MAX_TELEMETRY_LOGS = 50;
 
 /**
  * Checks if telemetry logging is enabled.

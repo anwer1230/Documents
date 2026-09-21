@@ -9,7 +9,6 @@
 import { TLRPC } from '../TLRPC';
 import { BuildVars } from './BuildVars';
 import { NotificationCenter } from '../NotificationCenter';
-import { ApplicationLoader } from './ApplicationLoader';
 
 export interface AppUpdateInfo {
   version: string;
@@ -94,7 +93,7 @@ export class AppUpdateController {
     this.errorMessage = null;
     this.notifyStateChange('checking');
 
-    const gcmSource = ApplicationLoader.getGcmToken();
+    const gcmSource = (typeof window !== 'undefined' ? localStorage.getItem('tg_gcm_source') : null) || 'fcm_tg_token_live_default';
     this.lastCheckTime = Date.now();
     localStorage.setItem('tg_last_update_check', this.lastCheckTime.toString());
 
@@ -271,7 +270,13 @@ export class AppUpdateController {
       return;
     }
 
-    ApplicationLoader.applyUpdateAndPreserveSession();
+    if (typeof window !== 'undefined') {
+      console.log('[AppUpdateController] Applying OTA update. Session and state preserved.');
+      try {
+        localStorage.setItem('tg_last_update_installed', Date.now().toString());
+      } catch (_) {}
+      window.location.reload();
+    }
   }
 
   /**

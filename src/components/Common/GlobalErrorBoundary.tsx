@@ -32,6 +32,35 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('[GlobalErrorBoundary] Telegram App Crash Caught:', error, errorInfo);
     this.setState({ errorInfo });
+
+    // Auto-sanitize corrupted localStorage / sessionStorage upon crash
+    try {
+      if (typeof window !== 'undefined') {
+        const suspectKeys = [
+          'tg_multi_accounts_v3',
+          'app_settings',
+          'draft_message',
+          'tg_state',
+          'telegram_session_string',
+          'tg_session_string',
+          'telegram-web-settings-storage',
+          'tg_telemetry_logs'
+        ];
+        suspectKeys.forEach((k) => {
+          try {
+            const val = localStorage.getItem(k);
+            if (val && (val.startsWith('{') || val.startsWith('['))) {
+              JSON.parse(val);
+            }
+          } catch (_) {
+            console.warn();
+            localStorage.removeItem(k);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('[GlobalErrorBoundary] Storage auto-sanitizer encountered non-fatal error:', e);
+    }
   }
 
   private handleHardReset = async () => {
@@ -192,7 +221,7 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
 
             <div className="pt-2 text-[10px] text-gray-500 flex items-center justify-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>نظام الاسترداد الذكي • Telegram Web Pro (Layer 184)</span>
+              <span>Telegram_anwer saif (DrKLO Official Build) • نظام الاسترداد الذكي</span>
             </div>
           </div>
         </div>

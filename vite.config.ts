@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'url';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -120,15 +122,16 @@ export default defineConfig((async ({ command }: any) => {
   }
 
   return {
+    root: __dirname,
     define: {
       global: 'globalThis',
     },
     plugins,
     resolve: {
       alias: {
-        '@': path.resolve(process.cwd(), '.'),
-        'canvas-confetti': path.resolve(process.cwd(), 'src/utils/confettiFallback.ts'),
-        ...(pwaLoaded ? {} : { 'virtual:pwa-register': path.resolve(process.cwd(), 'src/utils/pwaRegisterFallback.ts') }),
+        '@': path.resolve(__dirname, '.'),
+        'canvas-confetti': path.resolve(__dirname, 'src/utils/confettiFallback.ts'),
+        ...(pwaLoaded ? {} : { 'virtual:pwa-register': path.resolve(__dirname, 'src/utils/pwaRegisterFallback.ts') }),
       },
     },
     worker: {
@@ -141,6 +144,9 @@ export default defineConfig((async ({ command }: any) => {
       chunkSizeWarningLimit: 1200,
       rollupOptions: {
         output: {
+          entryFileNames: 'assets/[name]-[hash]-v1.0.1.js',
+          chunkFileNames: 'assets/[name]-[hash]-v1.0.1.js',
+          assetFileNames: 'assets/[name]-[hash]-v1.0.1.[ext]',
           manualChunks(id) {
             // GramJS MTProto core in a dedicated chunk
             if (id.includes('/node_modules/telegram/')) {

@@ -73,7 +73,7 @@
       (function() {
         try {
           // If a hard reset parameter is present, flush caches completely
-          if (window.location.search.includes('reset=')) {
+          if (window.location.search.includes('reset=') || window.location.search.includes('hard_refresh=') || window.location.search.includes('clear_cache=')) {
             localStorage.clear();
             sessionStorage.clear();
             if ('caches' in window) {
@@ -83,7 +83,7 @@
             }
           }
           // Validate basic JSON parsability of critical local storage keys
-          var testKeys = ['tg_multi_accounts_v3', 'app_settings', 'draft_message'];
+          var testKeys = ['tg_multi_accounts_v3', 'app_settings', 'draft_message', 'tg_state', 'telegram_session_string', 'tg_session_string', 'telegram-web-settings-storage', 'tg_telemetry_logs'];
           testKeys.forEach(function(k) {
             var val = localStorage.getItem(k);
             if (val && val.startsWith('{') || (val && val.startsWith('['))) {

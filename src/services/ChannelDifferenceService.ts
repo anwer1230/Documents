@@ -30,8 +30,18 @@ export interface ChannelDifferenceResult {
   error?: string;
 }
 
+export interface ChannelDifferenceDelegate {
+  processUpdates?: (updates: any[], hasOtherUpdates?: boolean) => void;
+  getDialogs?: () => any[];
+}
+
 export class ChannelDifferenceService {
   private static instances: Map<number, ChannelDifferenceService> = new Map();
+  private delegate?: ChannelDifferenceDelegate;
+
+  public setDelegate(delegate: ChannelDifferenceDelegate): void {
+    this.delegate = delegate;
+  }
 
   private currentAccount: number = 0;
   private activeSyncs: Map<string, Promise<ChannelDifferenceResult>> = new Map();
@@ -220,9 +230,9 @@ export class ChannelDifferenceService {
         // 3. Process other updates (e.g. edits, deletions, read inbox/outbox)
         if (data.otherUpdates && Array.isArray(data.otherUpdates) && data.otherUpdates.length > 0) {
           try {
-            const { MessagesController } = await import('../core/MessagesController');
-            const controller = MessagesController.getInstance(this.currentAccount);
-            controller.processUpdates(data.otherUpdates, true);
+            if (this.delegate?.processUpdates) {
+              this.delegate.processUpdates(data.otherUpdates, true);
+            }
           } catch (ctrlErr) {
             console.warn(`[ChannelDifferenceService] Failed to dispatch otherUpdates:`, ctrlErr);
           }
@@ -405,9 +415,7 @@ export class ChannelDifferenceService {
     console.log(`🔄 [ChannelDifferenceService ${this.currentAccount}] Running full supergroup offline recovery (offline ~${Math.round(offlineDurationMs / 1000)}s)...`);
 
     try {
-      const { MessagesController } = await import('../core/MessagesController');
-      const controller = MessagesController.getInstance(this.currentAccount);
-      const dialogs = controller.getDialogs();
+      const dialogs = this.delegate?.getDialogs ? this.delegate.getDialogs() : [];
 
       // Filter for supergroups and channels
       const supergroups = dialogs.filter((d) => this.isSupergroupOrChannel(d));
@@ -450,9 +458,7 @@ export class ChannelDifferenceService {
    */
   public async syncAllChannels(force: boolean = false): Promise<void> {
     try {
-      const { MessagesController } = await import('../core/MessagesController');
-      const controller = MessagesController.getInstance(this.currentAccount);
-      const dialogs = controller.getDialogs();
+      const dialogs = this.delegate?.getDialogs ? this.delegate.getDialogs() : [];
       const supergroups = dialogs.filter((d) => this.isSupergroupOrChannel(d));
 
       for (const sg of supergroups) {

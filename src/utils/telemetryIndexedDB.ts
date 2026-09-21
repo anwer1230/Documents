@@ -1,4 +1,4 @@
-import { TelemetryEvent, MAX_TELEMETRY_LOGS } from './telemetry';
+import { TelemetryEvent, MAX_TELEMETRY_LOGS } from './telemetryTypes';
 
 const DB_NAME = 'tg_telemetry_indexeddb';
 const DB_VERSION = 1;

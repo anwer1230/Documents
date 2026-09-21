@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Shield,
   ShieldCheck,
@@ -122,7 +122,7 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
       if (id === NotificationCenter.smartSenderWaitingIntervalStarted) {
         const chatId = args[0];
         const info = args[1] || {};
-        const chatTitle = chatsRef.current.find((c) => String(c.id) === String(chatId))?.title || `مجموعة ${chatId}`;
+        const chatTitle = chatsRef.current.find((c: any) => String(c.id) === String(chatId))?.title || `مجموعة ${chatId}`;
         const newItem: SalamActivityItem = {
           id: `salam_${chatId}_${Date.now()}`,
           chatId,
