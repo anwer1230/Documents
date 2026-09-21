@@ -478,6 +478,35 @@ export interface SenderBatch {
 }
 
 // 2. Monitor Types
+// قائمة الكلمات الـ 25 المعتمدة الثابتة لنظام المراقبة والرصد
+export const DEFAULT_MONITORED_KEYWORDS: string[] = [
+  'اريد مساعدة',
+  'ابي مساعدة',
+  'من يسوي تكليف',
+  'من يحل',
+  'عندي بحث',
+  'معي واجب',
+  'عندي اسايمنت',
+  'من يسوي اسايمنت',
+  'ابي سكليف',
+  'ابي عذر',
+  'من يسوي سكليف',
+  'ابي شخص مضمون',
+  'ابي مختص',
+  'هيليب',
+  'من يستطيع',
+  'تعرفون احد',
+  'تعرفون شخص',
+  'من يساعدني',
+  'من يعرف مختص',
+  'مين يعرف يحل واجب',
+  'من يحل واجبات الجامعه',
+  'أحتاج مساعدتكم',
+  'ابي احد يسوي بحث',
+  'مين يعرف مختص',
+  'من يعرف احد كويس',
+];
+
 export interface MonitorConfig {
   isEnabled: boolean;
   keywords: string[];
@@ -518,12 +547,13 @@ export interface DialogAuditStats {
   slowmode_count: number;
 }
 
-// 3. عنصر سجل الإرسال التشخيصي التفصيلي لكل مجموعة
+// 3. عنصر سجل الإرسال التشخيصي التفصيلي لكل مجموعة مع الأسباب الصريحة الحقيقية
 export interface BroadcastDiagnosticEntry {
   chatId: string;
   title: string;
-  status: 'sent' | 'failed' | 'skipped' | 'protected';
+  status: 'sent' | 'failed' | 'skipped' | 'protected' | 'withdrawn_low_interaction';
   reason?: string;
+  technicalCode?: string;
   messageId?: string;
   error?: string;
   timestamp: string;

@@ -31,7 +31,7 @@ import {
   ProtectionMode,
   GroupAuditResult,
   DialogAuditStats,
-  BroadcastDiagnosticEntry,
+  BroadcastDiagnosticEntry, DEFAULT_MONITORED_KEYWORDS,
   BroadcastProgressState,
 } from '../../types';
 import { SalamActivityLog } from '../SalamActivityLog';
@@ -466,10 +466,31 @@ export const SenderModal: React.FC = () => {
   };
 
   // Save Settings
+  // Save Settings
   const handleSaveSettings = () => {
+    const rawGroupList = groupsText
+      .split('\n')
+      .map((g) => g.trim())
+      .filter(Boolean);
+    const seenGroups = new Set<string>();
+    const groupList: string[] = [];
+    for (const g of rawGroupList) {
+      const normalizedKey = g.trim().toLowerCase()
+        .replace(/^(?:custom_|chat_|user_|channel_)+/i, '')
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (normalizedKey && !seenGroups.has(normalizedKey)) {
+        seenGroups.add(normalizedKey);
+        groupList.push(g);
+      }
+    }
+    if (groupList.length < rawGroupList.length) {
+      setGroupsText(groupList.join('\n'));
+    }
     localStorage.setItem('draft_message', messageText);
-    localStorage.setItem('draft_groups', groupsText);
-    showToast('💾 تم حفظ الإعدادات والمسودة بنجاح في الذاكرة', '✅');
+    localStorage.setItem('draft_groups', groupList.join('\n'));
+    showToast('💾 تم حفظ الإعدادات والمسودة وفرز الروابط بنجاح في الذاكرة', '✅');
   };
 
   // Send Now Execution
@@ -482,19 +503,32 @@ export const SenderModal: React.FC = () => {
       showToast('⚠️ يجب تحديد مجموعات أو وجهات الإرسال', '⚠️');
       return;
     }
-
-    localStorage.setItem('draft_message', messageText);
-    localStorage.setItem('draft_groups', groupsText);
-
-    setIsSending(true);
-    setSendStatusMsg(null);
-
-    const groupList = groupsText
+    // فرز الروابط واستبعاد أي مكرر لضمان إرسال رسالة واحدة لكل رابط فريد وحفظ رابط واحد فقط
+    const rawGroupList = groupsText
       .split('\n')
       .map((g) => g.trim())
       .filter(Boolean);
-
-    // Map targets to chat IDs or titles
+    const seenGroups = new Set<string>();
+    const groupList: string[] = [];
+    for (const g of rawGroupList) {
+      const normalizedKey = g.trim().toLowerCase()
+        .replace(/^(?:custom_|chat_|user_|channel_)+/i, '')
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (normalizedKey && !seenGroups.has(normalizedKey)) {
+        seenGroups.add(normalizedKey);
+        groupList.push(g);
+      }
+    }
+    if (groupList.length < rawGroupList.length) {
+      setGroupsText(groupList.join('\n'));
+      showToast('🧹 تم فرز وحذف ' + (rawGroupList.length - groupList.length) + ' رابط مكرر والاحتفاظ برابط واحد فريد لكل وجهة', '🎯');
+    }
+    localStorage.setItem('draft_message', messageText);
+    localStorage.setItem('draft_groups', groupList.join('\n'));
+    setIsSending(true);
+    setSendStatusMsg(null);
     const targetChatIds: string[] = groupList.map((g) => {
       // Clean leading bullet points (·, •, -, *), list numbers (1., 2-), quotes, and prefixes
       let cleaned = g.replace(/^(?:custom_|chat_|user_|channel_)+/i, '').trim();
@@ -564,28 +598,35 @@ export const SenderModal: React.FC = () => {
       if (t.status === 'sent') {
         friendlyReason = 'تم الإرسال بنجاح 🚀';
       } else if (friendlyReason.includes('CHAT_WRITE_FORBIDDEN')) {
-        friendlyReason = 'مقفل للمشرفين فقط (CHAT_WRITE_FORBIDDEN)';
+        friendlyReason = 'مقتصر على المشرفين فقط (CHAT_WRITE_FORBIDDEN)';
       } else if (friendlyReason.includes('USER_BANNED_IN_CHANNEL')) {
-        friendlyReason = 'أنت محظور من النشر في المجموعة (USER_BANNED)';
+        friendlyReason = 'أنت محظور من النشر في المجموعة (USER_BANNED_IN_CHANNEL)';
       } else if (friendlyReason.includes('CHANNEL_PRIVATE')) {
-        friendlyReason = 'القناة خاصة وتتطلب انضماماً أولاً';
+        friendlyReason = 'القناة أو المجموعة خاصة وتتطلب انضماماً أولاً (CHANNEL_PRIVATE)';
+      } else if (friendlyReason.includes('USER_NOT_PARTICIPANT')) {
+        friendlyReason = 'الحساب غير منضم للمجموعة (USER_NOT_PARTICIPANT)';
+      } else if (friendlyReason.includes('SLOWMODE_WAIT')) {
+        friendlyReason = 'وضع البطء مفعل بالمجموعة (SLOWMODE_WAIT)';
       } else if (friendlyReason.includes('FLOOD_WAIT')) {
-        friendlyReason = 'تم إيقاف الإرسال مؤقتاً لتجنب قيود تيليجرام';
+        friendlyReason = 'توقف مؤقت لتفادي قيود تيليجرام (FLOOD_WAIT)';
+      } else if (friendlyReason.includes('PEER_ID_INVALID') || friendlyReason.includes('CHANNEL_INVALID')) {
+        friendlyReason = 'الرابط أو المعرف غير صالح أو غير موجود (PEER_ID_INVALID)';
+      } else if (friendlyReason.includes('LOW_INTERACTION_WITHDRAWAL') || friendlyReason.includes('حذف رسالة السلام')) {
+        friendlyReason = 'تم سحب التمويه لقلة التفاعل تأميناً للحساب من الحظر';
       } else if (t.status === 'protected' || t.status === 'skipped') {
-        friendlyReason = 'تم التخطي لحماية الحساب من قيود المجموعة';
+        friendlyReason = 'تم التخطي لحماية الحساب من قيود المجموعة أو بوتات الحظر';
       } else {
-        friendlyReason = friendlyReason || 'فشل الإرسال أو قيود صلاحيات';
+        friendlyReason = friendlyReason || 'فشل الإرسال أو قيود صلاحيات النشر';
       }
-
       return {
         chatId: t.id,
         title: t.title,
         status: t.status === 'sent' ? 'sent' : (t.status === 'protected' ? 'protected' : (t.status === 'skipped' ? 'skipped' : 'failed')),
         reason: friendlyReason,
+        error: t.error,
         timestamp: new Date().toLocaleTimeString(),
       };
     });
-
     setDiagnosticEntries(diags);
     if (diags.length > 0) {
       setShowDiagnosticTable(true);

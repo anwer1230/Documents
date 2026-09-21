@@ -67,12 +67,10 @@ export const MONITOR_KEYWORDS: string[] = [
   'تعرفون شخص',
   'من يساعدني',
   'من يعرف مختص',
-  'ابي مختص',
   'مين يعرف يحل واجب',
   'من يحل واجبات الجامعه',
   'أحتاج مساعدتكم',
   'ابي احد يسوي بحث',
-  'عندي بحث',
   'مين يعرف مختص',
   'من يعرف احد كويس',
 ];
@@ -8818,6 +8816,61 @@ Please provide the concise summary.`;
     };
   }
 
+
+// =========================================================================
+// تفصيل وتصريح سبب فشل الإرسال الحقيقي لكل مجموعة وفق كود تيليجرام MTProto
+// =========================================================================
+function parseTelegramSendError(err: any): { friendlyReason: string; technicalCode: string } {
+  const errMsg = String(err?.errorMessage || err?.message || err || '');
+  let technicalCode = 'SEND_FAILED';
+  let friendlyReason = 'فشل الإرسال بسبب قيود غير معروفة';
+
+  if (errMsg.includes('CHAT_WRITE_FORBIDDEN')) {
+    technicalCode = 'CHAT_WRITE_FORBIDDEN';
+    friendlyReason = 'مقتصر على المشرفين فقط (ممنوع النشر للأعضاء العاديين)';
+  } else if (errMsg.includes('USER_BANNED_IN_CHANNEL')) {
+    technicalCode = 'USER_BANNED_IN_CHANNEL';
+    friendlyReason = 'أنت محظور أو مقيد من النشر في هذه المجموعة من قبل المشرفين';
+  } else if (errMsg.includes('CHANNEL_PRIVATE')) {
+    technicalCode = 'CHANNEL_PRIVATE';
+    friendlyReason = 'القناة أو المجموعة خاصة ويجب الانضمام إليها أولاً';
+  } else if (errMsg.includes('USER_NOT_PARTICIPANT')) {
+    technicalCode = 'USER_NOT_PARTICIPANT';
+    friendlyReason = 'الحساب غير منضم لهذه المجموعة أو القناة';
+  } else if (errMsg.includes('SLOWMODE_WAIT_')) {
+    const seconds = errMsg.match(/SLOWMODE_WAIT_(\d+)/)?.[1] || '';
+    technicalCode = 'SLOWMODE_WAIT';
+    friendlyReason = `وضع البطء مفعل في المجموعة (يجب الانتظار ${seconds} ثانية)`;
+  } else if (errMsg.includes('FLOOD_WAIT_')) {
+    const seconds = errMsg.match(/FLOOD_WAIT_(\d+)/)?.[1] || '';
+    technicalCode = 'FLOOD_WAIT';
+    friendlyReason = `قيود ضغط الإرسال من تيليجرام (FloodWait ${seconds} ثانية)`;
+  } else if (errMsg.includes('PEER_ID_INVALID') || errMsg.includes('CHANNEL_INVALID')) {
+    technicalCode = 'PEER_ID_INVALID';
+    friendlyReason = 'الرابط أو المعرف غير صالح أو المجموعة غير موجودة';
+  } else if (errMsg.includes('CHAT_ADMIN_REQUIRED')) {
+    technicalCode = 'CHAT_ADMIN_REQUIRED';
+    friendlyReason = 'تتطلب صلاحيات مشرف للنشر في هذه القناة';
+  } else if (errMsg.includes('SCHEDULE_TOO_MUCH')) {
+    technicalCode = 'SCHEDULE_TOO_MUCH';
+    friendlyReason = 'تم تجاوز الحد الأقصى للرسائل المجدولة في هذه المجموعة';
+  } else if (errMsg.includes('MSG_ID_INVALID')) {
+    technicalCode = 'MSG_ID_INVALID';
+    friendlyReason = 'معرف الرسالة غير صالح للتعديل أو الحذف';
+  } else if (errMsg.includes('AUTH_KEY_UNREGISTERED')) {
+    technicalCode = 'AUTH_KEY_UNREGISTERED';
+    friendlyReason = 'انتهت صلاحية الجلسة أو مفتاح المصادقة';
+  } else if (errMsg.includes('BOT_METHOD_INVALID')) {
+    technicalCode = 'BOT_METHOD_INVALID';
+    friendlyReason = 'إجراء غير مدعوم لنوع هذه المحادثة';
+  } else if (errMsg) {
+    technicalCode = errMsg.split(':')[0].substring(0, 35);
+    friendlyReason = `فشل الإرسال: ${errMsg}`;
+  }
+
+  return { friendlyReason, technicalCode };
+}
+
   function parseAndResolveGroupLinks(rawTextOrArray: string | string[]): ResolvedGroupEntity[] {
     let lines: string[] = [];
     if (Array.isArray(rawTextOrArray)) {
@@ -8829,12 +8882,19 @@ Please provide the concise summary.`;
         .filter((l) => l.length > 0);
     }
 
+    // فرز الروابط واستبعاد أي رابط مكرر بدقة وحفظ رابط واحد فريد فقط
     const seen = new Set<string>();
     const resolved: ResolvedGroupEntity[] = [];
 
     for (const line of lines) {
+      if (!line || !line.trim()) continue;
       const target = resolveTelegramGroupLink(line);
-      const key = (target.identifier || target.raw).toLowerCase();
+      if (!target.identifier && !target.raw) continue;
+      // مفتاح توحيد المعرفات لمنع الازدواج
+      const key = (target.identifier || target.raw).trim().toLowerCase()
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
       if (key && !seen.has(key)) {
         seen.add(key);
         resolved.push(target);
@@ -8872,12 +8932,14 @@ Please provide the concise summary.`;
   app.post('/api/save_settings', (req, res) => {
     const data = req.body || {};
     const rawGroups = data.groups || '';
+    // فرز الروابط واستبعاد أي رابط مكرر بدقة وحفظ رابط واحد فريد فقط
     const resolvedEntities = parseAndResolveGroupLinks(rawGroups);
     const resolvedIdentifiers = resolvedEntities.map((e) => e.identifier);
+    const deduplicatedGroups = resolvedEntities.map((e) => e.normalizedUrl || e.raw);
 
     savedSendSettings = {
       message: data.message || '',
-      groups: Array.isArray(rawGroups) ? rawGroups : (rawGroups as string).split('\n').filter(Boolean),
+      groups: deduplicatedGroups,
       send_to_all: Boolean(data.send_to_all),
       dispatch_type: data.dispatch_type === 'scheduled' ? 'scheduled' : 'manual',
       schedule_time: data.schedule_time || '',
@@ -8887,10 +8949,11 @@ Please provide the concise summary.`;
 
     res.json({
       success: true,
-      message: `تم حفظ الإعدادات وقراءة ${resolvedEntities.length} مجموعة ومعرف بنجاح`,
+      message: `تم حفظ الإعدادات وفرز الروابط بنجاح: تم الاحتفاظ بـ ${resolvedEntities.length} مجموعة فريدة ومنع التكرار تماماً`,
       settings: savedSendSettings,
       resolvedEntities,
       resolvedIdentifiers,
+      count: resolvedEntities.length,
     });
   });
 
@@ -9289,11 +9352,30 @@ Please provide the concise summary.`;
   }> {
     const { client, targetEntities, resolvedLabels, message, images, smart_wait_seconds, smart_required_messages } = params;
     const sentResults: Array<{ target: string; messageId: number; success: boolean; isProtected?: boolean; salamMode?: boolean }> = [];
-    const failedResults: Array<{ target: string; error: string }> = [];
+    const failedResults: Array<{ target: string; error: string; reason?: string; technicalCode?: string }> = [];
+
+    // فرز وتجريد الوجهات لمنع إرسال أكثر من رسالة واحدة لكل رابط في نفس الدورة
+    const uniqueEntities: any[] = [];
+    const uniqueLabels: string[] = [];
+    const seenLabels = new Set<string>();
 
     for (let i = 0; i < targetEntities.length; i++) {
-      const entity = targetEntities[i];
-      const label = resolvedLabels[i] || `entity_${i}`;
+      const ent = targetEntities[i];
+      const lbl = resolvedLabels[i] || `entity_${i}`;
+      const normKey = lbl.trim().toLowerCase()
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (!seenLabels.has(normKey)) {
+        seenLabels.add(normKey);
+        uniqueEntities.push(ent);
+        uniqueLabels.push(lbl);
+      }
+    }
+
+    for (let i = 0; i < uniqueEntities.length; i++) {
+      const entity = uniqueEntities[i];
+      const label = uniqueLabels[i] || `entity_${i}`;
       try {
         const isProtected = await isGroupProtected(client, entity);
         console.log(`[SendNow] Target "${label}" protection status: ${isProtected ? 'PROTECTED (محمية ببوتات حماية)' : 'UNPROTECTED (غير محمية)'}`);
@@ -9457,11 +9539,13 @@ Please provide the concise summary.`;
           }
         }
       } catch (sendErr: any) {
-        const errMsg = sendErr?.errorMessage || sendErr?.message || String(sendErr);
-        console.warn(`[SendNow] Failed transmitting to ${label}:`, errMsg);
+        const { friendlyReason, technicalCode } = parseTelegramSendError(sendErr);
+        console.warn(`[SendNow] Failed transmitting to ${label}:`, technicalCode, friendlyReason);
         failedResults.push({
           target: label,
-          error: errMsg,
+          error: `${friendlyReason} (${technicalCode})`,
+          reason: friendlyReason,
+          technicalCode,
         });
       }
     }
@@ -11090,16 +11174,40 @@ Please provide the concise summary.`;
     }
 
     const batchId = `batch_${Date.now()}`;
-    const targetResults: Array<{ chatId: string; messageId: string; chatTitle: string; status: string }> = [];
+    const targetResults: Array<{
+      chatId: string;
+      messageId: string;
+      chatTitle: string;
+      status: string;
+      error?: string;
+      reason?: string;
+      technicalCode?: string;
+    }> = [];
 
-    for (let i = 0; i < targetChatIds.length; i++) {
-      const chatId = targetChatIds[i];
+    // فرز الوجهات واستبعاد المكرر لضمان إرسال رسالة واحدة فقط لكل رابط في كل دورة
+    const uniqueTargetChatIds: string[] = [];
+    const seenBatchChatKeys = new Set<string>();
+    for (const rawId of targetChatIds) {
+      if (!rawId) continue;
+      const cleanKey = String(rawId).trim().toLowerCase()
+        .replace(/^(?:custom_|chat_|user_|channel_)+/i, '')
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (cleanKey && !seenBatchChatKeys.has(cleanKey)) {
+        seenBatchChatKeys.add(cleanKey);
+        uniqueTargetChatIds.push(rawId);
+      }
+    }
+
+    for (let i = 0; i < uniqueTargetChatIds.length; i++) {
+      const chatId = uniqueTargetChatIds[i];
       io.emit('broadcast_progress', {
         isActive: true,
         currentGroup: chatId,
         currentIndex: i + 1,
-        totalGroups: targetChatIds.length,
-        percent: Math.round((i / targetChatIds.length) * 100),
+        totalGroups: uniqueTargetChatIds.length,
+        percent: Math.round((i / uniqueTargetChatIds.length) * 100),
         sentCount: targetResults.filter((t) => t.status === 'success').length,
         failedCount: targetResults.filter((t) => t.status === 'failed').length,
         skippedCount: targetResults.filter((t) => t.status === 'skipped' || t.status === 'protected' || t.status === 'withdrawn_low_interaction').length,
@@ -11278,12 +11386,16 @@ Please provide the concise summary.`;
           });
         }
       } catch (sendErr: any) {
-        console.warn(`[SendBatch] Error sending to ${chatId}:`, sendErr?.message || sendErr);
+        const { friendlyReason, technicalCode } = parseTelegramSendError(sendErr);
+        console.warn(`[SendBatch] Error sending to ${chatId}:`, technicalCode, friendlyReason);
         targetResults.push({
           chatId,
           messageId: '0',
           chatTitle: chatId,
           status: 'failed',
+          error: `${friendlyReason} (${technicalCode})`,
+          reason: friendlyReason,
+          technicalCode,
         });
       }
     }
@@ -11312,10 +11424,10 @@ Please provide the concise summary.`;
     const successCount = successTargets.length;
     const failedCount = targetResults.filter((t) => t.status === 'failed').length;
     const skippedCount = targetResults.filter((t) => t.status === 'skipped' || t.status === 'protected' || t.status === 'withdrawn_low_interaction').length;
-    const totalTargets = targetChatIds.length;
+    const totalTargets = uniqueTargetChatIds.length;
     const failedList = targetResults
       .filter((t) => t.status !== 'success')
-      .map((t) => `• ${t.chatTitle || t.chatId}: ${t.status === 'withdrawn_low_interaction' ? 'تم الحذف لقلة التفاعل لتأمين الحساب' : (t.status === 'skipped' || t.status === 'protected' ? 'تم التخطي لحماية الحساب من قيود المجموعة' : 'فشل الإرسال أو قيود صلاحيات')}`);
+      .map((t) => `• ${t.chatTitle || t.chatId}: ${t.reason || t.error || (t.status === 'withdrawn_low_interaction' ? 'تم الحذف لقلة التفاعل لتأمين الحساب' : 'فشل الإرسال أو قيود صلاحيات')}`);
 
     await dispatchReportToSavedMessages({
       client,
@@ -11440,6 +11552,22 @@ Please provide the concise summary.`;
       return res.status(400).json({ success: false, message: 'النص وقائمة المجموعات مطلوبة للجدولة' });
     }
 
+    // فرز وحذف الروابط المكررة وضمان إرسال رسالة واحدة فقط لكل رابط فريد في كل دورة
+    const seenSchedChatKeys = new Set<string>();
+    const cleanScheduledTargets: string[] = [];
+    for (const rawId of targetChatIds) {
+      if (!rawId) continue;
+      const cleanKey = String(rawId).trim().toLowerCase()
+        .replace(/^(?:custom_|chat_|user_|channel_)+/i, '')
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (cleanKey && !seenSchedChatKeys.has(cleanKey)) {
+        seenSchedChatKeys.add(cleanKey);
+        cleanScheduledTargets.push(rawId);
+      }
+    }
+
     const durationHours = Math.max(0, Number(data.durationHours || data.duration_hours) || 0);
     const intervalVal = Math.max(1, Number(intervalMinutes));
 
@@ -11448,7 +11576,7 @@ Please provide the concise summary.`;
     scheduledState = {
       active: true,
       text,
-      targetChatIds,
+      targetChatIds: cleanScheduledTargets,
       intervalMinutes: intervalVal,
       durationHours,
       startTime: Date.now(),
@@ -11466,7 +11594,7 @@ Please provide the concise summary.`;
     // Trigger first execution in background
     executeServerSendBatch({
       text,
-      targetChatIds,
+      targetChatIds: cleanScheduledTargets,
       protectionMode,
       smart_required_messages: scheduledState.smart_required_messages,
       smart_wait_seconds: scheduledState.smart_wait_seconds,

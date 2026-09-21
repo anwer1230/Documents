@@ -18,11 +18,11 @@ import {
 import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
 import { notificationsController } from '../../core/NotificationsController';
-import { MonitorAlert } from '../../types';
+import { MonitorAlert, DEFAULT_MONITORED_KEYWORDS } from '../../types';
 
 export const MonitorModal: React.FC = () => {
   const { activeModal, setActiveModal, showToast, jumpToMessage, openPrivateChat, chats, messages } = useTelegram();
-  const [keywordsText, setKeywordsText] = useState('');
+  const [keywordsText, setKeywordsText] = useState(() => DEFAULT_MONITORED_KEYWORDS.join('\n'));
   const [isMonitoring, setIsMonitoring] = useState(true);
   const [alerts, setAlerts] = useState<MonitorAlert[]>([]);
   const [sendToSaved, setSendToSaved] = useState(true);
@@ -33,8 +33,12 @@ export const MonitorModal: React.FC = () => {
     fetch('/api/alerts/status')
       .then((r) => r.json())
       .then((data) => {
-        if (data?.success && Array.isArray(data.keywords)) {
+        if (data?.success && Array.isArray(data.keywords) && data.keywords.length > 0) {
           setKeywordsText(data.keywords.join('\n'));
+        } else {
+          setKeywordsText(DEFAULT_MONITORED_KEYWORDS.join('\n'));
+        }
+        if (data?.success) {
           if (typeof data.monitoringEnabled === 'boolean') {
             setIsMonitoring(data.monitoringEnabled);
             notificationsService.setMonitorConfig({ isEnabled: data.monitoringEnabled });

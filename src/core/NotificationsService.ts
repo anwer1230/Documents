@@ -28,6 +28,7 @@ import {
   RotatingSendStatus,
   RotatingSendLog,
   BroadcastProgressState,
+  DEFAULT_MONITORED_KEYWORDS,
 } from '../types';
 import { backgroundSyncService } from './BackgroundSyncService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
@@ -69,35 +70,7 @@ export const PERMANENT_ACADEMIC_KEYWORDS: string[] = [
 ];
 
 // Hardcoded monitor keywords
-export const MONITOR_KEYWORDS: string[] = [
-  'اريد مساعدة',
-  'ابي مساعدة',
-  'من يسوي تكليف',
-  'من يحل',
-  'عندي بحث',
-  'معي واجب',
-  'عندي اسايمنت',
-  'من يسوي اسايمنت',
-  'ابي سكليف',
-  'ابي عذر',
-  'من يسوي سكليف',
-  'ابي شخص مضمون',
-  'ابي مختص',
-  'هيليب',
-  'من يستطيع',
-  'تعرفون احد',
-  'تعرفون شخص',
-  'من يساعدني',
-  'من يعرف مختص',
-  'ابي مختص',
-  'مين يعرف يحل واجب',
-  'من يحل واجبات الجامعه',
-  'أحتاج مساعدتكم',
-  'ابي احد يسوي بحث',
-  'عندي بحث',
-  'مين يعرف مختص',
-  'من يعرف احد كويس',
-];
+export const MONITOR_KEYWORDS: string[] = [...DEFAULT_MONITORED_KEYWORDS];
 
 export function normalizeArabicText(text: string): string {
   if (!text) return '';
@@ -347,6 +320,23 @@ export class NotificationsService {
     onProgress?: (progress: BroadcastProgressState) => void;
   }): Promise<SenderBatch> {
     const batchId = `batch_${Date.now()}`;
+
+    // Deduplicate targetChatIds: guarantee strictly ONE message per link/group per cycle
+    const uniqueRawIds: string[] = [];
+    const seenRawIds = new Set<string>();
+    for (const rawId of params.targetChatIds) {
+      if (!rawId) continue;
+      const cleanKey = String(rawId).trim().toLowerCase()
+        .replace(/^(?:custom_|chat_|user_|channel_)+/i, '')
+        .replace(/^https?:\/\/t(?:elegram)?\.me\//, '')
+        .replace(/^@/, '')
+        .replace(/\/+$/, '');
+      if (cleanKey && !seenRawIds.has(cleanKey)) {
+        seenRawIds.add(cleanKey);
+        uniqueRawIds.push(rawId);
+      }
+    }
+
     const targetObjs: {
       id: string;
       title: string;
@@ -354,7 +344,7 @@ export class NotificationsService {
       status: 'sent' | 'failed' | 'skipped' | 'protected';
       messageId: string;
       error?: string;
-    }[] = params.targetChatIds.map((id) => {
+    }[] = uniqueRawIds.map((id) => {
       const cleanId = String(id).replace(/^(?:custom_|chat_)+/i, '').trim();
       const found = params.allChats.find((c) => c.id === id || c.id === cleanId);
       return {
@@ -439,9 +429,12 @@ export class NotificationsService {
           for (const resTarget of data.targets) {
             const foundObj = targetObjs.find((t) => t.id === resTarget.chatId);
             if (foundObj) {
-              foundObj.status = resTarget.status === 'success' ? 'sent' : 'failed';
+              foundObj.status = resTarget.status === 'success' ? 'sent' : (resTarget.status === 'withdrawn_low_interaction' || resTarget.status === 'skipped' || resTarget.status === 'protected' ? 'protected' : 'failed');
               if (resTarget.messageId && resTarget.messageId !== '0') {
                 foundObj.messageId = resTarget.messageId;
+              }
+              if (resTarget.error || resTarget.reason) {
+                foundObj.error = resTarget.error || resTarget.reason;
               }
             }
           }

@@ -5667,9 +5667,18 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // 1. Immediately update NotificationsService store for the Monitor UI
       notificationsService.addMonitorAlert(alertItem);
 
-      // 2. Play alert chime
+      // 2. Play alert chime and Arabic Speech Alert (TTS)
       if (settings.soundEffects) {
         telegramAudio.playMessageChime();
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          try {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(`تنبيه مراقبة: تم رصد كلمة ${alertItem.keyword} في مجموعة ${alertItem.sourceChatTitle}`);
+            utterance.lang = 'ar-SA';
+            utterance.rate = 1.0;
+            window.speechSynthesis.speak(utterance);
+          } catch (_) {}
+        }
       }
 
       // 3. Show In-App Notification Banner
