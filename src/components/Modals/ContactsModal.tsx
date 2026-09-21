@@ -295,7 +295,7 @@ export const ContactsModal: React.FC<ContactsModalProps> = ({ isOpen, onClose })
                       <div className="flex items-center gap-1">
                         <button
                           onClick={() => {
-                            setActiveChatId('chat_sarah');
+                            setActiveChatId(contact.id);
                             onClose();
                           }}
                           className="p-2 rounded-xl text-sky-400 hover:bg-sky-500/10 transition-colors"

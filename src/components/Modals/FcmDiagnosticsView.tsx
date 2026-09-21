@@ -46,7 +46,7 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
   const [showRawJson, setShowRawJson] = useState(false);
   const [customTitle, setCustomTitle] = useState('Telegram MTProto');
   const [customBody, setCustomBody] = useState('New incoming message notification');
-  const [selectedTargetDialog, setSelectedTargetDialog] = useState<string>(activeChatId || (chats[0]?.id || 'chat_durov'));
+  const [selectedTargetDialog, setSelectedTargetDialog] = useState<string>(activeChatId || (chats[0]?.id || ''));
   const [isSimulating, setIsSimulating] = useState(false);
 
   const copyToken = () => {
@@ -60,9 +60,10 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
 
   const handleTestPush = (mode: 'active' | 'custom' | 'background') => {
     setIsSimulating(true);
-    let targetId = activeChatId || 'chat_durov';
-    let title = 'Pavel Durov';
-    let body = 'Simulated Telegram push notification via FCM';
+    const activeChat = chats.find((c) => c.id === activeChatId) || chats[0];
+    let targetId = activeChat ? activeChat.id : '';
+    let title = activeChat ? activeChat.title : 'Telegram';
+    let body = 'Incoming MTProto message notification via FCM';
 
     if (mode === 'custom') {
       targetId = selectedTargetDialog;
@@ -71,8 +72,8 @@ export const FcmDiagnosticsView: React.FC<{ onBack: () => void }> = ({ onBack })
     } else if (mode === 'background') {
       // Pick a chat that is NOT currently open
       const otherChat = chats.find((c) => c.id !== activeChatId) || chats[0];
-      targetId = otherChat ? otherChat.id : 'chat_other';
-      title = otherChat ? otherChat.title : 'External Contact';
+      targetId = otherChat ? otherChat.id : '';
+      title = otherChat ? otherChat.title : 'Telegram';
       body = 'Background alert received while looking at another chat';
     }
 

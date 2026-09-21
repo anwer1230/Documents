@@ -50,18 +50,17 @@ export const AddGroupModal: React.FC<AddGroupModalProps> = ({
       return;
     }
 
-    // Create simulated new group with healthy initial latency
     const newGroup: TelegramGroup = {
-      id: `-100${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+      id: raw.startsWith('-100') ? raw : `-100${Date.now()}`,
       title: raw.startsWith('https://') || raw.startsWith('@') ? `مجموعة ${cleanKey}` : raw,
       username: cleanKey.length <= 32 && !cleanKey.startsWith('+') ? cleanKey : undefined,
       type: 'supergroup',
-      memberCount: Math.floor(1500 + Math.random() * 8500),
-      onlineCount: Math.floor(80 + Math.random() * 400),
+      memberCount: 0,
+      onlineCount: 0,
       status: 'active',
       connectionHealth: 'excellent',
       permissionStatus: 'can_post',
-      latencyMs: Math.floor(35 + Math.random() * 45),
+      latencyMs: 0,
       lastPingTimestamp: Date.now(),
       lastActivityTime: 'الآن',
       unreadCount: 0,
@@ -72,7 +71,7 @@ export const AddGroupModal: React.FC<AddGroupModalProps> = ({
         canAddWebPagePreviews: true,
         slowmodeDelaySeconds: 0,
       },
-      statusReason: 'تم الفحص بنجاح - اتصال سليم وصلاحيات النشر متوفرة',
+      statusReason: 'تمت الإضافة بنجاح',
       inviteLink: raw.startsWith('http') ? raw : `https://t.me/${cleanKey}`,
       isMonitored: true,
     };

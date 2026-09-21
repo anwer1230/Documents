@@ -63,7 +63,6 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
   const activitiesLength = activities.length;
   const latestActivityTimestamp = activities[0]?.timestamp || "";
@@ -332,157 +331,6 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Simulation runner to demonstrate the real-time status in UI
-  const handleRunSimulation = () => {
-    if (isSimulating) return;
-    setIsSimulating(true);
-
-    const simId1 = `sim_active_${Date.now()}`;
-    const simId2 = `sim_inactive_${Date.now()}`;
-
-    // Item 1: Active group (will get edited)
-    const activeItem: SalamActivityItem = {
-      id: simId1,
-      chatId: '-1001889201923',
-      chatTitle: 'مجموعة المطورين والتقنية (نشطة)',
-      greetingMsgId: Math.floor(1000 + Math.random() * 9000),
-      status: 'greeting_sent',
-      statusLabel: 'تم إرسال السلام كتمويه أولي 🚀',
-      interactionCount: 0,
-      requiredInteractions: 3,
-      remainingSeconds: 30,
-      totalWaitSeconds: 30,
-      originalText: '🔥 عرض خاص لجميع خدمات البرمجة والتطوير السحابي',
-      details: 'تم إرسال "السلام عليكم" وبدء عداد الـ 30 ثانية الذكي.',
-      timestamp: new Date().toISOString(),
-      decision: 'pending',
-    };
-
-    // Item 2: Inactive group (will get deleted)
-    const inactiveItem: SalamActivityItem = {
-      id: simId2,
-      chatId: '-1001992019481',
-      chatTitle: 'جروب الإعلانات العامة (صامتة)',
-      greetingMsgId: Math.floor(1000 + Math.random() * 9000),
-      status: 'greeting_sent',
-      statusLabel: 'تم إرسال السلام كتمويه أولي 🚀',
-      interactionCount: 0,
-      requiredInteractions: 3,
-      remainingSeconds: 30,
-      totalWaitSeconds: 30,
-      originalText: '📢 إعلان حصري لفرص العمل والتوظيف',
-      details: 'تم إرسال "السلام عليكم" وبدء مراقبة الصمت.',
-      timestamp: new Date().toISOString(),
-      decision: 'pending',
-    };
-
-    setActivities((prev) => [activeItem, inactiveItem, ...prev]);
-    showToast('🚀 بدأت محاكاة تجريبية حية لوضع السلام (مجموعتان)', '🧪');
-
-    // Simulate Step 1: waiting after 1s
-    setTimeout(() => {
-      setActivities((prev) =>
-        prev.map((i) =>
-          i.id === simId1 || i.id === simId2
-            ? {
-                ...i,
-                status: 'waiting_interaction',
-                statusLabel: 'في انتظار تفاعل الأعضاء (28ث متبقية)',
-                remainingSeconds: 28,
-              }
-            : i
-        )
-      );
-    }, 1500);
-
-    // Simulate Step 2: Message 1 in active group after 3s
-    setTimeout(() => {
-      setActivities((prev) =>
-        prev.map((i) =>
-          i.id === simId1
-            ? {
-                ...i,
-                status: 'interaction_detected',
-                statusLabel: 'تفاعل جديد (1/3) ⚡',
-                interactionCount: 1,
-                remainingSeconds: 24,
-                lastMessageSender: 'أحمد علي',
-                lastMessageSnippet: 'وعليكم السلام ورحمة الله، مرحباً بك',
-                details: 'أحمد علي: "وعليكم السلام ورحمة الله، مرحباً بك"',
-              }
-            : i.id === simId2
-            ? { ...i, remainingSeconds: 24, statusLabel: 'في انتظار تفاعل الأعضاء (24ث متبقية)' }
-            : i
-        )
-      );
-    }, 3500);
-
-    // Simulate Step 3: Message 2 in active group after 5s
-    setTimeout(() => {
-      setActivities((prev) =>
-        prev.map((i) =>
-          i.id === simId1
-            ? {
-                ...i,
-                status: 'interaction_detected',
-                statusLabel: 'تفاعل جديد (2/3) ⚡',
-                interactionCount: 2,
-                remainingSeconds: 18,
-                lastMessageSender: 'خالد محمد',
-                lastMessageSnippet: 'أهلاً وسهلاً، كيف نقدر نساعدك؟',
-                details: 'خالد محمد: "أهلاً وسهلاً، كيف نقدر نساعدك؟"',
-              }
-            : i.id === simId2
-            ? { ...i, remainingSeconds: 18, statusLabel: 'في انتظار تفاعل الأعضاء (18ث متبقية)' }
-            : i
-        )
-      );
-    }, 5500);
-
-    // Simulate Step 4: Message 3 in active group -> THRESHOLD REACHED -> EDIT!
-    setTimeout(() => {
-      setActivities((prev) =>
-        prev.map((i) =>
-          i.id === simId1
-            ? {
-                ...i,
-                status: 'message_edited',
-                statusLabel: 'تم تعديل الرسالة بنجاح ✍️ (نشطة)',
-                interactionCount: 3,
-                remainingSeconds: 0,
-                decision: 'edit',
-                lastMessageSender: 'سارة التقنية',
-                lastMessageSnippet: 'تفضل شاركنا استفسارك يا غالي',
-                details: 'المجموعة نشطة جداً (3 تفاعلات موثقة). تم تعديل "السلام عليكم" إلى الإعلان الأصلي بنجاح!',
-              }
-            : i
-        )
-      );
-      showToast('✍️ تم تعديل رسالة السلام في المجموعة النشطة بنجاح', '✅');
-    }, 7500);
-
-    // Simulate Step 5: Inactive group countdown ends -> NO INTERACTIONS -> DELETE!
-    setTimeout(() => {
-      setActivities((prev) =>
-        prev.map((i) =>
-          i.id === simId2
-            ? {
-                ...i,
-                status: 'message_deleted',
-                statusLabel: 'تم حذف رسالة السلام تلقائياً 🗑️ (خاملة)',
-                interactionCount: 0,
-                remainingSeconds: 0,
-                decision: 'delete',
-                details: 'لم يرد أي تفاعل خلال فترة الانتظار (0/3). تم حذف الرسالة لحماية حسابك من الإبلاغات أو رصد البوتات.',
-              }
-            : i
-        )
-      );
-      showToast('🗑️ تم سحب رسالة السلام في المجموعة الصامتة لتأمين الحساب', '🛡️');
-      setIsSimulating(false);
-    }, 9500);
-  };
-
   if (!isOpen) return null;
 
   const content = (
@@ -648,19 +496,8 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
           </button>
         </div>
 
-        {/* Buttons: Simulation & Clear */}
+        {/* Button: Clear */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleRunSimulation}
-            disabled={isSimulating}
-            className="px-2.5 py-1 rounded-lg text-[0.7rem] font-bold text-amber-950 bg-amber-400 hover:bg-amber-300 disabled:opacity-50 flex items-center gap-1 transition-all active:scale-95 shadow-sm"
-            title="تجربة تفاعلية لمحاكاة مجموعتين (واحدة نشطة والأخرى خاملة)"
-          >
-            <Sparkles className="w-3 h-3 text-amber-950" />
-            <span>{isSimulating ? 'جاري الفحص...' : 'فحص تجريبي حي'}</span>
-          </button>
-
           {activities.length > 0 && (
             <button
               type="button"
@@ -682,17 +519,9 @@ export const SalamActivityLog: React.FC<SalamActivityLogProps> = ({
               <Shield className="w-6 h-6" />
             </div>
             <h6 className="text-[0.85rem] font-bold text-white mb-1">لا توجد سجلات نشاط حالياً</h6>
-            <p className="text-[0.72rem] text-gray-400 max-w-sm m-0 mb-3">
-              يتم تسجيل أنشطة وضع السلام تلقائياً فور بدء إرسال الحملات الذكية، أو يمكنك تشغيل فحص تجريبي حي الآن.
+            <p className="text-[0.72rem] text-gray-400 max-w-sm m-0">
+              يتم تسجيل أنشطة وضع السلام تلقائياً وفورياً فور بدء إرسال الحملات الذكية وتفاعل الأعضاء الفعلي في المجموعات.
             </p>
-            <button
-              type="button"
-              onClick={handleRunSimulation}
-              className="px-3.5 py-1.5 rounded-lg text-[0.75rem] font-bold text-amber-950 bg-amber-400 hover:bg-amber-300 flex items-center gap-1.5 shadow-sm transition-all"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>تشغيل محاكاة تجريبية حية الآن</span>
-            </button>
           </div>
         ) : (
           filteredActivities.map((item) => {

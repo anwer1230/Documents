@@ -31,11 +31,8 @@ import {
 } from '../types';
 import {
   CURRENT_USER,
-  DEFAULT_ACCOUNTS,
   DEFAULT_FOLDERS,
   DEFAULT_TELEGRAM_API_CONFIG,
-  INITIAL_CHATS,
-  INITIAL_MESSAGES,
 } from '../data/mockTelegramData';
 import { telegramAudio } from '../utils/audioNotification';
 import { audioService } from '../services/audioService';
@@ -548,8 +545,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (cachedFromStore && cachedFromStore.length > 0) {
       return cachedFromStore;
     }
-    chatStore.saveChats(INITIAL_CHATS);
-    return INITIAL_CHATS;
+    return [];
   });
 
   const [messages, setMessages] = useState<Record<string, Message[]>>(() => {
@@ -563,10 +559,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (cachedMsgs && Object.keys(cachedMsgs).length > 0) {
       return cachedMsgs;
     }
-    Object.entries(INITIAL_MESSAGES).forEach(([cId, mList]) => {
-      chatStore.saveMessages(cId, mList);
-    });
-    return INITIAL_MESSAGES;
+    return {};
   });
 
   // Synchronize mutable refs safely after state initialization (Variable Scope & Hoisting compliance)
@@ -804,69 +797,10 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const saved = localStorage.getItem('tg_captured_links_v1');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {}
-    return [
-      {
-        id: 'link_1',
-        url: 'https://t.me/telegram',
-        sourceChatId: 'chat_durov',
-        sourceChatTitle: 'Pavel Durov',
-        sourceSenderName: 'Pavel Durov',
-        detectedAt: '10:15 AM',
-        type: 'telegram_channel',
-        extractedTitle: 'Telegram News & Official',
-        memberCount: 9400000,
-        joined: true,
-        joinedAt: '10:15 AM',
-        autoJoined: true,
-        status: 'joined',
-      },
-      {
-        id: 'link_2',
-        url: 'https://t.me/toncoin',
-        sourceChatId: 'chat_crypto',
-        sourceChatTitle: 'TON & Web3 Developers',
-        sourceSenderName: 'Alex Developer',
-        detectedAt: '11:30 AM',
-        type: 'telegram_channel',
-        extractedTitle: 'The Open Network (TON)',
-        memberCount: 2800000,
-        joined: true,
-        joinedAt: '11:30 AM',
-        autoJoined: true,
-        status: 'joined',
-      },
-      {
-        id: 'link_3',
-        url: 'https://t.me/+invite_tg_developers_hub',
-        sourceChatId: 'chat_general',
-        sourceChatTitle: 'Telegram Global Community',
-        sourceSenderName: 'Sarah Connor',
-        detectedAt: '12:05 PM',
-        type: 'telegram_group',
-        extractedTitle: 'Telegram MTProto Developers Hub',
-        memberCount: 45200,
-        joined: false,
-        autoJoined: false,
-        status: 'pending',
-      },
-      {
-        id: 'link_4',
-        url: 'https://t.me/major_official',
-        sourceChatId: 'chat_botfather',
-        sourceChatTitle: 'BotFather',
-        sourceSenderName: 'BotFather',
-        detectedAt: '01:20 PM',
-        type: 'telegram_channel',
-        extractedTitle: 'Major Stars & Games Channel',
-        memberCount: 1540000,
-        joined: false,
-        autoJoined: false,
-        status: 'pending',
-      },
-    ];
+    return [];
   });
 
   const [autoJoinLinksEnabled, setAutoJoinLinksEnabled] = useState<boolean>(() => {
@@ -1786,11 +1720,11 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const testSimulateFcmPush = (customParams?: Partial<FcmPushPacket>) => {
-    const dialogId = customParams?.dialog_id || activeChatId || 'chat_durov';
+    const dialogId = customParams?.dialog_id || activeChatId || chats[0]?.id || '';
     const targetChat = chats.find((c) => c.id === dialogId);
-    const title = customParams?.title || targetChat?.title || 'Pavel Durov';
+    const title = customParams?.title || targetChat?.title || 'Telegram';
     const body = customParams?.body || 'Test MTProto FCM push message received in background 🚀';
-    const senderId = customParams?.sender_id || targetChat?.id || 'durov';
+    const senderId = customParams?.sender_id || targetChat?.id || 'sender';
 
     // Broadcast through service worker simulation
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -2903,8 +2837,8 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       activeChat?.title || 'Chat'
     );
 
-    // Trigger real-time interactive response for bots, contacts, AI, and groups
-    if (activeChatId && activeChatId !== 'chat_saved_messages') {
+    // Trigger real-time response only for bots
+    if (activeChatId && activeChat?.isBot) {
       triggerIncomingChatReply(activeChatId, text, activeChat);
     }
   };
@@ -3304,10 +3238,7 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             return updated;
           });
         } else {
-          setMessages((prev) => ({
-            ...INITIAL_MESSAGES,
-            ...prev,
-          }));
+          setMessages((prev) => prev);
         }
 
         if (data.sessionString) {
@@ -3394,9 +3325,9 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       console.warn('[Sync] Cloud sync error (Cache-First offline fallback):', err);
       setIsOffline(true);
       setNetworkStatus('offline');
-      // Guarantee chat store is never empty
+      // Guarantee chat store is never corrupted
       const localCached = chatStore.getCachedChats();
-      setChats((prev) => (prev && prev.length > 0 ? prev : (localCached && localCached.length > 0 ? localCached : INITIAL_CHATS)));
+      setChats((prev) => (prev && prev.length > 0 ? prev : (localCached && localCached.length > 0 ? localCached : [])));
       showToast(settings.language === 'ar' ? 'وضع عدم الاتصال: تم تحميل المحادثات المحفوظة محلياً' : 'Offline mode: viewing locally cached chats', 'ℹ️');
     } finally {
       setIsSyncing(false);
@@ -4578,63 +4509,6 @@ export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setForwardingMessage(null);
     setActiveModal('none');
     showToast(settings.language === 'ar' ? 'تم تحويل الرسالة بنجاح' : 'Message forwarded', '↗️');
-  };
-
-  const simulateBotReply = (userText: string) => {
-    setTimeout(() => {
-      const lower = userText.toLowerCase().trim();
-      let botResponse = '✨ I received your message through Telegram MTProto Layer 184.';
-
-      if (lower === '/start') {
-        botResponse = '🤖 Welcome to the Telegram Client assistant!\n\nUse:\n• /api - Inspect API_ID (22043994) & Hash\n• /ping - Measure MTProto DC4 latency\n• /quote - Telegram Philosophy\n• /help - Bot command guide';
-      } else if (lower === '/api') {
-        botResponse = `🔐 Telegram API Configuration:\n• API_ID: ${apiConfig.apiId}\n• API_HASH: ${apiConfig.apiHash}\n• Data Center: DC${apiConfig.dcId} (${apiConfig.dcIp}:${apiConfig.port})\n• Protocol: ${apiConfig.mtprotoVersion}\n• Status: ${apiConfig.connectionStatus.toUpperCase()} (${apiConfig.pingMs}ms)`;
-      } else if (lower === '/ping') {
-        botResponse = `⚡ Pong! Latency to DC4 (Amsterdam): ${apiConfig.pingMs} ms (Packet loss: 0%)`;
-      } else if (lower === '/quote') {
-        botResponse = '💬 "Privacy is not for sale, and human rights should not be compromised out of fear." — Pavel Durov';
-      } else if (lower === '/help') {
-        botResponse = '🛠 Telegram Client Capabilities:\n1. Real-time microphone voice notes with waveforms\n2. E2E call simulation with 4 emoji verification key\n3. Full sticker & reaction animations\n4. Dark, Night, and Day Telegram themes\n5. Dual Arabic (RTL) and English support';
-      } else {
-        botResponse = `🤖 Echo Bot response to "${userText}":\nEverything is operational! Telegram server acknowledged transaction via API_ID ${apiConfig.apiId}.`;
-      }
-
-      const botTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const botMsg: Message = {
-        id: `bot_${Date.now()}`,
-        chatId: 'chat_ai_bot',
-        senderId: 'bot_ai',
-        senderName: 'Telegram Assistant Bot',
-        text: botResponse,
-        timestamp: botTime,
-        date: new Date().toISOString().split('T')[0],
-        isOutgoing: false,
-        status: 'read',
-      };
-
-      setMessages((prev) => ({
-        ...prev,
-        chat_ai_bot: [...(prev.chat_ai_bot || []), botMsg],
-      }));
-
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === 'chat_ai_bot'
-            ? {
-                ...c,
-                lastMessage: {
-                  id: botMsg.id,
-                  senderName: 'Telegram Assistant Bot',
-                  text: botResponse.slice(0, 45) + '...',
-                  timestamp: botTime,
-                  isOutgoing: false,
-                  status: 'read',
-                },
-              }
-            : c
-        )
-      );
-    }, 900);
   };
 
   const toggleReaction = (messageId: string, emoji: string) => {
