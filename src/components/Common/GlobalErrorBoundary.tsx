@@ -1,5 +1,5 @@
 import React, { ErrorInfo, ReactNode } from 'react';
-import { RefreshCw, Trash2, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { RefreshCw, Trash2, AlertTriangle, ShieldCheck, Copy, Check, Terminal } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -9,6 +9,8 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorInfo: ErrorInfo | null;
+  isResetting: boolean;
+  copied: boolean;
 }
 
 export class GlobalErrorBoundary extends React.Component<Props, State> {
@@ -18,52 +20,101 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
       hasError: false,
       error: null,
       errorInfo: null,
+      isResetting: false,
+      copied: false,
     };
   }
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error, errorInfo: null };
+  public static getDerivedStateFromError(error: Error): Partial<State> {
+    return { hasError: true, error };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Telegram Application Crash Caught by GlobalErrorBoundary:', error, errorInfo);
+    console.error('[GlobalErrorBoundary] Telegram App Crash Caught:', error, errorInfo);
     this.setState({ errorInfo });
   }
 
-  private handleHardReset = () => {
+  private handleHardReset = async () => {
+    this.setState({ isResetting: true });
     try {
-      // Clear localStorage and session cache safely
-      localStorage.clear();
-      sessionStorage.clear();
-      // Unregister all service workers
+      // 1. Unregister all service workers and wait for completion
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then((registrations) => {
-          for (const registration of registrations) {
-            registration.unregister();
-          }
-        });
+        try {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.map((reg) => reg.unregister().catch(() => false)));
+        } catch (swErr) {
+          console.warn('[GlobalErrorBoundary] Error unregistering service workers:', swErr);
+        }
       }
-      // Clear Cache API
+
+      // 2. Delete all CacheStorage entries and wait for completion
       if ('caches' in window) {
-        caches.keys().then((names) => {
-          for (const name of names) {
-            caches.delete(name);
-          }
-        });
+        try {
+          const cacheKeys = await caches.keys();
+          await Promise.all(cacheKeys.map((key) => caches.delete(key).catch(() => false)));
+        } catch (cacheErr) {
+          console.warn('[GlobalErrorBoundary] Error deleting caches:', cacheErr);
+        }
       }
+
+      // 3. Purge IndexedDB databases
+      if (typeof window !== 'undefined' && 'indexedDB' in window) {
+        const knownDbs = [
+          'telegram_sqlite_database_v1',
+          'TelegramDatabase',
+          'telegram_indexed_db',
+          'bot_storage',
+          'keyval-store',
+          'chatStore',
+          'messages_cache',
+          'telegramDb',
+        ];
+        for (const dbName of knownDbs) {
+          try {
+            indexedDB.deleteDatabase(dbName);
+          } catch (_) {}
+        }
+      }
+
+      // 4. Wipe client storage
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (_) {}
     } catch (e) {
-      console.error('Error during hard reset:', e);
+      console.error('[GlobalErrorBoundary] Error during comprehensive reset:', e);
     }
-    // Force reload bypassing browser cache
-    window.location.href = window.location.origin + '?reset=' + Date.now();
+
+    // 5. Force reload bypassing browser HTTP cache with unique timestamp
+    setTimeout(() => {
+      window.location.replace(window.location.origin + window.location.pathname + '?hard_refresh=' + Date.now());
+    }, 300);
   };
 
   private handleQuickReload = () => {
     window.location.reload();
   };
 
+  private handleCopyError = () => {
+    const errorText = [
+      this.state.error?.name || 'Error',
+      this.state.error?.message || 'Unknown error',
+      this.state.error?.stack || '',
+      this.state.errorInfo?.componentStack || '',
+    ].filter(Boolean).join('\\n');
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(errorText).then(() => {
+        this.setState({ copied: true });
+        setTimeout(() => this.setState({ copied: false }), 2500);
+      }).catch(() => {});
+    }
+  };
+
   public render() {
     if (this.state.hasError) {
+      const errorMessage = this.state.error?.message || this.state.error?.toString() || 'Unknown runtime exception';
+
       return (
         <div
           dir="rtl"
@@ -81,32 +132,58 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
             <div className="space-y-1.5">
               <h2 className="text-xl font-bold text-white">حدث خطأ في تحميل الذاكرة أو البيانات</h2>
               <p className="text-xs text-gray-400 leading-relaxed">
-                تم رصد تعارض في ملفات التخزين المؤقت القديمة (Cache) أو بيانات الجلسة السابقة. يمكنك استعادة النظام فوراً بنقرة واحدة.
+                تم رصد تعارض في ملفات التخزين المؤقت القديمة (Cache) أو بيانات الجلسة السابقة في المتصفح. يمكنك استعادة النظام فوراً وتحديث الملفات بنقرة واحدة.
               </p>
             </div>
 
             {this.state.error && (
-              <div className="bg-black/40 border border-white/5 rounded-xl p-3 text-right max-h-28 overflow-y-auto">
-                <code className="text-[11px] font-mono text-rose-300 break-all leading-tight block">
-                  {this.state.error.toString()}
-                </code>
+              <div className="bg-black/50 border border-white/10 rounded-xl p-3 text-right space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-gray-400 border-b border-white/5 pb-1.5">
+                  <span className="flex items-center gap-1">
+                    <Terminal className="w-3 h-3 text-amber-400" />
+                    <span>رمز الخطأ البرمجي</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={this.handleCopyError}
+                    className="flex items-center gap-1 text-sky-400 hover:text-sky-300 transition-colors"
+                  >
+                    {this.state.copied ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span className="text-emerald-400">تم النسخ</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>نسخ التفاصيل</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div className="max-h-24 overflow-y-auto">
+                  <code className="text-[11px] font-mono text-rose-300 break-all leading-tight block select-text">
+                    {errorMessage}
+                  </code>
+                </div>
               </div>
             )}
 
             <div className="pt-2 flex flex-col gap-2.5">
               <button
                 type="button"
+                disabled={this.state.isResetting}
                 onClick={this.handleHardReset}
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg transition-all active:scale-98"
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-sm font-bold flex items-center justify-center gap-2 shadow-lg transition-all active:scale-98 disabled:opacity-50 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>إصلاح تلقائي ومسح الكاش التالف</span>
+                <span>{this.state.isResetting ? 'جاري مسح الكاش وتحديث النظام...' : 'إصلاح تلقائي ومسح الكاش التالف'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={this.handleQuickReload}
-                className="w-full py-2.5 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+                className="w-full py-2.5 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>إعادة تحميل الصفحة</span>
@@ -115,7 +192,7 @@ export class GlobalErrorBoundary extends React.Component<Props, State> {
 
             <div className="pt-2 text-[10px] text-gray-500 flex items-center justify-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>نظام الاسترداد الذكي • Telegram_anwer saif (DrKLO Official Build)</span>
+              <span>نظام الاسترداد الذكي • Telegram Web Pro (Layer 184)</span>
             </div>
           </div>
         </div>

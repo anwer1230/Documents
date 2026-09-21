@@ -56,6 +56,18 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+
+// If page was loaded with hard_refresh or reset flag, immediately clear old cache
+if (typeof window !== 'undefined' && (window.location.search.includes('hard_refresh') || window.location.search.includes('reset'))) {
+  try {
+    if ('caches' in window) {
+      caches.keys().then((names) => names.forEach((n) => caches.delete(n))).catch(() => {});
+    }
+    // Clean URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } catch (_) {}
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
