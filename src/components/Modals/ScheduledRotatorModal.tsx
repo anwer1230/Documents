@@ -20,7 +20,7 @@ import {
 import { useTelegram } from '../../context/TelegramContext';
 import { notificationsService } from '../../core/NotificationsService';
 import { RotatingSendLog } from '../../types';
-import { MESSAGE_DRAFTS } from './SenderModal';
+import { MESSAGE_DRAFTS } from '../../data/messageDrafts';
 
 export const ScheduledRotatorModal: React.FC = () => {
   const { activeModal, setActiveModal, chats, showToast } = useTelegram();

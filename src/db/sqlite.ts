@@ -1,6 +1,5 @@
 import { sqliteStorage } from '../utils/sqliteStorage';
-import { DEFAULT_SETTINGS, AppSettings } from '../types/settings';
-import { loadSettingsFromSQLite, saveSettingsToSQLite } from '../services/settingsDB';
+import { DEFAULT_SETTINGS } from '../types/settings';
 
 export const db = {
   run: async (sql: string, params?: any[]): Promise<void> => {
@@ -20,9 +19,17 @@ export const initDB = async () => {
     )
   `);
 
-  // إذا لم توجد إعدادات، أنشئ القيم الافتراضية
-  const existing = await loadSettingsFromSQLite();
-  if (!existing) {
-    await saveSettingsToSQLite(DEFAULT_SETTINGS);
+  // إذا لم توجد إعدادات، أنشئ القيم الافتراضية محلياً دون استيراد دائري
+  try {
+    const existing = await db.get(`SELECT value FROM settings WHERE key = 'app_settings'`);
+    if (!existing || !existing.value) {
+      const json = JSON.stringify(DEFAULT_SETTINGS);
+      await db.run(
+        `INSERT OR REPLACE INTO settings (key, value) VALUES ('app_settings', ?)`,
+        [json]
+      );
+    }
+  } catch (err) {
+    console.warn('[initDB] Failed seeding default settings in sqlite:', err);
   }
 };

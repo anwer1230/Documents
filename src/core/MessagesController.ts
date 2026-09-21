@@ -18,6 +18,7 @@ import { KeywordMonitor } from './messenger/KeywordMonitor';
 import { ChannelDifferenceService } from '../services/ChannelDifferenceService';
 import { SecureSessionStorage } from '../utils/SecureSessionStorage';
 import { ChatObject } from './ChatObject';
+import { appUpdateController } from './messenger/AppUpdateController';
 
 export interface ChatParticipantInfo {
   userId: string;
@@ -1694,7 +1695,6 @@ export class MessagesController {
    * Replicated from DrKLO/Telegram Android: org.telegram.messenger.MessagesController.checkAppUpdate
    */
   public async checkAppUpdate(isManual: boolean = false, context?: any): Promise<void> {
-    const { appUpdateController } = await import('./messenger/AppUpdateController');
     await appUpdateController.checkAppUpdate(isManual);
   }
 
@@ -1756,7 +1756,6 @@ export class MessagesController {
 
   public get pendingAppUpdate(): TLRPC.TL_help_appUpdate | null {
     try {
-      const { appUpdateController } = require('./messenger/AppUpdateController');
       return appUpdateController.pendingAppUpdate;
     } catch {
       return null;

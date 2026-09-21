@@ -11,7 +11,7 @@ import { notificationsController } from './NotificationsController';
 import { TLRPC } from './TLRPC';
 import { telegramDB } from '../utils/sqliteStorage';
 import { telegramDb, initTelegramDexieDb } from './telegramDexieDb';
-import { MESSAGE_DRAFTS } from '../components/Modals/SenderModal';
+import { MESSAGE_DRAFTS } from '../data/messageDrafts';
 import {
   SenderBatch,
   MonitorConfig,

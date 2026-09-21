@@ -4,9 +4,7 @@
  * Replicated directly from DrKLO/Telegram Android:
  * org.telegram.messenger.ApplicationLoader.java
  */
-
 import { BuildVars } from './BuildVars';
-import { appUpdateController } from './AppUpdateController';
 
 export class ApplicationLoader {
   public static applicationContext: any = null;
@@ -36,6 +34,10 @@ export class ApplicationLoader {
   }
 
   public static getGcmToken(): string {
+    const savedToken = localStorage.getItem('tg_gcm_source');
+    if (savedToken) {
+      this.gcmToken = savedToken;
+    }
     return this.gcmToken;
   }
 
@@ -52,13 +54,23 @@ export class ApplicationLoader {
     }
 
     // Perform initial check shortly after app boot (1.5s delay to let UI render)
-    setTimeout(() => {
-      appUpdateController.checkAppUpdate(false);
+    setTimeout(async () => {
+      try {
+        const { appUpdateController } = await import('./AppUpdateController');
+        appUpdateController.checkAppUpdate(false);
+      } catch (err) {
+        console.warn('[ApplicationLoader] Initial app update check deferred:', err);
+      }
     }, 1500);
 
     // Periodic check every 24 hours (or configured interval)
-    this.updateTimer = setInterval(() => {
-      appUpdateController.checkAppUpdate(false);
+    this.updateTimer = setInterval(async () => {
+      try {
+        const { appUpdateController } = await import('./AppUpdateController');
+        appUpdateController.checkAppUpdate(false);
+      } catch (err) {
+        console.warn('[ApplicationLoader] Periodic app update check failed:', err);
+      }
     }, BuildVars.UPDATE_CHECK_INTERVAL_MS);
   }
 

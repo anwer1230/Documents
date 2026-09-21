@@ -20,6 +20,7 @@ if (module && typeof module.createRequire === 'function') {
 
 export default defineConfig((async ({ command }: any) => {
   const isBuild = command === 'build';
+  let pwaLoaded = false;
 
   const plugins: any[] = [
     react() as any,
@@ -27,9 +28,10 @@ export default defineConfig((async ({ command }: any) => {
   ];
 
   if (isBuild) {
-    const { VitePWA } = await import('vite-plugin-pwa');
-    plugins.push(
-      VitePWA({
+    try {
+      const { VitePWA } = await import('vite-plugin-pwa');
+      plugins.push(
+        VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'telegram-logo.svg', 'sql-wasm.wasm', 'sw-custom.js', 'icons/*.png', 'icons/*.svg'],
         manifest: {
@@ -98,6 +100,9 @@ export default defineConfig((async ({ command }: any) => {
         },
       }) as any
     );
+    } catch (err: any) {
+      console.warn('[vite.config.ts] vite-plugin-pwa is not available, skipping PWA plugin:', err?.message || err);
+    }
   } else {
     plugins.push({
       name: 'virtual-pwa-register-dev',
@@ -122,6 +127,8 @@ export default defineConfig((async ({ command }: any) => {
     resolve: {
       alias: {
         '@': path.resolve(process.cwd(), '.'),
+        'canvas-confetti': path.resolve(process.cwd(), 'src/utils/confettiFallback.ts'),
+        ...(pwaLoaded ? {} : { 'virtual:pwa-register': path.resolve(process.cwd(), 'src/utils/pwaRegisterFallback.ts') }),
       },
     },
     worker: {
