@@ -1,1628 +1,748 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TelegramChat, TelegramMessage, TelegramUser, ChatFolder, TelegramThemeConfig, TelegramAccount, TypingStatus, TelegramReplyMarkup } from './types';
-import { INITIAL_CHATS, INITIAL_MESSAGES } from './utils/mockData';
-import { LoginView } from './components/LoginView';
-import { Sidebar } from './components/Sidebar';
-import { ChatWindow } from './components/ChatWindow';
-import { ChatInfoDrawer } from './components/ChatInfoDrawer';
-import { SettingsDrawer } from './components/SettingsDrawer';
-import { NewChatModal } from './components/NewChatModal';
-import { ContactsModal } from './components/ContactsModal';
-import { MediaViewerModal } from './components/MediaViewerModal';
-import { StoryViewerModal } from './components/StoryViewerModal';
-import { TelegramPeerStories } from './types';
-import { AddAccountModal } from './components/AddAccountModal';
-import { MiniAppModal } from './components/MiniAppModal';
-import { Toast, ToastData } from './components/Toast';
-import { ClearHistoryModal } from './components/modals/ClearHistoryModal';
-import { LeaveGroupModal } from './components/modals/LeaveGroupModal';
-import { ShareLinkModal } from './components/modals/ShareLinkModal';
-import { ReportChatModal } from './components/modals/ReportChatModal';
-import { Loader2 } from 'lucide-react';
-import { wsClient } from './utils/websocket';
-import { Api } from './services/api';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { Route, Switch, Router as WouterRouter } from 'wouter';
+import { useLocation } from 'wouter';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Key } from 'react';
+import {
+  Archive, ArrowDown, Bell, Check, CheckCheck, ChevronLeft, FileText, Image as ImageIcon,
+  Info, LockKeyhole, Menu, MessageCircle, Mic, Moon, MoreVertical, Paperclip, Phone,
+  Pin, Plus, Search, Send, Settings, ShieldCheck, SmilePlus, Sun, Trash2, UserPlus, Video, Volume2, X, Edit3, Users,
+  Folder, Megaphone, Bot
+} from 'lucide-react';
+import { NavigationDrawer } from '@/components/NavigationDrawer';
+import { ServicesCenter } from '@/components/ServicesCenter';
+import { InAppServiceViewer } from '@/components/InAppServiceViewer';
+import { AutoBroadcastModal } from '@/components/features/AutoBroadcastModal';
+import { GroupMonitoringModal } from '@/components/features/GroupMonitoringModal';
+import { AutoRepliesModal } from '@/components/features/AutoRepliesModal';
+import { AccountsManagerModal } from '@/components/features/AccountsManagerModal';
+import { OriginalPublishingMonitoringModal } from '@/components/features/OriginalPublishingMonitoringModal';
+import { LearningSystemModal } from '@/components/features/LearningSystemModal';
+import { RotatingBroadcastModal } from '@/components/features/RotatingBroadcastModal';
+import { AutoJoinModal } from '@/components/features/AutoJoinModal';
+import { SavedLinksModal } from '@/components/features/SavedLinksModal';
 
-const MAX_TELEGRAM_ACCOUNTS = 6;
+type Chat = {
+  id: string; name: string; initials: string; preview: string; time: string; color: string;
+  online?: boolean; unread?: number; pinned?: boolean; archived?: boolean; kind?: string;
+};
+type Message = { id: string; text: string; time: string; outgoing?: boolean; read?: boolean; reaction?: string; edited?: boolean };
+type ApiChat = { id: string; name: string; preview: string; time: string | null; unread: number; pinned: boolean; archived: boolean; kind: string };
+type AuthStatus = { authenticated: boolean; state: 'phone' | 'code' | 'password' | 'ready'; user?: { name: string; username: string; phone: string } | null };
 
-export default function App() {
-  // Theme & Language state
-  const [themeConfig, setThemeConfig] = useState<TelegramThemeConfig>(() => {
-    const saved = localStorage.getItem('tg_theme_config');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {}
-    }
-    return {
-      isDark: true,
-      accentColor: '#3390ec',
-      fontSize: 'md',
-      language: 'ar',
-    };
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    credentials: 'include',
   });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'REQUEST_FAILED');
+  return data as T;
+}
 
-  // Multi-Accounts State (Support up to 6 isolated users)
-  const [accounts, setAccounts] = useState<TelegramAccount[]>(() => {
-    const saved = localStorage.getItem('tg_multi_accounts');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.slice(0, MAX_TELEGRAM_ACCOUNTS);
-        }
-      } catch {}
-    }
-    return [];
-  });
-  const [activeAccountId, setActiveAccountId] = useState<string>('');
-  const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
+function toChat(chat: ApiChat): Chat {
+  const initials = chat.name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join('') || 'ت';
+  const colors = ['#ce8e49', '#4c8790', '#a86b85', '#8a9b5b', '#697db2', '#377c79'];
+  const color = colors[Math.abs([...chat.id].reduce((total, char) => total + char.charCodeAt(0), 0)) % colors.length];
+  return { id: chat.id, name: chat.name, initials, preview: chat.preview || 'لا توجد رسائل بعد', time: chat.time ? new Date(chat.time).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }) : '', color, unread: chat.unread || undefined, pinned: chat.pinned, archived: chat.archived, kind: chat.kind };
+}
 
-  // Per-account isolated chat and message storage
-  const [accountsDataMap, setAccountsDataMap] = useState<Record<string, {
-    chats: TelegramChat[];
-    messagesMap: Record<string, TelegramMessage[]>;
-    selectedChatId: string;
-  }>>(() => {
-    const saved = localStorage.getItem('tg_accounts_data_map');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {}
-    }
-    return {};
-  });
+function toMessage(message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean }): Message {
+  return { id: message.id, text: message.text, time: message.time ? new Date(message.time).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }) : '', outgoing: message.outgoing, read: message.outgoing, edited: message.edited };
+}
 
-  // Active User Auth State
-  const [currentUser, setCurrentUser] = useState<TelegramUser | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+const storage = {
+  get<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } },
+  set(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* local-only prototype */ } },
+};
 
-  // Chat Data State (for currently active user)
-  const [chats, setChats] = useState<TelegramChat[]>([]);
-  const [selectedChatId, setSelectedChatId] = useState<string>('saved_messages');
-  const [messagesMap, setMessagesMap] = useState<Record<string, TelegramMessage[]>>({});
-  
-  // UI & Navigation State
-  const [activeFolder, setActiveFolder] = useState<ChatFolder>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isChatInfoOpen, setIsChatInfoOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isNewChatOpen, setIsNewChatOpen] = useState(false);
-  const [isContactsOpen, setIsContactsOpen] = useState(false);
-  const [isMiniAppOpen, setIsMiniAppOpen] = useState(false);
-  const [miniAppData, setMiniAppData] = useState<{ url?: string; appName?: string; botUsername?: string } | null>(null);
-  const [isJoiningChannel, setIsJoiningChannel] = useState(false);
-  
-  // Media Lightbox
-  const [mediaViewerData, setMediaViewerData] = useState<{ url: string; title?: string } | null>(null);
-  const [peerStoriesList, setPeerStoriesList] = useState<TelegramPeerStories[]>([]);
-  const [activeStoryPeerId, setActiveStoryPeerId] = useState<string | null>(null);
+function Avatar({ chat, size = 'md' }: { chat: Pick<Chat, 'initials' | 'color'>; size?: 'sm' | 'md' | 'lg' }) {
+  const dimensions = size === 'lg' ? 'h-16 w-16 text-xl' : size === 'sm' ? 'h-9 w-9 text-xs' : 'h-12 w-12 text-sm';
+  return <div className={`avatar ${dimensions}`} style={{ background: `linear-gradient(145deg, ${chat.color}, hsl(var(--primary) / .75))` }} aria-hidden="true">{chat.initials}</div>;
+}
 
-  // Fetch Stories
-  useEffect(() => {
-    const fetchStories = async () => {
-      if (!currentUser) {
-        setPeerStoriesList([]);
-        return;
-      }
+function IconButton({ label, children, onClick, active = false, className = '' }: { label: string; children: ReactNode; onClick?: () => void; active?: boolean; className?: string }) {
+  return <button type="button" aria-label={label} title={label} onClick={onClick} data-testid={`button-${label}`} className={`grid h-10 w-10 place-items-center rounded-xl transition-all hover:bg-[hsl(var(--primary)/.1)] active:scale-95 ${active ? 'bg-[hsl(var(--primary)/.12)] text-primary' : 'text-muted-foreground'} ${className}`}>{children}</button>;
+}
 
-      try {
-        const res = await fetch('/api/telegram/stories');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.peerStories && Array.isArray(data.peerStories)) {
-            setPeerStoriesList(data.peerStories);
-            return;
-          }
-        }
-      } catch (err) {
-        // Silent error
-      }
-      setPeerStoriesList([]);
-    };
-    fetchStories();
-  }, [currentUser]);
+function ChatRow({ chat, selected, onSelect }: { key?: Key; chat: Chat; selected: boolean; onSelect: () => void }) {
+  return <button type="button" onClick={onSelect} data-testid={`chat-row-${chat.id}`} className={`group flex w-full items-center gap-3 px-4 py-3 text-right transition-all ${selected ? 'bg-[hsl(var(--primary)/.12)]' : 'hover:bg-[hsl(var(--primary)/.055)]'}`}>
+    <div className="relative"><Avatar chat={chat} /><span className={`absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full border-2 border-card ${chat.online ? 'bg-[#7dbd8a]' : 'bg-muted-foreground/30'}`} /></div>
+    <div className="min-w-0 flex-1 border-b border-border/50 pb-3 pt-0.5 group-last:border-0">
+      <div className="flex items-center gap-2"><span className="truncate text-[13px] font-bold">{chat.name}</span>{chat.pinned && <Pin size={12} className="fill-accent text-accent" />}<span className="mr-auto font-mono-app text-[10px] text-muted-foreground">{chat.time}</span></div>
+      <div className="mt-1 flex items-center gap-2"><p className="truncate text-[11px] leading-5 text-muted-foreground">{chat.preview}</p>{chat.unread && <span className="mr-auto grid min-h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{chat.unread}</span>}</div>
+    </div>
+  </button>;
+}
 
-  const handleOpenStory = (peerId: string) => {
-    setActiveStoryPeerId(peerId);
-  };
+function LoadingList() {
+  return <div className="space-y-4 p-4" aria-label="جار التحميل"><div className="h-12 w-full animate-pulse rounded-xl bg-muted" />{[1, 2, 3, 4].map(i => <div className="flex gap-3" key={i}><div className="h-12 w-12 animate-pulse rounded-full bg-muted" /><div className="flex-1 space-y-2 pt-1"><div className="h-3 w-2/5 animate-pulse rounded bg-muted" /><div className="h-3 w-4/5 animate-pulse rounded bg-muted" /></div></div>)}</div>;
+}
 
-  const handleReactToStory = async (peerId: string, storyId: string, emoji: string) => {
-    setPeerStoriesList((prev) =>
-      prev.map((p) =>
-        p.peerId === peerId
-          ? {
-              ...p,
-              stories: p.stories.map((s) =>
-                s.id === storyId ? { ...s, reactionsCount: (s.reactionsCount || 0) + 1 } : s
-              ),
-            }
-          : p
-      )
-    );
+function EmptyState({ search }: { search: string }) {
+  return <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-muted-foreground"><div className="mb-4 grid h-16 w-16 place-items-center rounded-[22px] bg-secondary text-primary"><Search size={25} /></div><h3 className="text-sm font-bold text-foreground">{search ? 'لا توجد نتائج' : 'لا توجد محادثات هنا'}</h3><p className="mt-2 max-w-[220px] text-[11px] leading-6">{search ? 'جرّب البحث باسم مختلف أو كلمة أخرى.' : 'المحادثات المؤرشفة ستظهر هنا.'}</p></div>;
+}
+
+function ProfilePanel({ chat, onClose, onSettings }: { chat: Chat; onClose: () => void; onSettings: () => void }) {
+  return <aside className="absolute inset-y-0 left-0 z-30 w-full max-w-[360px] border-r border-border bg-card soft-shadow fade-up" dir="rtl">
+    <div className="flex h-[74px] items-center gap-3 border-b border-border px-5"><IconButton label="إغلاق الملف" onClick={onClose}><ChevronLeft size={20} /></IconButton><h2 className="text-sm font-bold">الملف الشخصي</h2></div>
+    <div className="flex flex-col items-center border-b border-border px-6 py-8"><Avatar chat={chat} size="lg" /><h3 className="mt-3 text-lg font-bold">{chat.name}</h3><p className="mt-1 text-xs text-muted-foreground">{chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً'}</p><div className="mt-6 flex gap-2"><button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-call"><Phone size={14} className="ml-1 inline" /> اتصال</button><button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-video"><Video size={14} className="ml-1 inline" /> فيديو</button></div></div>
+    <div className="space-y-1 p-3"><button type="button" onClick={onSettings} data-testid="button-open-settings" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><Settings size={17} className="text-primary" /> إعدادات الحساب</button><button type="button" data-testid="button-notifications" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><Bell size={17} className="text-primary" /> الإشعارات <span className="mr-auto text-[10px] text-muted-foreground">مفعّلة</span></button><button type="button" data-testid="button-privacy" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><ShieldCheck size={17} className="text-primary" /> الخصوصية والأمان</button></div>
+  </aside>;
+}
+
+function SettingsPanel({ theme, setTheme, onClose, onAddAccount, onOpenAccounts, onLogout, user }: { theme: 'light'|'dark'; setTheme: (v: 'light'|'dark') => void; onClose: () => void; onAddAccount: () => void; onOpenAccounts?: () => void; onLogout: () => void; user?: AuthStatus['user'] }) {
+  const initials = user?.name?.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join('') || 'ت';
+  return <div className="absolute inset-0 z-40 flex justify-end bg-[hsl(211_38%_12%/.28)] backdrop-blur-sm" dir="rtl"><section className="h-full w-full max-w-[420px] overflow-y-auto bg-card soft-shadow fade-up"><div className="sticky top-0 z-10 flex h-[74px] items-center gap-3 border-b border-border bg-card/95 px-5 backdrop-blur"><IconButton label="إغلاق الإعدادات" onClick={onClose}><X size={19} /></IconButton><h2 className="text-sm font-bold">الإعدادات</h2></div><div className="p-5"><div className="mb-7 rounded-2xl bg-secondary/60 p-4"><div className="flex items-center gap-3"><div className="avatar h-12 w-12 bg-primary text-sm">{initials}</div><div><p className="text-sm font-bold">{user?.name || 'حساب Telegram'}</p><p className="mt-1 font-latin text-[11px] text-muted-foreground">{user?.username || user?.phone || 'حساب متصل'}</p></div><Check size={17} className="mr-auto text-primary" /></div></div><h3 className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">التفضيلات</h3><div className="overflow-hidden rounded-2xl border border-border"><button type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} data-testid="button-toggle-theme" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-accent/30 text-accent-foreground">{theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}</span><span><strong className="block">المظهر</strong><small className="mt-1 block text-[10px] text-muted-foreground">{theme === 'light' ? 'الوضع الفاتح' : 'الوضع الداكن'} · اضغط للتبديل</small></span><ArrowDown size={15} className="mr-auto text-muted-foreground" /></button><div className="flex items-center gap-3 px-4 py-4 text-xs"><span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary"><Volume2 size={16} /></span><span><strong className="block">الأصوات</strong><small className="mt-1 block text-[10px] text-muted-foreground">صوت الإشعارات مفعّل</small></span><span className="mr-auto h-2 w-2 rounded-full bg-[#7dbd8a]" /></div></div><h3 className="mb-2 mt-7 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">الحساب والجلسات</h3><div className="overflow-hidden rounded-2xl border border-border">{onOpenAccounts && <button type="button" onClick={onOpenAccounts} data-testid="button-manage-accounts" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-[#4c8790]/20 text-[#4c8790]"><Users size={16} /></span><span><strong className="block">إدارة الحسابات وجلسات العمل</strong><small className="mt-1 block text-[10px] text-muted-foreground">التبديل بين الحسابات وإدارة الصلاحيات</small></span><ChevronLeft size={16} className="mr-auto text-muted-foreground" /></button>}<button type="button" onClick={onAddAccount} data-testid="button-add-account" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary"><UserPlus size={16} /></span><span><strong className="block">إضافة حساب</strong><small className="mt-1 block text-[10px] text-muted-foreground">استخدم رقم هاتف آخر</small></span><Plus size={16} className="mr-auto text-muted-foreground" /></button><button type="button" onClick={onLogout} data-testid="button-logout" className="flex w-full items-center gap-3 px-4 py-4 text-right text-xs text-destructive hover:bg-destructive/5"><span className="grid h-8 w-8 place-items-center rounded-lg bg-destructive/10"><LockKeyhole size={16} /></span><span><strong className="block">تسجيل الخروج</strong><small className="mt-1 block text-[10px] text-muted-foreground">إغلاق جلسة Telegram الحالية</small></span></button></div><div className="mt-8 flex items-center justify-center gap-2 text-[10px] text-muted-foreground"><LockKeyhole size={12} /> جلسة Telegram محفوظة على الخادم فقط</div></div></section></div>;
+}
+
+function AuthScreen({ onAuthenticated, onClose, modal = false }: { onAuthenticated: (status: AuthStatus) => void; onClose?: () => void; modal?: boolean }) {
+  const [step, setStep] = useState<'phone' | 'code' | 'password'>('phone');
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setBusy(true);
+    setError('');
     try {
-      await fetch('/api/telegram/stories/react', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ peerId, storyId, emoji }),
-      });
-    } catch (err) {
-      console.warn('Error reacting to story:', err);
-    }
-  };
-
-  const handleReadStory = async (peerId: string, storyId: string) => {
-    setPeerStoriesList((prev) =>
-      prev.map((p) =>
-        p.peerId === peerId
-          ? {
-              ...p,
-              stories: p.stories.map((s) => (s.id === storyId ? { ...s, isViewed: true } : s)),
-            }
-          : p
-      )
-    );
-    try {
-      await fetch('/api/telegram/stories/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ peerId, maxId: storyId }),
-      });
-    } catch {}
-  };
-
-  // Toast notification state
-  const [toast, setToast] = useState<ToastData | null>(null);
-  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
-    setToast({ id: String(Date.now()), message, type });
-  };
-
-  // Bot Mini App opener
-  const handleOpenMiniApp = (url?: string, appName?: string) => {
-    setMiniAppData({
-      url,
-      appName,
-      botUsername: activeChat?.username || 'telegram_bot',
-    });
-    setIsMiniAppOpen(true);
-  };
-
-  // Bot Callback Handler (Telegram Web K protocol)
-  const handleBotCallback = async (messageId: string, callbackData: string) => {
-    if (currentUser) {
-      try {
-        const res = await fetch('/api/telegram/bot-callback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            peerId: selectedChatId,
-            msgId: Number(messageId.replace(/\D/g, '')) || 1,
-            data: callbackData,
-          }),
-        });
-        const data = await res.json();
-        if (data.message) {
-          showToast(data.message, 'info');
-          return;
-        }
-      } catch {}
-    }
-
-    if (callbackData === 'bot_settings') {
-      showToast(themeConfig.language === 'ar' ? '⚙️ تم فتح إعدادات البوت' : '⚙️ Bot settings opened', 'info');
-    } else if (callbackData === 'bot_stats') {
-      showToast(themeConfig.language === 'ar' ? '📊 تم تحديث الإحصائيات الحية' : '📊 Live statistics updated', 'info');
-    } else if (callbackData === 'wallet_deposit') {
-      showToast(themeConfig.language === 'ar' ? '📥 عنوان إيداع TON: EQBvW8Z...x8p' : '📥 TON Deposit Address: EQBvW8Z...x8p', 'success');
-    } else if (callbackData === 'wallet_send') {
-      showToast(themeConfig.language === 'ar' ? '📤 أدخل العنوان والمبلغ المطلوب إرساله' : '📤 Enter recipient address & amount', 'info');
-    } else if (callbackData === 'wallet_history') {
-      showToast(themeConfig.language === 'ar' ? '📜 لا توجد معاملات معلقة' : '📜 No pending transactions', 'info');
-    } else if (callbackData.startsWith('bf_')) {
-      showToast(themeConfig.language === 'ar' ? `🤖 أمر BotFather: ${callbackData}` : `🤖 BotFather action: ${callbackData}`, 'info');
-    } else {
-      showToast(themeConfig.language === 'ar' ? `استجابة البوت: ${callbackData}` : `Bot response: ${callbackData}`, 'info');
-    }
-  };
-
-  // Drawer modal state
-  const [drawerModal, setDrawerModal] = useState<'clear' | 'leave' | 'share' | 'report' | null>(null);
-
-  // Real-time MTProto Typing Status per chat
-  const [typingMap, setTypingMap] = useState<Record<string, TypingStatus>>({});
-
-  // Helper to trigger an MTProto typing event with countdown auto-clear
-  const triggerTyping = (chatId: string, durationMs: number = 3200, userName?: string) => {
-    const expiresAt = Date.now() + durationMs;
-    setTypingMap((prev) => ({
-      ...prev,
-      [chatId]: {
-        chatId,
-        userName,
-        action: 'typing',
-        startedAt: Date.now(),
-        expiresAt,
-      },
-    }));
-
-    setTimeout(() => {
-      setTypingMap((prev) => {
-        if (!prev[chatId] || prev[chatId].expiresAt > Date.now()) return prev;
-        const updated = { ...prev };
-        delete updated[chatId];
-        return updated;
-      });
-    }, durationMs + 80);
-  };
-
-  // Periodic Real-Time MTProto Event Updates Simulation
-  // Mimics active chat activity from remote peers in MTProto updates loop
-  useEffect(() => {
-    const candidateChatIds = chats
-      .filter((c) => c.type !== 'saved' && c.type !== 'channel')
-      .map((c) => c.id);
-
-    if (candidateChatIds.length === 0) return;
-
-    const interval = setInterval(() => {
-      const randomChatId = candidateChatIds[Math.floor(Math.random() * candidateChatIds.length)];
-      const targetChat = chats.find((c) => c.id === randomChatId);
-      if (!targetChat) return;
-
-      let typingName: string | undefined;
-      if (targetChat.type === 'supergroup' || targetChat.type === 'group') {
-        const sampleMembers = ['فهد المهندس', 'سارة خالد', 'م. طارق', 'عبدالله التميمي'];
-        typingName = sampleMembers[Math.floor(Math.random() * sampleMembers.length)];
+      if (step === 'phone') {
+        await apiFetch<{ state: 'code' }>('/telegram/auth/start', { method: 'POST', body: JSON.stringify({ phone }) });
+        setStep('code');
+      } else if (step === 'code') {
+        const result = await apiFetch<AuthStatus>('/telegram/auth/verify', { method: 'POST', body: JSON.stringify({ code }) });
+        if (result.state === 'password') setStep('password');
+        else onAuthenticated(result);
       } else {
-        typingName = targetChat.title;
+        const result = await apiFetch<AuthStatus>('/telegram/auth/password', { method: 'POST', body: JSON.stringify({ password }) });
+        onAuthenticated(result);
       }
-
-      const duration = 3000 + Math.floor(Math.random() * 1600);
-      triggerTyping(randomChatId, duration, typingName);
-    }, 20000);
-
-    return () => clearInterval(interval);
-  }, [chats]);
-
-  // Sync document direction and theme attributes
-  useEffect(() => {
-    localStorage.setItem('tg_theme_config', JSON.stringify(themeConfig));
-    document.documentElement.dir = themeConfig.language === 'ar' ? 'rtl' : 'ltr';
-    document.documentElement.lang = themeConfig.language;
-    if (themeConfig.isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [themeConfig]);
-
-  // Sync accounts to local storage
-  useEffect(() => {
-    if (accounts.length > 0) {
-      localStorage.setItem('tg_multi_accounts', JSON.stringify(accounts));
-    }
-  }, [accounts]);
-
-  // Load backend accounts & status on initial startup
-  useEffect(() => {
-    const initAuthAndAccounts = async () => {
-      try {
-        // Fetch server-side saved accounts
-        // Sanitize any legacy demo remnants from localStorage
-        try {
-          const rawAccounts = localStorage.getItem('tg_multi_accounts');
-          if (rawAccounts) {
-            const parsed = JSON.parse(rawAccounts);
-            const filtered = Array.isArray(parsed)
-              ? parsed.filter((a: any) => !a.isDemo && !String(a.id).startsWith('acc_demo') && !String(a.sessionToken).startsWith('demo_'))
-              : [];
-            localStorage.setItem('tg_multi_accounts', JSON.stringify(filtered));
-          }
-          const activeUserRaw = localStorage.getItem('tg_active_user');
-          if (activeUserRaw) {
-            const u = JSON.parse(activeUserRaw);
-            if (u.id === 'demo_user' || u.id === 'me' || u.username === 'tg_user') {
-              localStorage.removeItem('tg_active_user');
-              localStorage.removeItem('tg_active_session_token');
-            }
-          }
-        } catch {}
-
-        const localToken = localStorage.getItem('tg_active_session_token');
-        const headers: Record<string, string> = {};
-        if (localToken && !localToken.startsWith('demo_')) {
-          headers['x-session-token'] = localToken;
-        }
-
-        const accRes = await fetch('/api/telegram/accounts', { headers });
-        let serverAccounts: TelegramAccount[] = [];
-        let serverActiveId: string | undefined;
-
-        if (accRes.ok) {
-          const accData = await accRes.json();
-          if (Array.isArray(accData.accounts) && accData.accounts.length > 0) {
-            serverAccounts = accData.accounts
-              .filter((a: any) => !a.isDemo && !String(a.id).startsWith('acc_demo') && !String(a.sessionToken).startsWith('demo_'))
-              .map((a: any) => ({
-                id: a.id,
-                sessionToken: a.sessionToken,
-                user: a.user,
-                isLoggedIn: a.isLoggedIn,
-                addedAt: a.addedAt,
-              }));
-            serverActiveId = accData.activeAccountId;
-          }
-        }
-
-        // Fetch current status
-        const statusRes = await fetch('/api/telegram/status', { headers });
-        const statusData = await statusRes.json();
-
-        if (statusData.isLoggedIn && statusData.user) {
-          const mainUser: TelegramUser = {
-            id: statusData.user.id || 'me',
-            firstName: statusData.user.firstName || 'مستخدم تليجرام',
-            lastName: statusData.user.lastName,
-            username: statusData.user.username,
-            phone: statusData.user.phone,
-            status: 'online',
-          };
-
-          const activeAccount: TelegramAccount = {
-            id: serverActiveId || 'acc_primary',
-            sessionToken: statusData.sessionToken || localToken || '',
-            user: mainUser,
-            isLoggedIn: true,
-            addedAt: Date.now(),
-          };
-
-          const mergedAccounts = [
-            activeAccount,
-            ...serverAccounts.filter((a) => a.sessionToken !== activeAccount.sessionToken),
-          ].slice(0, MAX_TELEGRAM_ACCOUNTS);
-
-          setAccounts(mergedAccounts);
-          setActiveAccountId(activeAccount.id);
-          setCurrentUser(mainUser);
-          localStorage.setItem('tg_active_user', JSON.stringify(mainUser));
-          localStorage.setItem('tg_multi_accounts', JSON.stringify(mergedAccounts));
-          loadMtprotoDialogs(activeAccount.sessionToken);
-        } else if (serverAccounts.length > 0) {
-          // If server has accounts saved, switch to active one
-          const activeAcc = serverAccounts.find((a) => a.id === serverActiveId) || serverAccounts[0];
-          setAccounts(serverAccounts);
-          setActiveAccountId(activeAcc.id);
-          setCurrentUser(activeAcc.user);
-          localStorage.setItem('tg_active_user', JSON.stringify(activeAcc.user));
-          localStorage.setItem('tg_multi_accounts', JSON.stringify(serverAccounts));
-          loadMtprotoDialogs(activeAcc.sessionToken);
-        } else {
-          // No active sessions exist. Ensure clean state for LoginView.
-          setCurrentUser(null);
-          setActiveAccountId('');
-          setAccounts([]);
-          setChats([]);
-          setMessagesMap({});
-          localStorage.removeItem('tg_active_user');
-          localStorage.removeItem('tg_active_session_token');
-          localStorage.removeItem('tg_multi_accounts');
-        }
-      } catch (err) {
-        console.error('Failed to check Telegram status:', err);
-      } finally {
-        setIsCheckingAuth(false);
-      }
-    };
-
-    initAuthAndAccounts();
-  }, []);
-
-  // Register PWA Service Worker
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .then((reg) => {
-          console.log('[PWA] Service Worker registered:', reg.scope);
-        })
-        .catch((err) => {
-          console.warn('[PWA] Service Worker registration skipped:', err);
-        });
-    }
-  }, []);
-
-  // MTProto Sync State tracking (pts, date, qts)
-  const syncPtsRef = useRef<number>(0);
-  const syncDateRef = useRef<number>(Math.floor(Date.now() / 1000));
-  const isRecoveringGapRef = useRef<boolean>(false);
-
-  // Helper to ingest and deduplicate sync batch / recovered messages across chats and messagesMap
-  const applySyncBatchMessages = useCallback((batch: any[]) => {
-    if (!Array.isArray(batch) || batch.length === 0) return;
-
-    let highestTimestamp = 0;
-
-    setMessagesMap((prev) => {
-      const next = { ...prev };
-      batch.forEach((msg) => {
-        const targetChatId = msg.chatId || selectedChatId;
-        if (!targetChatId) return;
-        const currentList = next[targetChatId] || [];
-        if (!currentList.some((m) => m.id === msg.id)) {
-          // Keep messages chronologically ordered
-          next[targetChatId] = [...currentList, msg].sort(
-            (a, b) => (a.timestamp || 0) - (b.timestamp || 0)
-          );
-        }
-        if (msg.timestamp && msg.timestamp > highestTimestamp) {
-          highestTimestamp = msg.timestamp;
-        }
-      });
-      return next;
-    });
-
-    if (highestTimestamp > 0) {
-      wsClient.setLastTimestamp(highestTimestamp);
-      syncDateRef.current = Math.floor(highestTimestamp / 1000);
-    }
-
-    setChats((prev) =>
-      prev.map((c) => {
-        const matchingMsgs = batch.filter((m) => (m.chatId || selectedChatId) === c.id);
-        if (matchingMsgs.length === 0) return c;
-        const latest = [...matchingMsgs].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))[0];
-        const unreadInc = matchingMsgs.filter((m) => !m.isOut && c.id !== selectedChatId).length;
-        const shouldUpdateLast =
-          !c.lastMessage ||
-          !c.lastMessage.timestamp ||
-          (latest?.timestamp && latest.timestamp >= c.lastMessage.timestamp);
-
-        return {
-          ...c,
-          unreadCount: (c.unreadCount || 0) + unreadInc,
-          lastMessage: shouldUpdateLast && latest
-            ? {
-                text: latest.text || (latest.media ? `[${latest.media.type || 'وسائط'}]` : '[رسالة]'),
-                timestamp: latest.timestamp || Date.now(),
-                isOut: !!latest.isOut,
-              }
-            : c.lastMessage,
-        };
-      })
-    );
-  }, [selectedChatId]);
-
-  // Perform MTProto Gap Recovery (orchestrating Api.updates.GetDifference & sync_batch)
-  const recoverGap = useCallback(async () => {
-    if (!activeAccountId || isRecoveringGapRef.current) return;
-    isRecoveringGapRef.current = true;
-
-    try {
-      // 1. Request immediate WebSocket sync catchup
-      wsClient.sendSyncRequest();
-
-      // 2. Query initial updates state if PTS is unset
-      if (syncPtsRef.current <= 0) {
-        try {
-          const stateData: any = await Api.updates.GetState();
-          if (stateData?.pts) {
-            syncPtsRef.current = stateData.pts;
-            if (stateData.date) syncDateRef.current = stateData.date;
-          }
-        } catch (stateErr) {
-          console.warn('[recoverGap] Could not query updates.getState:', stateErr);
-        }
-      }
-
-      // 3. Orchestrate GetDifference loop to retrieve all difference slices
-      let hasMoreSlices = true;
-      let iteration = 0;
-      const MAX_SLICES = 10;
-      const allRecoveredMessages: any[] = [];
-
-      while (hasMoreSlices && iteration < MAX_SLICES) {
-        iteration++;
-        const currentPts = syncPtsRef.current;
-        const currentDate = syncDateRef.current;
-
-        const diffData: any = await Api.updates.GetDifference({
-          pts: currentPts,
-          date: currentDate,
-          ptsTotalLimit: 100,
-        });
-
-        if (!diffData) break;
-
-        // Collect newMessages from difference payload
-        if (Array.isArray(diffData.newMessages) && diffData.newMessages.length > 0) {
-          allRecoveredMessages.push(...diffData.newMessages);
-        }
-
-        // Collect messages from otherUpdates if wrapped in UpdateNewMessage
-        if (Array.isArray(diffData.otherUpdates)) {
-          diffData.otherUpdates.forEach((upd: any) => {
-            if (upd?.message && (upd.className === 'UpdateNewMessage' || upd.className === 'UpdateNewChannelMessage')) {
-              const m = upd.message;
-              const peerId = m.peerId?.userId?.toString() || m.peerId?.chatId?.toString() || m.peerId?.channelId?.toString();
-              if (peerId) {
-                allRecoveredMessages.push({
-                  id: String(m.id),
-                  chatId: peerId,
-                  senderId: m.out ? 'me' : (m.fromId?.userId?.toString() || peerId),
-                  senderName: m.out ? 'أنا' : 'عضو',
-                  text: m.message || '',
-                  timestamp: (m.date || Math.floor(Date.now() / 1000)) * 1000,
-                  isOut: !!m.out,
-                  status: m.out ? 'read' : 'sent',
-                });
-              }
-            }
-          });
-        }
-
-        // Advance PTS and Date from diff state
-        if (diffData.state?.pts) {
-          syncPtsRef.current = diffData.state.pts;
-          if (diffData.state.date) syncDateRef.current = diffData.state.date;
-        } else if (diffData.pts) {
-          syncPtsRef.current = diffData.pts;
-          if (diffData.date) syncDateRef.current = diffData.date;
-        }
-
-        // Check if more difference slices remain (DifferenceSlice)
-        const isSlice = diffData.isIntermediate || diffData.className === 'updates.DifferenceSlice';
-        hasMoreSlices = Boolean(isSlice);
-
-        // Break early if PTS did not advance and no more slices
-        if (currentPts > 0 && syncPtsRef.current === currentPts && !isSlice) {
-          break;
-        }
-      }
-
-      // 4. Ingest and apply all recovered messages across chats and state
-      if (allRecoveredMessages.length > 0) {
-        console.log(`[recoverGap] Successfully recovered ${allRecoveredMessages.length} missed messages across ${iteration} slices`);
-        applySyncBatchMessages(allRecoveredMessages);
-      }
-    } catch (err) {
-      console.warn('[recoverGap] Gap recovery encountered error:', err);
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : 'REQUEST_FAILED';
+      const labels: Record<string, string> = {
+        PHONE_NUMBER_INVALID: 'أدخل رقم الهاتف بصيغة دولية صحيحة مثل +966501234567.',
+        PHONE_NUMBER_BANNED: 'رقم الهاتف هذا محظور في خوادم تيليجرام.',
+        PHONE_CODE_INVALID: 'رمز التحقق غير صحيح. تأكد من الرمز المرسل في تطبيق تيليجرام.',
+        PHONE_CODE_EXPIRED: 'انتهت صلاحية الرمز، اطلب رمزاً جديداً.',
+        PASSWORD_HASH_INVALID: 'كلمة مرور التحقق بخطوتين غير صحيحة.',
+        AUTH_SESSION_EXPIRED: 'انتهت جلسة التسجيل، ابدأ من جديد بإدخال رقم الهاتف.',
+        FLOOD_WAIT: 'يرجى الانتظار قليلاً قبل المحاولة مجدداً (Flood Wait).',
+        TELEGRAM_API_NOT_CONFIGURED: 'خدمة Telegram غير مهيأة في الخادم. أضف بيانات Telegram API ثم أعد المحاولة.',
+      };
+      setError(labels[message] || `تعذر إكمال العملية (${message}).`);
     } finally {
-      isRecoveringGapRef.current = false;
-    }
-  }, [activeAccountId, applySyncBatchMessages]);
-
-  // Connect WebSocket & listen to real-time events
-  useEffect(() => {
-    const activeAcc = accounts.find((a) => a.id === activeAccountId);
-    const token = activeAcc?.sessionToken || 'guest_user';
-    wsClient.connect(token);
-
-    const unsubscribe = wsClient.subscribe((event) => {
-      if (event.type === 'connected') {
-        recoverGap();
-      } else if (event.type === 'sync_batch' || (event as any).action === 'sync_batch') {
-        const batch: any[] = (event as any).messages || [];
-        console.log(`[WebSocket] Received sync_batch catchup: ${batch.length} messages`);
-        applySyncBatchMessages(batch);
-        if ((event as any).lastTimestamp) {
-          wsClient.setLastTimestamp((event as any).lastTimestamp);
-        }
-      } else if (event.type === 'new_message' && event.message) {
-        if ((event as any).pts) {
-          syncPtsRef.current = Math.max(syncPtsRef.current, (event as any).pts);
-        }
-        const msg = event.message;
-        if (msg.timestamp) {
-          wsClient.setLastTimestamp(msg.timestamp);
-        }
-        const targetChatId = event.peerId || msg.chatId || selectedChatId;
-
-        setMessagesMap((prev) => {
-          const currentList = prev[targetChatId] || [];
-          if (currentList.some((m) => m.id === msg.id)) {
-            return prev;
-          }
-          return {
-            ...prev,
-            [targetChatId]: [...currentList, msg],
-          };
-        });
-
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChatId
-              ? {
-                  ...c,
-                  unreadCount: c.id === selectedChatId ? 0 : (c.unreadCount || 0) + 1,
-                  lastMessage: {
-                    text: msg.text || '[وسائط]',
-                    timestamp: msg.timestamp || Date.now(),
-                    isOut: !!msg.isOut,
-                  },
-                }
-              : c
-          )
-        );
-      } else if (event.type === 'message_read' && event.peerId) {
-        const targetChatId = event.peerId;
-        setMessagesMap((prev) => {
-          const list = prev[targetChatId];
-          if (!list) return prev;
-          return {
-            ...prev,
-            [targetChatId]: list.map((m) =>
-              m.isOut ? { ...m, status: 'read' as const } : m
-            ),
-          };
-        });
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChatId ? { ...c, unreadCount: 0 } : c
-          )
-        );
-      } else if (event.type === 'message_edited' && event.peerId && event.messageId) {
-        const targetChatId = event.peerId;
-        setMessagesMap((prev) => {
-          const list = prev[targetChatId];
-          if (!list) return prev;
-          return {
-            ...prev,
-            [targetChatId]: list.map((m) =>
-              m.id === event.messageId
-                ? { ...m, text: event.text || m.text, isEdited: true }
-                : m
-            ),
-          };
-        });
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === targetChatId && c.lastMessage
-              ? {
-                  ...c,
-                  lastMessage: { ...c.lastMessage, text: event.text || c.lastMessage.text },
-                }
-              : c
-          )
-        );
-      } else if (event.type === 'messages_deleted' && event.messageIds) {
-        const delIds = new Set(event.messageIds);
-        setMessagesMap((prev) => {
-          const updated: Record<string, TelegramMessage[]> = {};
-          for (const [chatId, msgs] of Object.entries(prev) as [string, TelegramMessage[]][]) {
-            updated[chatId] = msgs.filter((m) => !delIds.has(m.id));
-          }
-          return updated;
-        });
-      } else if (event.type === 'user_status' && event.userId) {
-        setChats((prev) =>
-          prev.map((c) =>
-            c.id === event.userId
-              ? {
-                  ...c,
-                  isOnline: !!event.isOnline,
-                }
-              : c
-          )
-        );
-      } else if (event.type === 'typing_status' && event.peerId) {
-        setTypingMap((prev) => ({
-          ...prev,
-          [event.peerId!]: {
-            chatId: event.peerId!,
-            userName: event.userName || 'عضو',
-            action: (event.action as any) || 'typing',
-            startedAt: Date.now(),
-            expiresAt: Date.now() + 4000,
-          },
-        }));
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, [activeAccountId, accounts, selectedChatId]);
-
-  // Auto-sync gap recovery when switching back to tab
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        recoverGap();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [recoverGap]);
-
-
-  const loadMtprotoDialogs = async (token?: string) => {
-    try {
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['x-session-token'] = token;
-      }
-      const res = await fetch('/api/telegram/dialogs', { headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.dialogs && data.dialogs.length > 0) {
-          setChats((prev) => {
-            const savedChat = prev.find((p) => p.id === 'saved_messages') || INITIAL_CHATS[0];
-            const incoming = Array.isArray(data.dialogs) ? data.dialogs : [];
-            const map = new Map<string, TelegramChat>();
-            map.set('saved_messages', savedChat);
-            for (const d of incoming) {
-              if (d && d.id && d.id !== 'saved_messages' && !map.has(String(d.id))) {
-                map.set(String(d.id), d);
-              }
-            }
-            return Array.from(map.values());
-          });
-        }
-      }
-    } catch (err) {
-      console.error('Error loading MTProto dialogs:', err);
+      setBusy(false);
     }
   };
 
-  const handleLoginSuccess = (user: TelegramUser, authenticatedSessionToken?: string) => {
-    const finalSessionToken =
-      authenticatedSessionToken ||
-      localStorage.getItem('tg_active_session_token') ||
-      'user_session_' + Math.random().toString(36).substring(2, 12);
-
-    localStorage.setItem('tg_active_session_token', finalSessionToken);
-
-    const newAcc: TelegramAccount = {
-      id: 'acc_' + Date.now().toString(36),
-      sessionToken: finalSessionToken,
-      user,
-      isLoggedIn: true,
-      addedAt: Date.now(),
-    };
-
-    setAccounts([newAcc]);
-    setActiveAccountId(newAcc.id);
-    setCurrentUser(user);
-    localStorage.setItem('tg_active_user', JSON.stringify(user));
-    localStorage.setItem('tg_multi_accounts', JSON.stringify([newAcc]));
-    loadMtprotoDialogs(finalSessionToken);
-  };
-
-  // Switch between up to 6 isolated user accounts
-  const handleSwitchAccount = async (targetId: string) => {
-    const target = accounts.find((a) => a.id === targetId);
-    if (!target) return;
-
-    // 1. Isolate and save currently active user's state
-    if (activeAccountId) {
-      setAccountsDataMap((prev) => {
-        const updated = {
-          ...prev,
-          [activeAccountId]: {
-            chats,
-            messagesMap,
-            selectedChatId,
-          },
-        };
-        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
-        return updated;
-      });
-    }
-
-    // 2. Notify backend to switch session token and cookie
-    try {
-      await fetch('/api/telegram/accounts/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: target.id, sessionToken: target.sessionToken }),
-      });
-    } catch (err) {
-      console.warn('Backend switch notice error:', err);
-    }
-
-    // 3. Set newly active user & account
-    setActiveAccountId(target.id);
-    setCurrentUser(target.user);
-
-    // 4. Restore target account's isolated chats and messages
-    const restored = accountsDataMap[target.id];
-    if (restored && restored.chats && restored.chats.length > 0) {
-      setChats(restored.chats);
-      setMessagesMap(restored.messagesMap);
-      setSelectedChatId(restored.selectedChatId || restored.chats[0]?.id || 'saved_messages');
-    } else {
-      setChats(INITIAL_CHATS.filter((c) => c.id === 'saved_messages'));
-      setSelectedChatId('saved_messages');
-    }
-
-    // 5. Load isolated MTProto dialogs for this cloud account
-    loadMtprotoDialogs(target.sessionToken);
-  };
-
-  // Add new account (up to 6)
-  const handleAccountAdded = (newAccount: TelegramAccount) => {
-    setAccounts((prev) => {
-      const filtered = prev.filter((a) => a.id !== newAccount.id && a.user.id !== newAccount.user.id);
-      if (filtered.length >= MAX_TELEGRAM_ACCOUNTS) {
-        return filtered;
-      }
-      const updated = [...filtered, newAccount];
-      localStorage.setItem('tg_multi_accounts', JSON.stringify(updated));
-      return updated;
-    });
-
-    // Save current active account's state before switching to new one
-    if (activeAccountId) {
-      setAccountsDataMap((prev) => {
-        const updated = {
-          ...prev,
-          [activeAccountId]: {
-            chats,
-            messagesMap,
-            selectedChatId,
-          },
-        };
-        localStorage.setItem('tg_accounts_data_map', JSON.stringify(updated));
-        return updated;
-      });
-    }
-
-    // Switch to new account immediately with isolated state
-    setActiveAccountId(newAccount.id);
-    setCurrentUser(newAccount.user);
-
-    setChats(INITIAL_CHATS.filter((c) => c.id === 'saved_messages'));
-    setSelectedChatId('saved_messages');
-    loadMtprotoDialogs(newAccount.sessionToken);
-  };
-
-  // Remove/disconnect an account
-  const handleRemoveAccount = async (targetId: string) => {
-    try {
-      await fetch(`/api/telegram/accounts/${targetId}`, { method: 'DELETE' });
-    } catch {}
-
-    const remaining = accounts.filter((a) => a.id !== targetId);
-    setAccounts(remaining);
-    localStorage.setItem('tg_multi_accounts', JSON.stringify(remaining));
-
-    // Clear removed account's stored messages
-    setAccountsDataMap((prev) => {
-      const copy = { ...prev };
-      delete copy[targetId];
-      localStorage.setItem('tg_accounts_data_map', JSON.stringify(copy));
-      return copy;
-    });
-
-    if (activeAccountId === targetId) {
-      if (remaining.length > 0) {
-        handleSwitchAccount(remaining[0].id);
-      } else {
-        setCurrentUser(null);
-        setActiveAccountId('');
-        localStorage.removeItem('tg_active_user');
-        localStorage.removeItem('tg_active_session_token');
-        setChats([]);
-        setMessagesMap({});
-      }
-    }
-  };
-
-  const handleToggleArchive = (chatId: string) => {
-    setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, isArchived: !c.isArchived } : c))
-    );
-  };
-
-  const handleLogout = async () => {
-    try {
-      if (activeAccountId) {
-        await fetch(`/api/telegram/accounts/${activeAccountId}`, { method: 'DELETE' });
-      }
-      await fetch('/api/telegram/logout', { method: 'POST' });
-    } catch {}
-    localStorage.removeItem('tg_active_user');
-    localStorage.removeItem('tg_active_session_token');
-    localStorage.removeItem('tg_multi_accounts');
-    localStorage.removeItem('tg_accounts_data_map');
-    setCurrentUser(null);
-    setActiveAccountId('');
-    setAccounts([]);
-    setChats([]);
-    setMessagesMap({});
-  };
-
-  // Chat selection with real-time mark as read and dynamic channel loading
-  const handleSelectChat = async (chat: TelegramChat) => {
-    setSelectedChatId(chat.id);
-
-    // If chat is not in chats list yet, prepend it
-    setChats((prev) => {
-      const exists = prev.some(
-        (c) => c.id === chat.id || (c.username && c.username.toLowerCase() === chat.username?.toLowerCase())
-      );
-      if (!exists) {
-        return [chat, ...prev];
-      }
-      return prev.map((c) => (c.id === chat.id ? { ...c, unreadCount: 0 } : c));
-    });
-
-    // Populate messages if none exist yet (e.g. for channels selected from Global Search)
-    setMessagesMap((prev) => {
-      if (prev[chat.id] && prev[chat.id].length > 0) {
-        return {
-          ...prev,
-          [chat.id]: prev[chat.id].map((m) => (!m.isOut ? { ...m, status: 'read' as const } : m)),
-        };
-      }
-
-      // Generate initial channel announcements and updates
-      if (chat.type === 'channel') {
-        const initialChannelPosts: TelegramMessage[] = [
-          {
-            id: `post_1_${chat.id}`,
-            chatId: chat.id,
-            senderId: chat.id,
-            senderName: chat.title,
-            text: `📢 مرحباً بكم في قناة (${chat.title}) على تيليجرام!\n\n${chat.description || 'هنا ننشر أحدث الأخبار، التحديثات التقنية، والبيانات الحصرية لمتابعينا.'}\n\nانقر على زر "الانضمام إلى القناة" بالأسفل لتلقي كل جديد مباشرة.`,
-            timestamp: Date.now() - 3600 * 24 * 1000,
-            isOut: false,
-            status: 'read',
-            reactions: [
-              { emoji: '🔥', count: 1840 },
-              { emoji: '❤️', count: 2950 },
-              { emoji: '👏', count: 980 },
-            ],
-          },
-          {
-            id: `post_2_${chat.id}`,
-            chatId: chat.id,
-            senderId: chat.id,
-            senderName: chat.title,
-            text: `🚀 تحديث هام:\nتم إطلاق الميزات الجديدة وتحسين سرعة الأداء والاستجابة على منصة تيليجرام مع دعم قنوات البث والبحث العام الفوري. يسعدنا دائماً تفاعلكم المستمر!`,
-            timestamp: Date.now() - 3600 * 5 * 1000,
-            isOut: false,
-            status: 'read',
-            reactions: [
-              { emoji: '⚡', count: 1420 },
-              { emoji: '🎉', count: 2130 },
-            ],
-          },
-        ];
-        return {
-          ...prev,
-          [chat.id]: initialChannelPosts,
-        };
-      }
-
-      return prev;
-    });
-
-    // Notify backend and peers via WebSocket and HTTP
-    wsClient.send({
-      type: 'mark_read',
-      peerId: chat.id,
-    });
-    fetch('/api/telegram/mark-read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ peerId: chat.id }),
-    }).catch(() => {});
-
-    // If real MTProto session active, attempt loading live messages
-    if (activeAccountId) {
-      try {
-        const res = await fetch(`/api/telegram/messages?peerId=${encodeURIComponent(chat.id)}&limit=30`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.messages && data.messages.length > 0) {
-            setMessagesMap((prev) => ({
-              ...prev,
-              [chat.id]: data.messages,
-            }));
-          }
-        }
-      } catch {
-        // Fallback already rendered
-      }
-    }
-  };
-
-  // Join Channel with MTProto API and WebSocket real-time broadcast
-  const handleJoinChannel = async (channelId: string) => {
-    setIsJoiningChannel(true);
-    try {
-      const activeC = chats.find((c) => c.id === channelId);
-      const targetIdentifier = activeC?.username || channelId;
-
-      const res = await fetch('/api/telegram/join-channel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: targetIdentifier }),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to join channel');
-      }
-
-      // Update chat state in local list
-      setChats((prev) =>
-        prev.map((c) => {
-          if (c.id === channelId || (c.username && c.username.toLowerCase() === targetIdentifier.toLowerCase())) {
-            return {
-              ...c,
-              isJoined: true,
-              membersCount: (c.membersCount || 10000) + 1,
-            };
-          }
-          return c;
-        })
-      );
-
-      // Add system message into channel feed
-      const joinSysMsg: TelegramMessage = {
-        id: `sys_join_${Date.now()}`,
-        chatId: channelId,
-        senderId: 'system',
-        senderName: 'تيليجرام',
-        text: themeConfig.language === 'ar' ? '🎉 انضممت إلى القناة بنجاح' : '🎉 You joined the channel',
-        timestamp: Date.now(),
-        isOut: false,
-        status: 'read',
-      };
-
-      setMessagesMap((prev) => ({
-        ...prev,
-        [channelId]: [...(prev[channelId] || []), joinSysMsg],
-      }));
-
-      showToast(
-        themeConfig.language === 'ar' ? 'تم الانضمام إلى القناة بنجاح! 📢' : 'Successfully joined the channel! 📢',
-        'success'
-      );
-    } catch (err: any) {
-      console.error('Error joining channel:', err);
-      // Ensure UI still marks as joined gracefully
-      setChats((prev) =>
-        prev.map((c) => (c.id === channelId ? { ...c, isJoined: true } : c))
-      );
-      showToast(
-        themeConfig.language === 'ar' ? 'تم الانضمام إلى القناة بنجاح! 📢' : 'Successfully joined the channel! 📢',
-        'success'
-      );
-    } finally {
-      setIsJoiningChannel(false);
-    }
-  };
-
-  const activeChat = chats.find((c) => c.id === selectedChatId) || chats[0] || null;
-  const currentMessages = selectedChatId ? messagesMap[selectedChatId] || [] : [];
-
-  // Sending a message
-  const handleSendMessage = async (text: string, replyTo?: TelegramMessage, media?: any) => {
-    if (!selectedChatId) return;
-
-    const newMsgId = 'msg_' + Date.now();
-    const newMsg: TelegramMessage = {
-      id: newMsgId,
-      chatId: selectedChatId,
-      senderId: currentUser?.id || 'me',
-      senderName: currentUser ? `${currentUser.firstName} ${currentUser.lastName || ''}`.trim() : 'أنا',
-      text,
-      timestamp: Date.now(),
-      isOut: true,
-      status: 'sent',
-      replyTo: replyTo
-        ? {
-            id: replyTo.id,
-            senderName: replyTo.senderName,
-            text: replyTo.text,
-          }
-        : undefined,
-      media,
-    };
-
-    // Update messages map
-    setMessagesMap((prev) => ({
-      ...prev,
-      [selectedChatId]: [...(prev[selectedChatId] || []), newMsg],
-    }));
-
-    // Send via real-time WebSocket immediately
-    wsClient.send({
-      type: 'send_message',
-      peerId: selectedChatId,
-      text,
-      replyTo: replyTo ? { id: replyTo.id, senderName: replyTo.senderName, text: replyTo.text } : undefined,
-      media,
-    });
-
-    // Update last message in chat list
-    setChats((prev) =>
-      prev.map((c) => {
-        if (c.id === selectedChatId) {
-          return {
-            ...c,
-            lastMessage: {
-              text,
-              timestamp: Date.now(),
-              isOut: true,
-              mediaType: media?.type,
-            },
-          };
-        }
-        return c;
-      })
-    );
-
-    // If connected via real MTProto, send to backend
-    if (currentUser) {
-      try {
-        const activeAcc = accounts.find((a) => a.id === activeAccountId);
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (activeAcc?.sessionToken) {
-          headers['x-session-token'] = activeAcc.sessionToken;
-        }
-        await fetch('/api/telegram/send-message', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            peerId: selectedChatId,
-            text,
-            replyTo: replyTo ? Number(replyTo.id) : undefined,
-          }),
-        });
-        // Also inform MTProto about action
-        fetch('/api/telegram/set-typing', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ peerId: selectedChatId, action: 'typing' }),
-        }).catch(() => {});
-      } catch (err) {
-        console.error('Failed to send MTProto message:', err);
-      }
-    }
-  };
-
-  // Toggle emoji reaction
-  const handleReactMessage = (messageId: string, emoji: string) => {
-    if (!selectedChatId) return;
-
-    // Send to real MTProto backend
-    if (currentUser) {
-      const numId = Number(messageId.replace(/\D/g, ''));
-      if (numId) {
-        const activeAcc = accounts.find((a) => a.id === activeAccountId);
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (activeAcc?.sessionToken) {
-          headers['x-session-token'] = activeAcc.sessionToken;
-        }
-        fetch('/api/telegram/send-reaction', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            peerId: selectedChatId,
-            messageId: numId,
-            emoji,
-          }),
-        }).catch((err) => console.warn('Failed to send reaction to MTProto:', err));
-      }
-    }
-
-    setMessagesMap((prev) => {
-      const list = prev[selectedChatId] || [];
-      const updated = list.map((m) => {
-        if (m.id !== messageId) return m;
-
-        const reactions = [...(m.reactions || [])];
-        const existing = reactions.find((r) => r.emoji === emoji);
-
-        if (existing) {
-          if (existing.userReacted) {
-            existing.count -= 1;
-            existing.userReacted = false;
-          } else {
-            existing.count += 1;
-            existing.userReacted = true;
-          }
-        } else {
-          reactions.push({ emoji, count: 1, userReacted: true });
-        }
-
-        return {
-          ...m,
-          reactions: reactions.filter((r) => r.count > 0),
-        };
-      });
-
-      return {
-        ...prev,
-        [selectedChatId]: updated,
-      };
-    });
-  };
-
-  // Pin message
-  const handlePinMessage = (messageId: string) => {
-    if (!selectedChatId) return;
-
-    setMessagesMap((prev) => {
-      const list = prev[selectedChatId] || [];
-      const updated = list.map((m) => {
-        if (m.id === messageId) {
-          return { ...m, isPinned: !m.isPinned };
-        }
-        return m;
-      });
-      return {
-        ...prev,
-        [selectedChatId]: updated,
-      };
-    });
-  };
-
-  // Delete message
-  const handleDeleteMessage = (messageId: string) => {
-    if (!selectedChatId) return;
-
-    setMessagesMap((prev) => {
-      const list = prev[selectedChatId] || [];
-      return {
-        ...prev,
-        [selectedChatId]: list.filter((m) => m.id !== messageId),
-      };
-    });
-  };
-
-  // Toggle Mute
-  const handleToggleMute = (chatId: string) => {
-    setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, isMuted: !c.isMuted } : c))
-    );
-  };
-
-  // Clear History
-  const handleClearHistory = (chatId: string) => {
-    setMessagesMap((prev) => ({
-      ...prev,
-      [chatId]: [],
-    }));
-    setChats((prev) =>
-      prev.map((c) => (c.id === chatId ? { ...c, lastMessage: undefined } : c))
-    );
-  };
-
-  // Leave Group / Channel
-  const handleLeaveGroup = (chatId: string) => {
-    setChats((prev) => prev.filter((c) => c.id !== chatId));
-    setMessagesMap((prev) => {
-      const copy = { ...prev };
-      delete copy[chatId];
-      return copy;
-    });
-    if (selectedChatId === chatId) {
-      setSelectedChatId('saved_messages');
-    }
-  };
-
-  // Report Chat
-  const handleReportChat = (chatId: string, reason: string, details?: string) => {
-    console.log('Report received for chat:', chatId, { reason, details });
-  };
-
-  // Delete Multiple Messages (Selection Mode)
-  const handleDeleteMultipleMessages = (messageIds: string[]) => {
-    if (!selectedChatId) return;
-    setMessagesMap((prev) => ({
-      ...prev,
-      [selectedChatId]: (prev[selectedChatId] || []).filter((m) => !messageIds.includes(m.id)),
-    }));
-  };
-
-  // Create new channel / group
-  const handleCreateChat = (newChatData: Partial<TelegramChat>) => {
-    const id = 'custom_' + Date.now();
-    const chat: TelegramChat = {
-      id,
-      title: newChatData.title || 'محادثة جديدة',
-      username: newChatData.username,
-      type: newChatData.type || 'channel',
-      avatarColor: newChatData.avatarColor || '#3390ec',
-      description: newChatData.description,
-      unreadCount: 0,
-      membersCount: newChatData.membersCount || 1,
-      isPinned: true,
-    };
-
-    setChats([chat, ...chats]);
-    setSelectedChatId(id);
-    setMessagesMap((prev) => ({
-      ...prev,
-      [id]: [
-        {
-          id: 'welcome_' + Date.now(),
-          chatId: id,
-          senderId: currentUser?.id || 'me',
-          senderName: currentUser?.firstName || 'أنا',
-          text: `تم إنشاء ${
-            chat.type === 'channel' ? 'القناة' : chat.type === 'group' ? 'المجموعة' : 'المحادثة'
-          } بنجاح!`,
-          timestamp: Date.now(),
-          isOut: true,
-          status: 'read',
-        },
-      ],
-    }));
-  };
-
-  // Select contact from contacts modal
-  const handleSelectContact = (contact: TelegramUser) => {
-    // Check if chat already exists
-    const existing = chats.find((c) => c.title === `${contact.firstName} ${contact.lastName || ''}`.trim());
-    if (existing) {
-      setSelectedChatId(existing.id);
-    } else {
-      const id = 'contact_chat_' + contact.id;
-      const newChat: TelegramChat = {
-        id,
-        title: `${contact.firstName} ${contact.lastName || ''}`.trim(),
-        username: contact.username,
-        type: 'private',
-        avatarColor: '#3390ec',
-        unreadCount: 0,
-        isOnline: contact.status === 'online',
-      };
-      setChats([newChat, ...chats]);
-      setSelectedChatId(id);
-    }
-  };
-
-  if (isCheckingAuth) {
-    return (
-      <div className="min-h-screen bg-[#0e1621] text-white flex flex-col items-center justify-center p-4">
-        <Loader2 className="w-10 h-10 text-[#3390ec] animate-spin mb-4" />
-        <p className="text-sm text-gray-400 font-medium tracking-wide">
-          جارٍ تهيئة خوادم Telegram MTProto والتحقق من الجلسة...
-        </p>
+  const content = <section className="w-full max-w-[420px] rounded-[28px] border border-border bg-card p-7 soft-shadow fade-up" dir="rtl">
+    <div className="flex items-center justify-between">
+      <div className="grid h-12 w-12 place-items-center rounded-2xl bg-primary text-primary-foreground"><MessageCircle size={22} /></div>
+      {onClose && <IconButton label="إغلاق التسجيل" onClick={onClose}><X size={18} /></IconButton>}
+    </div>
+    <div className="mt-6">
+      <div className="flex items-center justify-between">
+        <p className="font-mono-app text-[10px] uppercase tracking-[.18em] text-primary font-bold">Telegram Official Client</p>
+        <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[9px] font-bold text-emerald-600 dark:text-emerald-400">MTProto Live</span>
       </div>
-    );
-  }
+      <h1 className="mt-2 text-2xl font-bold">{step === 'phone' ? 'تسجيل الدخول الفعلي' : step === 'code' ? 'تحقق من الرمز الرسمي' : 'كلمة مرور التحقق بخطوتين'}</h1>
+      <p className="mt-2.5 text-xs leading-6 text-muted-foreground">
+        {step === 'phone' ? 'سجّل الدخول برقم هاتف Telegram لتلقي رمز التحقق الفعلي مباشرة من خوادم تيليجرام.' : step === 'code' ? `أدخل الرمز الرسمي الذي أرسلته Telegram إلى الرقم ${phone}.` : 'هذا الحساب محمي بالتحقق بخطوتين (2FA). كلمة المرور تُشفر وتُرسل مباشرة لخوادم تيليجرام.'}
+      </p>
 
-  // If user is not logged in, show official LoginView
-  if (!currentUser) {
-    return (
-      <LoginView
-        onLoginSuccess={handleLoginSuccess}
-        lang={themeConfig.language}
-      />
-    );
-  }
+      {/* Telegram MTProto Credentials Badge */}
+      <div className="mt-3 flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-[11px] text-primary">
+        <span className="flex items-center gap-1.5 font-medium">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          اتصال سحابي حقيقي
+        </span>
+        <span className="font-mono text-[10px] font-bold bg-primary/10 px-2 py-0.5 rounded">
+          API ID: 22043994
+        </span>
+      </div>
+    </div>
+    {step === 'phone' && (
+      <>
+        <label className="mt-5 block text-[11px] font-bold">رقم الهاتف الدولي</label>
+        <input
+          autoFocus
+          value={phone}
+          onChange={event => setPhone(event.target.value)}
+          placeholder="+966 50 123 4567"
+          data-testid="input-phone"
+          className="mt-2 h-12 w-full rounded-xl border border-input bg-background px-4 text-left text-sm font-mono outline-none focus:ring-2 focus:ring-primary/30"
+          dir="ltr"
+        />
+        <p className="mt-1.5 text-[10.5px] text-muted-foreground">
+          اكتب الرقم مع مفتاح الدولة (مثل: +966 أو +967 أو +20).
+        </p>
+      </>
+    )}
+    {step === 'code' && (
+      <>
+        <div className="mt-4 rounded-xl bg-muted/50 p-3 text-[11px] text-foreground leading-5 border border-border/60">
+          <p className="font-bold text-primary">وصلتك رسالة في تطبيق تيليجرام:</p>
+          <p className="mt-0.5 text-muted-foreground">افتح تطبيق Telegram على هاتفك وانسخ رمز تسجيل الدخول المكوّن من 5 أرقام.</p>
+        </div>
+        <input
+          autoFocus
+          value={code}
+          onChange={event => setCode(event.target.value)}
+          maxLength={6}
+          placeholder="12345"
+          data-testid="input-verification-code"
+          className="mt-4 h-14 w-full rounded-xl border border-input bg-background px-4 text-center font-mono-app text-2xl tracking-[.35em] font-bold outline-none focus:ring-2 focus:ring-primary/30"
+          dir="ltr"
+        />
+      </>
+    )}
+    {step === 'password' && (
+      <>
+        <label className="mt-5 block text-[11px] font-bold">كلمة المرور الإضافية (2FA)</label>
+        <input
+          autoFocus
+          value={password}
+          onChange={event => setPassword(event.target.value)}
+          type="password"
+          placeholder="كلمة مرور التحقق بخطوتين"
+          data-testid="input-two-factor-password"
+          className="mt-2 h-12 w-full rounded-xl border border-input bg-background px-4 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+          dir="ltr"
+        />
+      </>
+    )}
+    {error && <p role="alert" className="mt-3 rounded-xl bg-destructive/10 px-3 py-2 text-[11px] leading-5 text-destructive">{error}</p>}
+    <button
+      type="button"
+      disabled={busy || (step === 'phone' ? !phone.trim() : step === 'code' ? !code.trim() : !password)}
+      onClick={() => void submit()}
+      data-testid="button-auth-submit"
+      className="mt-5 w-full rounded-xl bg-primary py-3.5 text-xs font-bold text-primary-foreground transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {busy ? 'جارٍ الاتصال بخوادم Telegram…' : step === 'phone' ? 'طلب رمز الدخول الفعلي' : step === 'code' ? 'التحقق وتسجيل الدخول' : 'تأكيد كلمة المرور'}
+    </button>
+    {step !== 'phone' && (
+      <button
+        type="button"
+        onClick={() => { setStep('phone'); setCode(''); setPassword(''); setError(''); }}
+        className="mt-3 w-full py-2 text-xs font-bold text-primary hover:underline"
+      >
+        استخدام رقم آخر
+      </button>
+    )}
+    <div className="mt-5 flex items-center justify-center gap-2 text-[10px] text-muted-foreground">
+      <LockKeyhole size={12} className="text-emerald-500" />
+      اتصال مشفّر مباشر عبر خوادم MTProto الرسمية
+    </div>
+  </section>;
+
+  return modal ? <div className="absolute inset-0 z-50 grid place-items-center bg-[hsl(211_38%_12%/.38)] p-4 backdrop-blur-sm">{content}</div> : <main className="grid min-h-[100dvh] place-items-center bg-background p-5">{content}</main>;
+}
+
+function AddAccount({ onClose, onAuthenticated }: { onClose: () => void; onAuthenticated: (status: AuthStatus) => void }) {
+  return <AuthScreen modal onClose={onClose} onAuthenticated={onAuthenticated} />;
+}
+
+function MessageBubble({ message, onAction }: { key?: Key; message: Message; onAction: (action: 'reply'|'edit'|'delete'|'react', message: Message) => void }) {
+  return <div className={`group flex items-end gap-2 ${message.outgoing ? 'flex-row' : 'flex-row-reverse'} fade-up`}><div className={`relative max-w-[min(72%,520px)] px-4 py-2.5 shadow-sm ${message.outgoing ? 'message-out' : 'message-in'}`}><p className="whitespace-pre-wrap text-[12px] leading-7">{message.text}</p><div className={`mt-1 flex items-center gap-1 font-mono-app text-[9px] text-muted-foreground ${message.outgoing ? 'justify-start' : 'justify-end'}`}><span>{message.time}</span>{message.edited && <span>· تم التعديل</span>}{message.outgoing && (message.read ? <CheckCheck size={13} className="text-primary" /> : <Check size={12} />)}</div>{message.reaction && <button type="button" onClick={() => onAction('react', message)} data-testid={`button-reaction-${message.id}`} className="absolute -bottom-3 right-3 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] shadow-sm">{message.reaction}</button>}</div><div className="invisible flex items-center gap-0.5 opacity-0 transition-all group-hover:visible group-hover:opacity-100"><IconButton label="رد" onClick={() => onAction('reply', message)} className="h-7 w-7"><MessageCircle size={13} /></IconButton>{message.outgoing && <IconButton label="تعديل" onClick={() => onAction('edit', message)} className="h-7 w-7"><Edit3 size={13} /></IconButton>}<IconButton label="تفاعل" onClick={() => onAction('react', message)} className="h-7 w-7"><SmilePlus size={13} /></IconButton><IconButton label="حذف" onClick={() => onAction('delete', message)} className="h-7 w-7 text-destructive"><Trash2 size={13} /></IconButton></div></div>;
+}
+
+function Conversation({ chat, messages, setMessages, onBack, onProfile, onError }: { chat: Chat; messages: Message[]; setMessages: (m: Message[]) => void; onBack: () => void; onProfile: () => void; onError: (message: string) => void }) {
+  const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState<Message | null>(null);
+  const [replying, setReplying] = useState<Message | null>(null);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
+  const handleAction = (action: 'reply'|'edit'|'delete'|'react', message: Message) => {
+    if (action === 'reply') setReplying(message);
+    if (action === 'edit') { setEditing(message); setDraft(message.text); }
+    if (action === 'delete') void apiFetch(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${message.id}`, { method: 'DELETE' }).then(() => setMessages(messages.filter(item => item.id !== message.id))).catch(error => onError(error instanceof Error ? error.message : 'تعذر حذف الرسالة'));
+    if (action === 'react') setMessages(messages.map(item => item.id === message.id ? { ...item, reaction: item.reaction ? undefined : 'مفيد' } : item));
+  };
+  const send = () => {
+    const text = draft.trim(); if (!text) return;
+    const request = editing
+      ? apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${editing.id}`, { method: 'PATCH', body: JSON.stringify({ text }) })
+      : apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages`, { method: 'POST', body: JSON.stringify({ text: replying ? `رداً على: ${replying.text}\n${text}` : text }) });
+    void request.then(result => {
+      const next = toMessage(result.message);
+      setMessages(editing ? messages.map(item => item.id === editing.id ? next : item) : [...messages, next]);
+      setDraft(''); setReplying(null); setEditing(null);
+    }).catch(error => onError(error instanceof Error ? error.message : 'تعذر إرسال الرسالة'));
+  };
+  return <section className="chat-wallpaper relative flex min-w-0 flex-1 flex-col" dir="rtl">
+    <header className="flex h-[74px] flex-none items-center gap-3 border-b border-border bg-card/90 px-4 backdrop-blur-md">
+      <IconButton label="العودة للمحادثات" onClick={onBack} className="md:hidden"><ChevronLeft size={20} /></IconButton>
+      <button type="button" onClick={onProfile} data-testid="button-open-profile" className="flex min-w-0 items-center gap-3 text-right">
+        <div className="relative"><Avatar chat={chat} /><span className={`absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full border-2 border-card ${chat.online ? 'bg-[#7dbd8a]' : 'bg-muted-foreground/30'}`} /></div>
+        <span className="min-w-0"><strong className="block truncate text-sm">{chat.name}</strong><small className="mt-1 block truncate text-[10px] text-muted-foreground">{chat.kind || (chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً')}</small></span>
+      </button>
+      <div className="mr-auto flex items-center gap-1">
+        <IconButton label="بحث في المحادثة"><Search size={18} /></IconButton>
+        <IconButton label="اتصال صوتي"><Phone size={18} /></IconButton>
+        <IconButton label="المزيد"><MoreVertical size={19} /></IconButton>
+      </div>
+    </header>
+    <div className="flex-1 overflow-y-auto px-4 py-7 sm:px-8"><div className="mx-auto flex max-w-[820px] flex-col gap-4"><div className="mx-auto mb-2 rounded-full bg-card/75 px-4 py-1.5 text-[10px] text-muted-foreground shadow-sm">اليوم</div>{messages.length === 0 ? <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div> : messages.map(message => <MessageBubble key={message.id} message={message} onAction={handleAction} />)}<div ref={endRef} /></div></div>
+    <div className="composer-shadow flex-none border-t border-border bg-card/90 px-3 py-3 backdrop-blur-md sm:px-7">
+      <div className="mx-auto max-w-[820px]">
+        {(replying || editing) && <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary/80 px-3 py-2 text-[10px]"><span className="h-5 w-1 rounded-full bg-primary" /><span className="min-w-0 flex-1 truncate">{editing ? 'تعديل الرسالة' : `الرد على: ${replying?.text}`}</span><IconButton label="إلغاء" onClick={() => { setReplying(null); setEditing(null); setDraft(''); }} className="h-6 w-6"><X size={13} /></IconButton></div>}
+        <div className="relative flex items-end gap-2">
+          <div className="relative">
+            <IconButton label="إرفاق ملف" active={attachOpen} onClick={() => setAttachOpen(!attachOpen)}><Paperclip size={19} /></IconButton>
+            {attachOpen && <div className="absolute bottom-12 right-0 z-20 w-44 rounded-2xl border border-border bg-card p-2 shadow-xl fade-up"><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-photo" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><ImageIcon size={16} className="text-primary" /> صورة أو فيديو</button><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-file" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><FileText size={16} className="text-primary" /> ملف من الجهاز</button><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-camera" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><Info size={16} className="text-primary" /> الموقع</button></div>}
+          </div>
+          <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} rows={1} placeholder={editing ? 'عدّل رسالتك...' : 'اكتب رسالة'} data-testid="input-message" className="max-h-28 min-h-10 flex-1 resize-none rounded-2xl border border-input bg-background px-4 py-2.5 text-xs leading-6 outline-none transition focus:ring-2 focus:ring-primary/30" />
+          <IconButton label={recording ? 'إيقاف التسجيل' : 'تسجيل صوتي'} active={recording} onClick={() => setRecording(!recording)}>{recording ? <span className="h-3 w-3 rounded-sm bg-destructive" /> : <Mic size={19} />}</IconButton>
+          {draft.trim() && <button type="button" onClick={send} data-testid="button-send-message" className="grid h-10 w-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm transition hover:brightness-105 active:scale-95"><Send size={17} /></button>}
+        </div>
+        {recording && <p className="mt-2 text-center text-[10px] text-destructive">جاري التسجيل · اضغط على الميكروفون للإيقاف</p>}
+      </div>
+    </div>
+  </section>;
+}
+
+function ChatList({
+  chats,
+  selected,
+  onSelect,
+  onSettings,
+  onAdd,
+  onOpenDrawer,
+  mobileList,
+}: {
+  chats: Chat[];
+  selected: string;
+  onSelect: (id: string) => void;
+  onSettings: () => void;
+  onAdd: () => void;
+  onOpenDrawer: () => void;
+  mobileList: boolean;
+}) {
+  const [search, setSearch] = useState('');
+  const [tab, setTab] = useState<'all' | 'groups' | 'channels' | 'bots' | 'unread' | 'archive'>('all');
+
+  const visible = useMemo(() => {
+    return chats
+      .filter(c => {
+        if (tab === 'archive') return !!c.archived;
+        if (c.archived) return false;
+        if (tab === 'unread') return !!c.unread && c.unread > 0;
+        if (tab === 'groups') return c.kind === 'group' || c.name.includes('مجموعة') || c.name.includes('جروب');
+        if (tab === 'channels') return c.kind === 'channel' || c.name.includes('قناة');
+        if (tab === 'bots') return c.kind === 'bot' || c.name.includes('بوت') || c.name.toLowerCase().includes('bot');
+        return true;
+      })
+      .filter(c => `${c.name} ${c.preview}`.toLowerCase().includes(search.toLowerCase().trim()));
+  }, [chats, tab, search]);
+
+  const unreadCount = useMemo(() => chats.reduce((acc, c) => acc + (c.unread || 0), 0), [chats]);
 
   return (
-    <div
-      className={`h-screen w-screen flex flex-col overflow-hidden select-none font-sans ${
-        themeConfig.isDark ? 'bg-[#0e1621] text-white' : 'bg-gray-100 text-gray-900'
-      }`}
-      dir={themeConfig.language === 'ar' ? 'rtl' : 'ltr'}
+    <aside
+      className={`${mobileList ? 'flex' : 'mobile-list-hidden'} flex w-full flex-none flex-col border-l border-border bg-card/90 md:w-[340px] lg:w-[370px] select-none`}
+      dir="rtl"
     >
-      {/* Main App Layout */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Sidebar */}
-        <Sidebar
-          chats={chats}
-          selectedChatId={selectedChatId}
-          onSelectChat={handleSelectChat}
-          onOpenMenu={() => setIsSettingsOpen(true)}
-          onOpenNewChat={() => setIsNewChatOpen(true)}
-          activeFolder={activeFolder}
-          onChangeFolder={setActiveFolder}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          lang={themeConfig.language}
-          isDark={themeConfig.isDark}
-          currentUser={currentUser}
-          accounts={accounts}
-          onOpenAddAccount={() => setIsAddAccountOpen(true)}
-          onSwitchAccount={handleSwitchAccount}
-          typingMap={typingMap}
-          peerStoriesList={peerStoriesList}
-          onOpenStory={handleOpenStory}
-        />
+      {/* Telegram Action Bar Header (56px) */}
+      <header className="flex h-14 items-center justify-between px-3 border-b border-border/80 bg-card">
+        <div className="flex items-center gap-2">
+          <IconButton label="القائمة الجانبية (Telegram Drawer)" onClick={onOpenDrawer}>
+            <Menu size={20} />
+          </IconButton>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-sky-600 to-blue-500 flex items-center justify-center text-white text-xs font-black shadow-xs">
+              ت
+            </div>
+            <div>
+              <h1 className="text-sm font-bold leading-tight flex items-center gap-1.5">
+                <span>تيليجرام</span>
+                <span className="text-[9px] bg-sky-500/20 text-sky-600 dark:text-sky-300 font-mono px-1 rounded font-bold">
+                  PRO
+                </span>
+              </h1>
+              <span className="text-[9px] text-emerald-500 font-medium flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                سحابة تيليجرام متصلة
+              </span>
+            </div>
+          </div>
+        </div>
 
-        {/* Center Chat Window */}
-        <ChatWindow
-          chat={activeChat}
-          messages={currentMessages}
-          currentUser={currentUser}
-          typingStatus={selectedChatId ? typingMap[selectedChatId] || null : null}
-          onSendMessage={handleSendMessage}
-          onReactMessage={handleReactMessage}
-          onPinMessage={handlePinMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onDeleteMultipleMessages={handleDeleteMultipleMessages}
-          onToggleChatInfo={() => setIsChatInfoOpen(!isChatInfoOpen)}
-          isChatInfoOpen={isChatInfoOpen}
-          onToggleMute={handleToggleMute}
-          onClearHistory={handleClearHistory}
-          onLeaveGroup={handleLeaveGroup}
-          onReportChat={handleReportChat}
-          onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
-          onOpenMiniApp={(url, appName) => handleOpenMiniApp(url, appName)}
-          onBotCallback={handleBotCallback}
-          onJoinChannel={handleJoinChannel}
-          isJoiningChannel={isJoiningChannel}
-          onToast={showToast}
-          lang={themeConfig.language}
-          isDark={themeConfig.isDark}
-        />
+        <div className="flex items-center gap-0.5">
+          <IconButton label="محادثة جديدة" onClick={onAdd}>
+            <Edit3 size={18} />
+          </IconButton>
+        </div>
+      </header>
 
-        {/* Right Chat Info Drawer */}
-        {activeChat && (
-          <ChatInfoDrawer
-            chat={activeChat}
-            messages={currentMessages}
-            isOpen={isChatInfoOpen}
-            onClose={() => setIsChatInfoOpen(false)}
-            onToggleMute={handleToggleMute}
-            onOpenClearHistory={() => setDrawerModal('clear')}
-            onOpenLeaveGroup={() => setDrawerModal('leave')}
-            onOpenShareLink={() => setDrawerModal('share')}
-            onOpenReportChat={() => setDrawerModal('report')}
-            onOpenMediaViewer={(url, title) => setMediaViewerData({ url, title })}
-            onToast={showToast}
-            lang={themeConfig.language}
-            isDark={themeConfig.isDark}
+      <div className="px-3 pt-2.5">
+        {/* Search Bar */}
+        <label className="relative block">
+          <Search size={15} className="absolute right-3 top-3 text-muted-foreground" />
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="بحث في المحادثات أو الرسائل..."
+            data-testid="input-search-chats"
+            className="h-9.5 w-full rounded-xl border border-input bg-background/80 pr-9 pl-3 text-xs outline-none focus:ring-2 focus:ring-primary/25 transition-all"
           />
+        </label>
+
+        {/* Telegram Folder Bar (شريط المجلدات والتبويبات) */}
+        <div className="mt-2 flex items-center gap-1 overflow-x-auto no-scrollbar border-b border-border/70 pb-1 text-xs">
+          <button
+            type="button"
+            onClick={() => setTab('all')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'all'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Folder size={12} />
+            <span>الكل</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('groups')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'groups'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Users size={12} />
+            <span>المجموعات</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('channels')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'channels'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Megaphone size={12} />
+            <span>القنوات</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('bots')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'bots'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Bot size={12} />
+            <span>البوتات</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('unread')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'unread'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <span>غير مقروءة</span>
+            {unreadCount > 0 && (
+              <span className="px-1.5 py-0.2 text-[9px] bg-primary text-primary-foreground rounded-full font-bold">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('archive')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+              tab === 'archive'
+                ? 'bg-primary/15 text-primary border-b-2 border-primary font-bold'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Archive size={12} />
+            <span>الأرشيف</span>
+          </button>
+        </div>
+      </div>
+      <div className="mt-3 flex-1 overflow-y-auto pb-4">
+        {visible.length === 0 ? <EmptyState search={search} /> : <>{visible.some(c => c.pinned) && tab === 'all' && <div className="flex items-center gap-2 px-5 pb-1 pt-2 text-[9px] font-bold uppercase tracking-[.12em] text-muted-foreground"><Pin size={11} /> مثبتة</div>}{visible.map(chat => <ChatRow key={chat.id} chat={chat} selected={selected === chat.id} onSelect={() => onSelect(chat.id)} />)}</>}
+      </div>
+      <footer className="border-t border-border px-5 py-3 text-center text-[9px] text-muted-foreground">مزامنة سحابية مباشرة · Telegram MTProto</footer>
+    </aside>
+  );
+}
+
+function AppWorkspace() {
+  const [theme, setTheme] = useState<'light'|'dark'>(() => storage.get('telegram-theme', 'light'));
+  const [selected, setSelected] = useState('');
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [showProfile, setShowProfile] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [mobileList, setMobileList] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [activeService, setActiveService] = useState<string | null>(null);
+  const [, setLocation] = useLocation();
+
+  useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); storage.set('telegram-theme', theme); }, [theme]);
+  useEffect(() => {
+    void apiFetch<AuthStatus>('/telegram/status')
+      .then(status => setAuth(status))
+      .catch(() => setAuth({ authenticated: false, state: 'phone' }))
+      .finally(() => setAuthLoading(false));
+  }, []);
+  useEffect(() => {
+    if (!auth?.authenticated) return;
+    setDataLoading(true);
+    void apiFetch<{ chats: ApiChat[] }>('/telegram/chats')
+      .then(result => {
+        const nextChats = result.chats.map(toChat);
+        setChats(nextChats);
+        setSelected(current => current && nextChats.some(chat => chat.id === current) ? current : nextChats[0]?.id || '');
+      })
+      .catch(requestError => setError(requestError instanceof Error ? requestError.message : 'تعذر تحميل المحادثات'))
+      .finally(() => { setDataLoading(false); setReady(true); });
+  }, [auth?.authenticated]);
+  useEffect(() => {
+    if (!auth?.authenticated || !selected) return;
+    void apiFetch<{ messages: Array<{ id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean }> }>(`/telegram/chats/${encodeURIComponent(selected)}/messages`)
+      .then(result => setMessages(current => ({ ...current, [selected]: result.messages.map(toMessage) })))
+      .catch(requestError => setError(requestError instanceof Error ? requestError.message : 'تعذر تحميل الرسائل'));
+  }, [auth?.authenticated, selected]);
+
+  const current = chats.find(chat => chat.id === selected);
+  const selectChat = (id: string) => { setSelected(id); setShowProfile(false); setMobileList(false); setChats(currentChats => currentChats.map(chat => chat.id === id ? { ...chat, unread: undefined } : chat)); };
+
+  const handleSendToChat = (text: string) => {
+    const targetChatId = selected || chats[0]?.id;
+    if (!targetChatId) return;
+    void apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(
+      `/telegram/chats/${encodeURIComponent(targetChatId)}/messages`,
+      { method: 'POST', body: JSON.stringify({ text }) }
+    ).then(result => {
+      const next = toMessage(result.message);
+      setMessages(currentMessages => ({
+        ...currentMessages,
+        [targetChatId]: [...(currentMessages[targetChatId] || []), next],
+      }));
+    }).catch(() => {
+      const localMsg: Message = {
+        id: `msg_${Date.now()}`,
+        text,
+        time: new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
+        outgoing: true,
+        read: true,
+      };
+      setMessages(currentMessages => ({
+        ...currentMessages,
+        [targetChatId]: [...(currentMessages[targetChatId] || []), localMsg],
+      }));
+    });
+  };
+
+  const logout = () => {
+    void apiFetch('/telegram/auth/logout', { method: 'POST' })
+      .then(() => {
+        setAuth({ authenticated: false, state: 'phone' });
+        setChats([]);
+        setMessages({});
+        setSelected('');
+        setShowSettings(false);
+      })
+      .catch(requestError => setError(requestError instanceof Error ? requestError.message : 'تعذر تسجيل الخروج'));
+  };
+
+  if (authLoading) return <main className="grid min-h-[100dvh] place-items-center bg-background"><LoadingList /></main>;
+  if (!auth?.authenticated) return <AuthScreen onAuthenticated={status => setAuth(status)} />;
+
+  return (
+    <main className="workspace-shell relative flex min-h-[100dvh] overflow-hidden text-foreground">
+      <div className="flex min-h-[100dvh] w-full">
+        {!ready || dataLoading ? (
+          <div className="w-full bg-card"><LoadingList /></div>
+        ) : (
+          <>
+            <ChatList
+              chats={chats}
+              selected={selected}
+              onSelect={selectChat}
+              onSettings={() => setShowSettings(true)}
+              onAdd={() => setShowAdd(true)}
+              onOpenDrawer={() => setIsDrawerOpen(true)}
+              mobileList={mobileList}
+            />
+            <div className={`${mobileList ? 'mobile-chat-hidden' : 'flex'} min-w-0 flex-1`}>
+              {current ? (
+                <Conversation
+                  chat={current}
+                  messages={messages[selected] || []}
+                  setMessages={next => setMessages(currentMessages => ({ ...currentMessages, [selected]: next }))}
+                  onBack={() => setMobileList(true)}
+                  onProfile={() => setShowProfile(true)}
+                  onError={setError}
+                />
+              ) : (
+                <EmptyState search="" />
+              )}
+            </div>
+          </>
         )}
       </div>
 
-      {/* Drawer Action Modals */}
-      {activeChat && (
-        <>
-          <ClearHistoryModal
-            isOpen={drawerModal === 'clear'}
-            onClose={() => setDrawerModal(null)}
-            onConfirm={(alsoForEveryone) => {
-              handleClearHistory(activeChat.id);
-              showToast(themeConfig.language === 'ar' ? 'تم مسح سجل المحادثة' : 'Chat history cleared', 'info');
-            }}
-            chat={activeChat}
-            lang={themeConfig.language}
-            isDark={themeConfig.isDark}
-          />
-
-          <LeaveGroupModal
-            isOpen={drawerModal === 'leave'}
-            onClose={() => setDrawerModal(null)}
-            onConfirm={() => {
-              handleLeaveGroup(activeChat.id);
-              setIsChatInfoOpen(false);
-            }}
-            chat={activeChat}
-            lang={themeConfig.language}
-            isDark={themeConfig.isDark}
-          />
-
-          <ShareLinkModal
-            isOpen={drawerModal === 'share'}
-            onClose={() => setDrawerModal(null)}
-            chat={activeChat}
-            onToast={showToast}
-            lang={themeConfig.language}
-            isDark={themeConfig.isDark}
-          />
-
-          <ReportChatModal
-            isOpen={drawerModal === 'report'}
-            onClose={() => setDrawerModal(null)}
-            chat={activeChat}
-            onReportSubmitted={(reason, details) => {
-              handleReportChat(activeChat.id, reason, details);
-              showToast(
-                themeConfig.language === 'ar' ? 'تم إرسال بلاغك بنجاح' : 'Report submitted successfully',
-                'success'
-              );
-            }}
-            lang={themeConfig.language}
-            isDark={themeConfig.isDark}
-          />
-        </>
+      {/* Native Feature Modals */}
+      {(activeService === 'publishing_monitoring' || activeService === 'broadcast' || activeService === 'monitoring') && (
+        <OriginalPublishingMonitoringModal
+          onClose={() => setActiveService(null)}
+          onSendToChat={handleSendToChat}
+        />
+      )}
+      {activeService === 'learning' && (
+        <LearningSystemModal
+          onClose={() => setActiveService(null)}
+        />
+      )}
+      {activeService === 'rotating' && (
+        <RotatingBroadcastModal
+          onClose={() => setActiveService(null)}
+        />
+      )}
+      {activeService === 'join' && (
+        <AutoJoinModal
+          onClose={() => setActiveService(null)}
+          initialTab="advanced"
+        />
+      )}
+      {activeService === 'saved_links' && (
+        <SavedLinksModal
+          onClose={() => setActiveService(null)}
+          onSelectMessage={handleSendToChat}
+        />
+      )}
+      {activeService === 'autoreplies' && (
+        <AutoRepliesModal
+          onClose={() => setActiveService(null)}
+          onSendToChat={handleSendToChat}
+        />
+      )}
+      {activeService === 'accounts' && (
+        <AccountsManagerModal
+          onClose={() => setActiveService(null)}
+          onOpenLoginFlow={() => {
+            setActiveService(null);
+            setShowAdd(true);
+          }}
+          onAccountSwitched={acc => {
+            setAuth(prev => prev ? { ...prev, user: { name: acc.name, username: acc.username, phone: acc.phone } } : prev);
+          }}
+        />
       )}
 
-      {/* Toast Notification */}
-      <Toast toast={toast} onClose={() => setToast(null)} />
+      {/* In-App Quick Service Overlay Viewer for other tools */}
+      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links'].includes(activeService) && (
+        <div className="fixed inset-0 z-50 flex h-full w-full bg-background fade-up" dir="rtl">
+          <InAppServiceViewer
+            serviceId={activeService}
+            onClose={() => setActiveService(null)}
+            onSelectService={id => setActiveService(id)}
+            onSendToChat={handleSendToChat}
+            activeChatName={current?.name}
+            fullPage
+          />
+        </div>
+      )}
 
-      {/* Settings & Main Menu Drawer */}
-      <SettingsDrawer
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        currentUser={currentUser}
-        onUpdateUser={(updated) => {
-          setCurrentUser((prev) => (prev ? { ...prev, ...updated } : prev));
+      {error && <div role="alert" className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-destructive px-4 py-2 text-[11px] text-destructive-foreground shadow-lg">{error}<button type="button" className="mr-3 font-bold" onClick={() => setError('')}>×</button></div>}
+      {showProfile && current && <ProfilePanel chat={current} onClose={() => setShowProfile(false)} onSettings={() => { setShowProfile(false); setShowSettings(true); }} />}
+      {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} onClose={() => setShowSettings(false)} onAddAccount={() => { setShowSettings(false); setShowAdd(true); }} onOpenAccounts={() => { setShowSettings(false); setActiveService('accounts'); }} onLogout={logout} user={auth.user} />}
+      {showAdd && <AddAccount onClose={() => setShowAdd(false)} onAuthenticated={status => { setShowAdd(false); setAuth(status); }} />}
+
+      {/* Telegram Navigation Drawer (الدرج الجانبي المماثل لتطبيق تيليجرام) */}
+      <NavigationDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        user={
+          auth?.user
+            ? {
+                name: auth.user.name || 'أبو مالك (الرئيسي)',
+                phone: auth.user.phone || '+966 50 000 0001',
+                username: auth.user.username || '@abumalik_official',
+              }
+            : {
+                name: 'أبو مالك (الرئيسي)',
+                phone: '+966 50 000 0001',
+                username: '@abumalik_official',
+              }
+        }
+        activeAccountId="acc_1"
+        onSwitchAccount={(accId) => {
+          setIsDrawerOpen(false);
+          setActiveService('accounts');
         }}
-        themeConfig={themeConfig}
-        onUpdateTheme={(up) => setThemeConfig((prev) => ({ ...prev, ...up }))}
-        onLogout={handleLogout}
-        onOpenSavedMessages={() => setSelectedChatId('saved_messages')}
-        onOpenContacts={() => setIsContactsOpen(true)}
-        accounts={accounts}
-        activeAccountId={activeAccountId}
-        onSwitchAccount={handleSwitchAccount}
-        onOpenAddAccount={() => setIsAddAccountOpen(true)}
-        onRemoveAccount={handleRemoveAccount}
-        chats={chats}
-        onSelectChat={(id) => setSelectedChatId(id)}
-        onToggleArchive={handleToggleArchive}
-      />
-
-      {/* Add Account Modal (Up to 6 users) */}
-      <AddAccountModal
-        isOpen={isAddAccountOpen}
-        onClose={() => setIsAddAccountOpen(false)}
-        onAccountAdded={handleAccountAdded}
-        currentAccountsCount={accounts.length}
-        maxAccounts={MAX_TELEGRAM_ACCOUNTS}
-        lang={themeConfig.language}
-        isDark={themeConfig.isDark}
-      />
-
-      {/* New Chat / Channel Modal */}
-      <NewChatModal
-        isOpen={isNewChatOpen}
-        onClose={() => setIsNewChatOpen(false)}
-        onCreateChat={handleCreateChat}
-        lang={themeConfig.language}
-        isDark={themeConfig.isDark}
-      />
-
-      {/* Contacts Modal */}
-      <ContactsModal
-        isOpen={isContactsOpen}
-        onClose={() => setIsContactsOpen(false)}
-        onSelectContact={handleSelectContact}
-        lang={themeConfig.language}
-        isDark={themeConfig.isDark}
-      />
-
-      {/* Story Viewer Modal */}
-      <StoryViewerModal
-        isOpen={!!activeStoryPeerId}
-        onClose={() => setActiveStoryPeerId(null)}
-        peerStoriesList={peerStoriesList}
-        initialPeerId={activeStoryPeerId || undefined}
-        onReact={handleReactToStory}
-        onRead={handleReadStory}
-        isDark={themeConfig.isDark}
-      />
-
-      {/* Media Lightbox */}
-      <MediaViewerModal
-        isOpen={!!mediaViewerData}
-        onClose={() => setMediaViewerData(null)}
-        mediaUrl={mediaViewerData?.url || null}
-        title={mediaViewerData?.title}
-        isDark={themeConfig.isDark}
-      />
-
-      {/* Telegram Web Apps / Mini Apps Modal */}
-      <MiniAppModal
-        isOpen={isMiniAppOpen}
-        onClose={() => {
-          setIsMiniAppOpen(false);
-          setMiniAppData(null);
+        onOpenService={(serviceId) => {
+          setIsDrawerOpen(false);
+          if (serviceId === 'services_center') {
+            setLocation('/services');
+          } else {
+            setActiveService(serviceId);
+          }
         }}
-        appName={miniAppData?.appName}
-        botUsername={miniAppData?.botUsername || activeChat?.username || 'telegram_bot'}
-        appUrl={miniAppData?.url}
-        onSendData={(data) => {
-          handleSendMessage(`[بيانات تطبيق الويب]: ${data}`);
-          showToast(
-            themeConfig.language === 'ar' ? 'تم إرسال بيانات التطبيق للبوت بنجاح' : 'Data sent to bot successfully',
-            'success'
-          );
+        onOpenSettings={() => {
+          setIsDrawerOpen(false);
+          setShowSettings(true);
         }}
-        lang={themeConfig.language}
-        isDark={themeConfig.isDark}
+        onOpenProfile={() => {
+          setIsDrawerOpen(false);
+          if (current) {
+            setShowProfile(true);
+          } else if (chats.length > 0) {
+            selectChat(chats[0].id);
+            setShowProfile(true);
+          }
+        }}
+        onToggleTheme={() => {
+          setTheme(theme === 'dark' ? 'light' : 'dark');
+        }}
+        theme={theme}
+        onNewSecretChat={() => {
+          setIsDrawerOpen(false);
+          setShowAdd(true);
+        }}
+        onSavedMessages={() => {
+          setIsDrawerOpen(false);
+          const savedChat = chats.find(c => c.name.includes('المحفوظة') || c.name.includes('Saved'));
+          if (savedChat) {
+            selectChat(savedChat.id);
+          } else if (chats.length > 0) {
+            selectChat(chats[0].id);
+          }
+        }}
       />
-    </div>
+      <button type="button" onClick={() => setMobileList(!mobileList)} aria-label="التنقل بين المحادثات" data-testid="button-mobile-navigation" className="fixed bottom-5 right-5 z-20 grid h-12 w-12 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg md:hidden"><MessageCircle size={20} /></button>
+    </main>
   );
 }
+
+function ServicesRoute() {
+  const [, setLocation] = useLocation();
+  return <ServicesCenter onBack={() => setLocation('/')} />;
+}
+
+function Router() { return <Switch><Route path="/" component={AppWorkspace} /><Route path="/services" component={ServicesRoute} /><Route component={() => <div className="grid min-h-[100dvh] place-items-center text-sm">الصفحة غير موجودة</div>} /></Switch>; }
+function App() { return <QueryClientProvider client={new QueryClient()}><TooltipProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter></TooltipProvider></QueryClientProvider>; }
+export default App;

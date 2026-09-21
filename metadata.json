@@ -1,6 +1,6 @@
 {
-  "name": "Telegram Web",
-  "description": "Full-featured Telegram Web client with MTProto 2.0 direct WebSockets, WebAuthn Passkeys biometric authentication, local IndexedDB caching, and cloud privacy management.",
-  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "name": "Abu Malik Telegram Services",
+  "description": "منصة خدمات تيليجرام المتكاملة وإدارة الحسابات ومركز الخدمات الأكاديمية والتحويل",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
