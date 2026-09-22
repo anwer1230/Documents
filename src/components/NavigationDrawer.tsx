@@ -35,6 +35,7 @@ import {
   ExternalLink,
   ShieldCheck,
   LogOut,
+  FileText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -439,6 +440,24 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                   </div>
                   <span className="px-1.5 py-0.5 text-[9px] font-bold bg-cyan-500/25 text-cyan-200 border border-cyan-400/30 rounded font-mono">
                     LINKS
+                  </span>
+                </button>
+
+                {/* 8. قوالب الرسائل الجاهزة */}
+                <button
+                  type="button"
+                  onClick={() => handleAction(() => onOpenService('templates'))}
+                  className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-medium text-gray-100 hover:bg-amber-500/15 transition-all text-right group"
+                >
+                  <div className="flex items-center gap-3.5">
+                    <FileText size={18} className="text-amber-400 group-hover:scale-110 transition-transform shrink-0" />
+                    <div className="flex flex-col text-right">
+                      <span className="font-semibold text-white">قوالب الرسائل الجاهزة</span>
+                      <span className="text-[10px] text-gray-400">حفظ نصوص متكررة واستخدامها فوراً</span>
+                    </div>
+                  </div>
+                  <span className="px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/25 text-amber-200 border border-amber-400/30 rounded font-mono">
+                    TEMPLATES
                   </span>
                 </button>
               </div>

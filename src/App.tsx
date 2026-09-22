@@ -7,7 +7,7 @@ import {
   Archive, ArrowDown, Bell, Check, CheckCheck, ChevronLeft, FileText, Image as ImageIcon,
   Info, LockKeyhole, Menu, MessageCircle, Mic, Moon, MoreVertical, Paperclip, Phone,
   Pin, Plus, Search, Send, Settings, ShieldCheck, SmilePlus, Sun, Trash2, UserPlus, Video, Volume2, X, Edit3, Users,
-  Folder, Megaphone, Bot
+  Folder, Megaphone, Bot, Bookmark, Sparkles
 } from 'lucide-react';
 import { NavigationDrawer } from '@/components/NavigationDrawer';
 import { ServicesCenter } from '@/components/ServicesCenter';
@@ -21,6 +21,7 @@ import { LearningSystemModal } from '@/components/features/LearningSystemModal';
 import { RotatingBroadcastModal } from '@/components/features/RotatingBroadcastModal';
 import { AutoJoinModal } from '@/components/features/AutoJoinModal';
 import { SavedLinksModal } from '@/components/features/SavedLinksModal';
+import { MessageTemplatesModal, type MessageTemplate } from '@/components/features/MessageTemplatesModal';
 
 type Chat = {
   id: string; name: string; initials: string; preview: string; time: string; color: string;
@@ -256,14 +257,55 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
   const [replying, setReplying] = useState<Message | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [showFullTemplates, setShowFullTemplates] = useState(false);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [templateSearch, setTemplateSearch] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
+
+  const loadTemplates = () => {
+    fetch('/api/telegram/templates')
+      .then(res => res.json())
+      .then(data => {
+        if (data.templates) setTemplates(data.templates);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
+
   const handleAction = (action: 'reply'|'edit'|'delete'|'react', message: Message) => {
     if (action === 'reply') setReplying(message);
     if (action === 'edit') { setEditing(message); setDraft(message.text); }
     if (action === 'delete') void apiFetch(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${message.id}`, { method: 'DELETE' }).then(() => setMessages(messages.filter(item => item.id !== message.id))).catch(error => onError(error instanceof Error ? error.message : 'تعذر حذف الرسالة'));
     if (action === 'react') setMessages(messages.map(item => item.id === message.id ? { ...item, reaction: item.reaction ? undefined : 'مفيد' } : item));
   };
+
+  const applyTemplate = (content: string, autoSend: boolean = false, id?: string) => {
+    if (id) {
+      fetch(`/api/telegram/templates/use/${id}`, { method: 'POST' }).catch(() => {});
+    }
+    if (autoSend) {
+      const text = replying ? `رداً على: ${replying.text}\n${content}` : content;
+      void apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(
+        `/telegram/chats/${encodeURIComponent(chat.id)}/messages`,
+        { method: 'POST', body: JSON.stringify({ text }) }
+      ).then(result => {
+        const next = toMessage(result.message);
+        setMessages([...messages, next]);
+        setReplying(null);
+        setTemplatesOpen(false);
+      }).catch(error => onError(error instanceof Error ? error.message : 'تعذر إرسال القالب'));
+    } else {
+      setDraft(prev => prev ? `${prev}\n${content}` : content);
+      setTemplatesOpen(false);
+    }
+  };
+
   const send = () => {
     const text = draft.trim(); if (!text) return;
     const request = editing
@@ -275,6 +317,13 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
       setDraft(''); setReplying(null); setEditing(null);
     }).catch(error => onError(error instanceof Error ? error.message : 'تعذر إرسال الرسالة'));
   };
+
+  const filteredQuickTemplates = templates.filter(tpl =>
+    tpl.title.toLowerCase().includes(templateSearch.toLowerCase()) ||
+    tpl.content.toLowerCase().includes(templateSearch.toLowerCase()) ||
+    (tpl.shortcut && tpl.shortcut.toLowerCase().includes(templateSearch.toLowerCase()))
+  );
+
   return <section className="chat-wallpaper relative flex min-w-0 flex-1 flex-col" dir="rtl">
     <header className="flex h-[74px] flex-none items-center gap-3 border-b border-border bg-card/90 px-4 backdrop-blur-md">
       <IconButton label="العودة للمحادثات" onClick={onBack} className="md:hidden"><ChevronLeft size={20} /></IconButton>
@@ -291,19 +340,177 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
     <div className="flex-1 overflow-y-auto px-4 py-7 sm:px-8"><div className="mx-auto flex max-w-[820px] flex-col gap-4"><div className="mx-auto mb-2 rounded-full bg-card/75 px-4 py-1.5 text-[10px] text-muted-foreground shadow-sm">اليوم</div>{messages.length === 0 ? <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div> : messages.map(message => <MessageBubble key={message.id} message={message} onAction={handleAction} />)}<div ref={endRef} /></div></div>
     <div className="composer-shadow flex-none border-t border-border bg-card/90 px-3 py-3 backdrop-blur-md sm:px-7">
       <div className="mx-auto max-w-[820px]">
+        {/* Quick Templates Bar above Composer */}
+        {templates.length > 0 && !replying && !editing && (
+          <div className="mb-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 select-none">
+            <button
+              type="button"
+              onClick={() => {
+                setTemplatesOpen(!templatesOpen);
+                if (!templatesOpen) loadTemplates();
+              }}
+              className="flex items-center gap-1 shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25 transition cursor-pointer"
+              title="فتح قائمة القوالب السريعة"
+            >
+              <Sparkles size={12} />
+              <span>قوالب سريعة:</span>
+            </button>
+            {templates.slice(0, 4).map(tpl => (
+              <button
+                key={tpl.id}
+                type="button"
+                onClick={() => applyTemplate(tpl.content, false, tpl.id)}
+                className="shrink-0 max-w-[170px] truncate px-2.5 py-1 rounded-lg text-[11px] font-medium bg-secondary/80 hover:bg-primary/15 hover:text-primary transition text-muted-foreground hover:border-primary/30 border border-transparent cursor-pointer"
+                title={`إدراج "${tpl.title}":\n${tpl.content}`}
+              >
+                {tpl.title}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowFullTemplates(true)}
+              className="shrink-0 px-2 py-1 rounded-lg text-[10px] font-semibold text-muted-foreground hover:text-foreground hover:bg-secondary transition cursor-pointer"
+              title="إدارة كافة القوالب"
+            >
+              + إدارة
+            </button>
+          </div>
+        )}
+
         {(replying || editing) && <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary/80 px-3 py-2 text-[10px]"><span className="h-5 w-1 rounded-full bg-primary" /><span className="min-w-0 flex-1 truncate">{editing ? 'تعديل الرسالة' : `الرد على: ${replying?.text}`}</span><IconButton label="إلغاء" onClick={() => { setReplying(null); setEditing(null); setDraft(''); }} className="h-6 w-6"><X size={13} /></IconButton></div>}
         <div className="relative flex items-end gap-2">
+          {/* Quick Templates Drawer Popover */}
+          {templatesOpen && (
+            <div className="absolute bottom-14 right-0 sm:right-2 z-30 w-80 sm:w-96 rounded-2xl border border-border bg-card p-3 shadow-2xl fade-up space-y-2.5">
+              <div className="flex items-center justify-between pb-1 border-b border-border/70">
+                <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-amber-500" />
+                  قوالب الرسائل الجاهزة
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTemplatesOpen(false);
+                      setShowFullTemplates(true);
+                    }}
+                    className="text-[11px] font-bold text-primary hover:underline px-1.5 py-0.5 rounded cursor-pointer"
+                  >
+                    إدارة القوالب
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTemplatesOpen(false)}
+                    className="w-5 h-5 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search within templates */}
+              <div className="relative">
+                <Search size={13} className="absolute right-2.5 top-2.5 text-muted-foreground" />
+                <input
+                  type="search"
+                  value={templateSearch}
+                  onChange={e => setTemplateSearch(e.target.value)}
+                  placeholder="بحث سريع في القوالب..."
+                  className="w-full h-8 rounded-xl border border-input bg-background pr-8 pl-2.5 text-[11px] outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              {/* Templates List */}
+              <div className="max-h-60 overflow-y-auto space-y-1.5 pr-0.5">
+                {filteredQuickTemplates.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-muted-foreground">
+                    لا توجد قوالب مطابقة
+                  </div>
+                ) : (
+                  filteredQuickTemplates.map(tpl => (
+                    <div
+                      key={tpl.id}
+                      className="group/tpl rounded-xl border border-border/60 bg-muted/30 p-2 hover:bg-muted/70 hover:border-primary/40 transition space-y-1"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-foreground truncate">{tpl.title}</span>
+                        <div className="flex items-center gap-1">
+                          {tpl.category && (
+                            <span className="text-[9px] bg-secondary px-1.5 py-0.2 rounded font-semibold text-muted-foreground">
+                              {tpl.category}
+                            </span>
+                          )}
+                          {tpl.shortcut && (
+                            <span className="text-[9px] font-mono bg-sky-500/10 text-sky-500 px-1 py-0.2 rounded" dir="ltr">
+                              {tpl.shortcut}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                        {tpl.content}
+                      </p>
+                      <div className="flex items-center justify-end gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => applyTemplate(tpl.content, false, tpl.id)}
+                          className="px-2.5 py-1 rounded-lg bg-secondary hover:bg-primary/20 text-foreground text-[10px] font-semibold transition cursor-pointer"
+                          title="إدراج في حقل الكتابة"
+                        >
+                          إدراج
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyTemplate(tpl.content, true, tpl.id)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-primary text-primary-foreground hover:brightness-105 text-[10px] font-bold transition cursor-pointer shadow-xs"
+                          title="إرسال فوري إلى المحادثة"
+                        >
+                          <Send size={10} />
+                          <span>إرسال فوري</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="relative">
             <IconButton label="إرفاق ملف" active={attachOpen} onClick={() => setAttachOpen(!attachOpen)}><Paperclip size={19} /></IconButton>
             {attachOpen && <div className="absolute bottom-12 right-0 z-20 w-44 rounded-2xl border border-border bg-card p-2 shadow-xl fade-up"><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-photo" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><ImageIcon size={16} className="text-primary" /> صورة أو فيديو</button><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-file" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><FileText size={16} className="text-primary" /> ملف من الجهاز</button><button type="button" onClick={() => setAttachOpen(false)} data-testid="button-attach-camera" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-xs hover:bg-muted"><Info size={16} className="text-primary" /> الموقع</button></div>}
           </div>
-          <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} rows={1} placeholder={editing ? 'عدّل رسالتك...' : 'اكتب رسالة'} data-testid="input-message" className="max-h-28 min-h-10 flex-1 resize-none rounded-2xl border border-input bg-background px-4 py-2.5 text-xs leading-6 outline-none transition focus:ring-2 focus:ring-primary/30" />
+          <IconButton
+            label="قوالب الرسائل الجاهزة"
+            active={templatesOpen}
+            onClick={() => {
+              setTemplatesOpen(!templatesOpen);
+              if (!templatesOpen) loadTemplates();
+            }}
+          >
+            <Bookmark size={19} className={templatesOpen ? 'text-amber-500' : ''} />
+          </IconButton>
+          <textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} rows={1} placeholder={editing ? 'عدّل رسالتك...' : 'اكتب رسالة (أو اختر قالباً سريعاً)'} data-testid="input-message" className="max-h-28 min-h-10 flex-1 resize-none rounded-2xl border border-input bg-background px-4 py-2.5 text-xs leading-6 outline-none transition focus:ring-2 focus:ring-primary/30" />
           <IconButton label={recording ? 'إيقاف التسجيل' : 'تسجيل صوتي'} active={recording} onClick={() => setRecording(!recording)}>{recording ? <span className="h-3 w-3 rounded-sm bg-destructive" /> : <Mic size={19} />}</IconButton>
           {draft.trim() && <button type="button" onClick={send} data-testid="button-send-message" className="grid h-10 w-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm transition hover:brightness-105 active:scale-95"><Send size={17} /></button>}
         </div>
         {recording && <p className="mt-2 text-center text-[10px] text-destructive">جاري التسجيل · اضغط على الميكروفون للإيقاف</p>}
       </div>
     </div>
+
+    {/* Full Message Templates Management Modal */}
+    {showFullTemplates && (
+      <MessageTemplatesModal
+        onClose={() => {
+          setShowFullTemplates(false);
+          loadTemplates();
+        }}
+        onSelectTemplate={text => {
+          applyTemplate(text, false);
+          setShowFullTemplates(false);
+        }}
+      />
+    )}
   </section>;
 }
 
@@ -653,9 +860,15 @@ function AppWorkspace() {
           onLogout={logout}
         />
       )}
+      {activeService === 'templates' && (
+        <MessageTemplatesModal
+          onClose={() => setActiveService(null)}
+          onSelectTemplate={text => handleSendToChat(text)}
+        />
+      )}
 
       {/* In-App Quick Service Overlay Viewer for other tools */}
-      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links'].includes(activeService) && (
+      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links', 'templates'].includes(activeService) && (
         <div className="fixed inset-0 z-50 flex h-full w-full bg-background fade-up" dir="rtl">
           <InAppServiceViewer
             serviceId={activeService}

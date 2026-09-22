@@ -467,6 +467,107 @@ app.post('/api/telegram/accounts/add', (req, res) => {
 });
 
 // -------------------------------------------------------------
+// Message Templates Management (قوالب الرسائل السريعة)
+// -------------------------------------------------------------
+
+type MessageTemplate = {
+  id: string;
+  title: string;
+  content: string;
+  category?: string;
+  shortcut?: string;
+  usageCount: number;
+  createdAt: string;
+};
+
+app.get('/api/telegram/templates', (req, res) => {
+  const data = readDataJson('message_templates.json', { templates: [] }) as { templates: MessageTemplate[] };
+  res.json({ success: true, templates: data.templates || [] });
+});
+
+app.post('/api/telegram/templates', (req, res) => {
+  const { id, title, content, category, shortcut } = req.body || {};
+  if (!title || !content) {
+    return res.status(400).json({ error: 'العنوان ومحتوى القالب مطلوبان' });
+  }
+
+  const data = readDataJson('message_templates.json', { templates: [] }) as { templates: MessageTemplate[] };
+  let template: MessageTemplate;
+
+  if (id) {
+    const existingIndex = data.templates.findIndex(t => t.id === id);
+    if (existingIndex >= 0) {
+      data.templates[existingIndex] = {
+        ...data.templates[existingIndex],
+        title: title.trim(),
+        content: content.trim(),
+        category: (category || data.templates[existingIndex].category || 'عام').trim(),
+        shortcut: shortcut ? shortcut.trim() : data.templates[existingIndex].shortcut,
+      };
+      template = data.templates[existingIndex];
+    } else {
+      template = {
+        id: `tpl_${Date.now()}`,
+        title: title.trim(),
+        content: content.trim(),
+        category: (category || 'عام').trim(),
+        shortcut: shortcut ? shortcut.trim() : undefined,
+        usageCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+      data.templates.unshift(template);
+    }
+  } else {
+    template = {
+      id: `tpl_${Date.now()}`,
+      title: title.trim(),
+      content: content.trim(),
+      category: (category || 'عام').trim(),
+      shortcut: shortcut ? shortcut.trim() : undefined,
+      usageCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    data.templates.unshift(template);
+  }
+
+  try {
+    fs.writeFileSync(path.join(workspaceRoot, 'data/message_templates.json'), JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error('Failed to save template:', err);
+  }
+
+  res.json({ success: true, template, templates: data.templates });
+});
+
+app.delete('/api/telegram/templates/:id', (req, res) => {
+  const id = req.params.id;
+  const data = readDataJson('message_templates.json', { templates: [] }) as { templates: MessageTemplate[] };
+  data.templates = data.templates.filter(t => t.id !== id);
+
+  try {
+    fs.writeFileSync(path.join(workspaceRoot, 'data/message_templates.json'), JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error('Failed to delete template:', err);
+  }
+
+  res.json({ success: true, templates: data.templates });
+});
+
+app.post('/api/telegram/templates/use/:id', (req, res) => {
+  const id = req.params.id;
+  const data = readDataJson('message_templates.json', { templates: [] }) as { templates: MessageTemplate[] };
+  const target = data.templates.find(t => t.id === id);
+  if (target) {
+    target.usageCount = (target.usageCount || 0) + 1;
+    try {
+      fs.writeFileSync(path.join(workspaceRoot, 'data/message_templates.json'), JSON.stringify(data, null, 2));
+    } catch {}
+  }
+  res.json({ success: true, template: target });
+});
+
+
+// -------------------------------------------------------------
 // Auto Broadcast / Publisher System
 // -------------------------------------------------------------
 
