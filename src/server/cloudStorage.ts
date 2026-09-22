@@ -1,5 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import {
+  saveTelegramSessionToFirestore,
+  loadTelegramSessionsFromFirestore,
+  deleteTelegramSessionFromFirestore,
+  getFirestoreDiagnosticInfo,
+} from './firestoreClient.js';
 
 export interface StoredSession {
   phone: string;
@@ -83,104 +89,36 @@ function writeToDisk(sessions: Record<string, StoredSession>): void {
 }
 
 /**
- * Read sessions from Firestore REST API if cloud project is configured
+ * Read sessions from Firestore
  */
 async function fetchFromFirestore(): Promise<Record<string, StoredSession> | null> {
-  const projectId = getGcpProjectId();
-  if (!projectId) return null;
-
   try {
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/telegram_sessions`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (process.env.FIRESTORE_AUTH_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.FIRESTORE_AUTH_TOKEN}`;
-    }
-
-    const res = await fetch(url, { method: 'GET', headers });
-    if (!res.ok) {
-      // 404 means collection or docs don't exist yet, which is normal on fresh boot
-      return null;
-    }
-
-    const data = await res.json();
-    if (!data || !Array.isArray(data.documents)) return null;
-
-    const results: Record<string, StoredSession> = {};
-    for (const doc of data.documents) {
-      const fields = doc.fields || {};
-      const phone = fields.phone?.stringValue;
-      const sessionString = fields.sessionString?.stringValue;
-      if (phone && sessionString) {
-        results[phone] = {
-          phone,
-          sessionString,
-          name: fields.name?.stringValue || 'حساب تيليجرام',
-          username: fields.username?.stringValue || undefined,
-          userId: fields.userId?.stringValue || undefined,
-          savedAt: fields.savedAt?.stringValue || new Date().toISOString(),
-        };
-      }
-    }
-
-    if (Object.keys(results).length > 0) {
+    const sessions = await loadTelegramSessionsFromFirestore();
+    if (sessions !== null) {
       isCloudSynced = true;
       cloudProviderName = 'firebase_firestore';
-      console.log(`[CloudStorage] Retrieved ${Object.keys(results).length} session(s) from Firestore`);
-      return results;
+      return sessions;
     }
   } catch (err: any) {
-    console.warn('[CloudStorage] Firestore REST query failed:', err?.message || err);
+    console.warn('[CloudStorage] Firestore query failed:', err?.message || err);
   }
-
   return null;
 }
 
 /**
- * Save a session document to Firestore REST API
+ * Save a session document to Firestore
  */
 async function syncSessionToFirestore(session: StoredSession): Promise<boolean> {
-  const projectId = getGcpProjectId();
-  if (!projectId) return false;
-
   try {
-    const docId = session.phone.replace(/[^\w]/g, '_');
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/telegram_sessions/${docId}`;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (process.env.FIRESTORE_AUTH_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.FIRESTORE_AUTH_TOKEN}`;
-    }
-
-    const body = {
-      fields: {
-        phone: { stringValue: session.phone },
-        sessionString: { stringValue: session.sessionString },
-        name: { stringValue: session.name || '' },
-        username: { stringValue: session.username || '' },
-        userId: { stringValue: session.userId || '' },
-        savedAt: { stringValue: session.savedAt || new Date().toISOString() },
-      },
-    };
-
-    const res = await fetch(url, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(body),
-    });
-
-    if (res.ok) {
+    const success = await saveTelegramSessionToFirestore(session);
+    if (success) {
       isCloudSynced = true;
       cloudProviderName = 'firebase_firestore';
-      console.log(`[CloudStorage] Synced session for ${session.phone} to Firestore successfully`);
       return true;
     }
   } catch (err: any) {
     console.warn('[CloudStorage] Firestore save error:', err?.message || err);
   }
-
   return false;
 }
 
@@ -188,19 +126,8 @@ async function syncSessionToFirestore(session: StoredSession): Promise<boolean> 
  * Delete a session document from Firestore
  */
 async function deleteSessionFromFirestore(phone: string): Promise<boolean> {
-  const projectId = getGcpProjectId();
-  if (!projectId) return false;
-
   try {
-    const docId = phone.replace(/[^\w]/g, '_');
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/telegram_sessions/${docId}`;
-    const headers: Record<string, string> = {};
-    if (process.env.FIRESTORE_AUTH_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.FIRESTORE_AUTH_TOKEN}`;
-    }
-
-    const res = await fetch(url, { method: 'DELETE', headers });
-    return res.ok;
+    return await deleteTelegramSessionFromFirestore(phone);
   } catch {
     return false;
   }
@@ -211,7 +138,7 @@ async function deleteSessionFromFirestore(phone: string): Promise<boolean> {
  * Loads sessions from Firestore first, then merges with local disk and environment variables
  */
 export async function initCloudStorage(): Promise<Record<string, StoredSession>> {
-  console.log('[CloudStorage] Initializing multi-layer persistent session store...');
+  console.log('[CloudStorage] Initializing multi-layer persistent session store with Firebase Firestore...');
 
   // 1. Check local disk
   const diskSessions = readFromDisk();
@@ -239,6 +166,18 @@ export async function initCloudStorage(): Promise<Record<string, StoredSession>>
   const firestoreSessions = await fetchFromFirestore();
   if (firestoreSessions) {
     Object.entries(firestoreSessions).forEach(([k, v]) => memoryCache.set(k, v));
+    // Auto-sync any sessions that exist in memory/disk but not yet in Firestore
+    for (const [phone, session] of memoryCache.entries()) {
+      if (!firestoreSessions[phone]) {
+        console.log(`[CloudStorage] Auto-syncing session for ${phone} to persistent Firestore...`);
+        void saveTelegramSessionToFirestore(session);
+      }
+    }
+  } else {
+    // If Firestore was empty or freshly configured, sync all cached sessions
+    for (const [, session] of memoryCache.entries()) {
+      void saveTelegramSessionToFirestore(session);
+    }
   }
 
   // Persist combined state to local disk
@@ -345,9 +284,12 @@ export function getStorageDiagnostics() {
     });
   });
 
+  const firestoreInfo = getFirestoreDiagnosticInfo();
+
   return {
-    isCloudActive: isCloudSynced || Boolean(getGcpProjectId()),
-    provider: getGcpProjectId() ? 'firebase_firestore' : cloudProviderName,
+    isCloudActive: isCloudSynced || firestoreInfo.isConfigured,
+    provider: firestoreInfo.isConfigured ? 'firebase_firestore' : cloudProviderName,
+    firestore: firestoreInfo,
     sessionCount: memoryCache.size,
     lastSyncedAt: lastSyncTimestamp,
     sessions,
