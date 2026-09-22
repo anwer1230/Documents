@@ -433,3 +433,27 @@ export async function sendRealTelegramMessage(peerId: string, message: string) {
     return null;
   }
 }
+
+/**
+ * Fetch real messages for a Telegram chat/dialog
+ */
+export async function fetchTelegramMessages(peerId: string, limit = 40) {
+  if (!activeClient || !isLiveConnected) {
+    return null;
+  }
+
+  try {
+    const cleanPeer = peerId.startsWith('tg_') ? peerId.replace('tg_', '') : peerId;
+    const messages = await activeClient.getMessages(cleanPeer, { limit });
+    return messages.map(msg => ({
+      id: msg.id.toString(),
+      text: msg.message || '',
+      time: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
+      outgoing: Boolean(msg.out),
+      read: true,
+    })).reverse();
+  } catch (err: any) {
+    console.warn('[TelegramService] Error fetching messages for peer:', peerId, err?.message);
+    return null;
+  }
+}

@@ -34,6 +34,7 @@ import {
   Search,
   ExternalLink,
   ShieldCheck,
+  LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -65,17 +66,15 @@ interface NavigationDrawerProps {
   theme: 'dark' | 'light';
   onNewSecretChat?: () => void;
   onSavedMessages?: () => void;
+  onLogout?: () => void;
 }
 
 export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   isOpen,
   onClose,
   user,
-  accounts = [
-    { id: 'acc_1', name: 'أبو مالك (الرئيسي)', phone: '+966 50 000 0001', username: '@abumalik_official', color: '#377c79', role: 'المالك الرئيسي' },
-    { id: 'acc_2', name: 'حساب النشر 01', phone: '+966 50 000 0002', username: '@publisher_01', color: '#2563eb', role: 'نشر تلقائي' },
-  ],
-  activeAccountId = 'acc_1',
+  accounts = [],
+  activeAccountId = '',
   onSwitchAccount,
   onOpenService,
   onOpenSettings,
@@ -84,6 +83,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   theme,
   onNewSecretChat,
   onSavedMessages,
+  onLogout,
 }) => {
   const [isAccountsExpanded, setIsAccountsExpanded] = useState(false);
 
@@ -130,7 +130,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                     {user?.avatar ? (
                       <img src={user.avatar} alt="" className="w-full h-full rounded-full object-cover" />
                     ) : (
-                      <span>{user?.name ? user.name.slice(0, 1) : 'أ'}</span>
+                      <span>{user?.name ? user.name.slice(0, 1) : 'T'}</span>
                     )}
                   </div>
                   <span className="absolute bottom-0 left-0 w-3.5 h-3.5 rounded-full bg-emerald-500 ring-2 ring-[#17212b]" title="متصل الآن" />
@@ -164,14 +164,18 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 font-bold text-sm text-white truncate">
-                    <span className="truncate">{user?.name || 'أبو مالك (الرئيسي)'}</span>
-                    <span className="text-[10px] bg-white/15 px-1.5 py-0.5 rounded-full font-mono text-sky-200">
-                      {user?.username || '@abumalik_official'}
-                    </span>
+                    <span className="truncate">{user?.name || 'حساب تيليجرام'}</span>
+                    {user?.username && (
+                      <span className="text-[10px] bg-white/15 px-1.5 py-0.5 rounded-full font-mono text-sky-200">
+                        {user.username}
+                      </span>
+                    )}
                   </div>
-                  <div className="text-xs text-white/70 font-mono mt-0.5" dir="ltr">
-                    {user?.phone || '+966 50 000 0001'}
-                  </div>
+                  {user?.phone && (
+                    <div className="text-xs text-white/70 font-mono mt-0.5" dir="ltr">
+                      {user.phone}
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-1 rounded-full text-white/80 group-hover:bg-white/15 transition-colors">
@@ -190,35 +194,41 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                   transition={{ duration: 0.2 }}
                   className="bg-[#0e1621] border-b border-white/10 py-2 px-2 max-h-56 overflow-y-auto space-y-1"
                 >
-                  {accounts.map((acc) => {
-                    const isActive = acc.id === activeAccountId;
-                    return (
-                      <button
-                        key={acc.id}
-                        type="button"
-                        onClick={() => {
-                          onSwitchAccount?.(acc.id);
-                        }}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all ${
-                          isActive ? 'bg-[#2481cc]/25 text-white border border-[#2481cc]/40' : 'hover:bg-white/5 text-gray-300'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0 text-right">
-                          <div
-                            className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[10px] shrink-0"
-                            style={{ backgroundColor: acc.color || '#377c79' }}
-                          >
-                            {acc.name.charAt(0)}
+                  {accounts.length === 0 ? (
+                    <div className="text-center py-2 px-3 text-[11px] text-gray-400">
+                      لا توجد حسابات إضافية متصلة
+                    </div>
+                  ) : (
+                    accounts.map((acc) => {
+                      const isActive = acc.id === activeAccountId;
+                      return (
+                        <button
+                          key={acc.id}
+                          type="button"
+                          onClick={() => {
+                            onSwitchAccount?.(acc.id);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all ${
+                            isActive ? 'bg-[#2481cc]/25 text-white border border-[#2481cc]/40' : 'hover:bg-white/5 text-gray-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 text-right">
+                            <div
+                              className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-[10px] shrink-0"
+                              style={{ backgroundColor: acc.color || '#0088cc' }}
+                            >
+                              {acc.name.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold truncate text-white">{acc.name}</div>
+                              <div className="text-[10px] text-gray-400 font-mono truncate" dir="ltr">{acc.phone}</div>
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold truncate text-white">{acc.name}</div>
-                            <div className="text-[10px] text-gray-400 font-mono truncate" dir="ltr">{acc.phone}</div>
-                          </div>
-                        </div>
-                        {isActive && <Check size={14} className="text-sky-400 shrink-0" />}
-                      </button>
-                    );
-                  })}
+                          {isActive && <Check size={14} className="text-sky-400 shrink-0" />}
+                        </button>
+                      );
+                    })
+                  )}
 
                   <button
                     type="button"
@@ -541,6 +551,16 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                 >
                   <ListOrdered size={18} className="text-gray-400 shrink-0" />
                   <span>عدادات المحادثات</span>
+                </button>
+
+                {/* Logout Option */}
+                <button
+                  type="button"
+                  onClick={() => handleAction(() => onLogout?.())}
+                  className="w-full flex items-center gap-3.5 px-4 py-2.5 text-xs font-semibold text-rose-300 hover:bg-rose-500/15 hover:text-rose-200 transition-all text-right cursor-pointer"
+                >
+                  <LogOut size={18} className="text-rose-400 shrink-0" />
+                  <span>تسجيل الخروج من الحساب</span>
                 </button>
               </div>
 

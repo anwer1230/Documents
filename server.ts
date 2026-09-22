@@ -14,6 +14,7 @@ import {
   logoutTelegram,
   getTelegramServiceStatus,
   fetchTelegramDialogs,
+  fetchTelegramMessages,
   sendRealTelegramMessage,
 } from './src/server/telegramService';
 
@@ -31,7 +32,7 @@ app.use('/static', express.static(path.join(workspaceRoot, 'static')));
 app.use('/public', express.static(path.join(workspaceRoot, 'public')));
 
 // -------------------------------------------------------------
-// Telegram State & Demo Data
+// Telegram State & Real Accounts Only
 // -------------------------------------------------------------
 const COOKIE_NAME = 'telegram_session';
 
@@ -57,9 +58,9 @@ type ApiMessage = {
   edited?: boolean;
 };
 
-let userPhone = '+966501234567';
-let isAuthenticated = true;
-let authStep: 'phone' | 'code' | 'password' | 'ready' = 'ready';
+let userPhone = '';
+let isAuthenticated = false;
+let authStep: 'phone' | 'code' | 'password' | 'ready' = 'phone';
 
 type SystemAccount = {
   id: string;
@@ -72,50 +73,19 @@ type SystemAccount = {
   lastActive: string;
 };
 
-let activeAccountId = 'acc_1';
-const systemAccounts: SystemAccount[] = [
-  {
-    id: 'acc_1',
-    name: 'أبو مالك (الرئيسي)',
-    username: '@AbuMalikAdmin',
-    phone: '+966501234567',
-    role: 'المشرف العام',
-    status: 'connected',
-    color: '#377c79',
-    lastActive: 'نشط الآن',
-  },
-  {
-    id: 'acc_2',
-    name: 'حساب النشر والتسويق 01',
-    username: '@AbuMalikMarketing',
-    phone: '+966512345678',
-    role: 'النشر التلقائي والجدولة',
-    status: 'connected',
-    color: '#ce8e49',
-    lastActive: 'منذ 8 دقائق',
-  },
-  {
-    id: 'acc_3',
-    name: 'حساب خدمة العملاء والرد',
-    username: '@AbuMalikSupport',
-    phone: '+966555551234',
-    role: 'الرد الآلي والمراقبة',
-    status: 'connected',
-    color: '#4c8790',
-    lastActive: 'منذ 25 دقيقة',
-  },
-];
+let activeAccountId = '';
+const systemAccounts: SystemAccount[] = [];
 
 // Broadcast & Monitoring State
 let broadcastSettings = {
-  message: 'السلام عليكم ورحمة الله، خدمات أبو مالك تقدم لكم أفضل حلول الأبحاث والتحويل والتنسيق الآلي 🚀\nتواصلوا معنا عبر القناة الرسمية.',
+  message: '',
   sendType: 'instant', // 'instant' | 'scheduled' | 'rotating'
   intervalMinutes: 30,
   durationHours: 6,
   sanitizeMode: 'salam',
-  groups: ['@saudi_academic', '@riyadh_students', '@gulf_research', '@arab_transcribers'],
-  lastSentTime: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-  totalSentCount: 184,
+  groups: [] as string[],
+  lastSentTime: '',
+  totalSentCount: 0,
   isScheduledRunning: false,
 };
 
@@ -161,7 +131,7 @@ let autoReplySettings = {
     {
       id: 'rule_1',
       trigger: 'بحث, دراسة, ماجستير, أكاديمي',
-      response: 'أهلاً بك! في خدمات أبو مالك نوفر المساعد الأكاديمي والبحوث المتكامل، لإعداد الخطط والمراجع ومراجعة المحتوى العلمي بدقة.',
+      response: 'أهلاً بك! نوفر المساعد الأكاديمي والبحوث المتكامل، لإعداد الخطط والمراجع ومراجعة المحتوى العلمي بدقة.',
       active: true,
       serviceId: 'academic',
     },
@@ -182,7 +152,7 @@ let autoReplySettings = {
     {
       id: 'rule_4',
       trigger: 'السلام عليكم, مرحبا, هلا',
-      response: 'وعليكم السلام ورحمة الله وبركاته، أهلاً وسهلاً بك في خدمات أبو مالك. كيف يمكنني خدمتك اليوم؟',
+      response: 'وعليكم السلام ورحمة الله وبركاته، أهلاً وسهلاً بك. كيف يمكنني خدمتك اليوم؟',
       active: true,
       serviceId: 'general',
     },
@@ -274,168 +244,8 @@ let learningSystemData = {
   ],
 };
 
-const demoChats: ApiChat[] = [
-  {
-    id: 'chat_1',
-    name: 'قناة خدمات أبو مالك الرسمية',
-    preview: 'تم تحديث روابط وخدمات الأكاديمي والتحويل بنجاح 🚀',
-    time: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    unread: 2,
-    pinned: true,
-    archived: false,
-    kind: 'قناة',
-    online: true,
-  },
-  {
-    id: 'chat_2',
-    name: 'المساعد الأكاديمي والبحوث',
-    preview: 'أهلاً بك، تم تجهيز خطة البحث وتنسيق المراجع المطلوبة.',
-    time: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-    unread: 0,
-    pinned: true,
-    archived: false,
-    kind: 'محادثة خاصة',
-    online: true,
-  },
-  {
-    id: 'chat_3',
-    name: 'مجموعة التنسيق والتحويل الآلي',
-    preview: 'أبو فهد: هل تتوفر خاصية استخراج الجداول إلى Excel مباشرة؟',
-    time: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
-    unread: 5,
-    pinned: false,
-    archived: false,
-    kind: 'مجموعة',
-    online: true,
-  },
-  {
-    id: 'chat_4',
-    name: 'الدعم الفني وخدمة العملاء',
-    preview: 'مرحباً، تم تفعيل بطاقة الخدمة الخاصة بحسابكم.',
-    time: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-    unread: 0,
-    pinned: false,
-    archived: false,
-    kind: 'محادثة خاصة',
-    online: false,
-  },
-  {
-    id: 'chat_5',
-    name: 'بوت النشر التلقائي الذكي',
-    preview: 'تم جدولة نشر الرسائل في 14 مجموعة مستهدفة.',
-    time: new Date(Date.now() - 1000 * 60 * 360).toISOString(),
-    unread: 0,
-    pinned: false,
-    archived: false,
-    kind: 'محادثة خاصة',
-    online: true,
-  },
-  {
-    id: 'chat_6',
-    name: 'أرشيف الإعلانات والتقارير',
-    preview: 'تقرير عمليات النشر للأسبوع الماضي متوفر للتحميل.',
-    time: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-    unread: 0,
-    pinned: false,
-    archived: true,
-    kind: 'قناة',
-    online: false,
-  },
-];
-
-const demoMessages: Record<string, ApiMessage[]> = {
-  chat_1: [
-    {
-      id: 'm1_1',
-      text: 'مرحباً بكم في قناة خدمات أبو مالك الرسمية 🌟',
-      time: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-    {
-      id: 'm1_2',
-      text: 'يسرنا إطلاق واجهة تيليجرام المحدثة مع مركز الخدمات المتكامل الذي يربط أدوات التحويل والأبحاث وإدارة المجموعات في مكان واحد.',
-      time: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-    {
-      id: 'm1_3',
-      text: 'تم تحديث روابط وخدمات الأكاديمي والتحويل بنجاح 🚀',
-      time: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-      outgoing: false,
-      read: false,
-      reaction: '🔥',
-    },
-  ],
-  chat_2: [
-    {
-      id: 'm2_1',
-      text: 'السلام عليكم ورحمة الله، كيف يمكنني مساعدتك في الأبحاث والخدمات الأكاديمية اليوم؟',
-      time: new Date(Date.now() - 1000 * 60 * 100).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-    {
-      id: 'm2_2',
-      text: 'وعليكم السلام، أريد مراجعة وتنسيق ورقة عمل علمية مع استخراج المصادر.',
-      time: new Date(Date.now() - 1000 * 60 * 50).toISOString(),
-      outgoing: true,
-      read: true,
-    },
-    {
-      id: 'm2_3',
-      text: 'أهلاً بك، تم تجهيز خطة البحث وتنسيق المراجع المطلوبة.',
-      time: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-      outgoing: false,
-      read: true,
-      reaction: '👍',
-    },
-  ],
-  chat_3: [
-    {
-      id: 'm3_1',
-      text: 'السلام عليكم جميعاً في مجموعة التنسيق والتحويل الآلي.',
-      time: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-    {
-      id: 'm3_2',
-      text: 'أبو فهد: هل تتوفر خاصية استخراج الجداول إلى Excel مباشرة؟',
-      time: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
-      outgoing: false,
-      read: false,
-    },
-  ],
-  chat_4: [
-    {
-      id: 'm4_1',
-      text: 'مرحباً، تم تفعيل بطاقة الخدمة الخاصة بحسابكم.',
-      time: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-  ],
-  chat_5: [
-    {
-      id: 'm5_1',
-      text: 'تم جدولة نشر الرسائل في 14 مجموعة مستهدفة.',
-      time: new Date(Date.now() - 1000 * 60 * 360).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-  ],
-  chat_6: [
-    {
-      id: 'm6_1',
-      text: 'تقرير عمليات النشر للأسبوع الماضي متوفر للتحميل.',
-      time: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-      outgoing: false,
-      read: true,
-    },
-  ],
-};
+// Live message cache for active session
+const liveMessages: Record<string, ApiMessage[]> = {};
 
 // -------------------------------------------------------------
 // Telegram Authentication & Chat Endpoints
@@ -453,18 +263,13 @@ app.get('/api/telegram/status', (req, res) => {
     });
   }
 
+  // Purely unauthenticated when no live verified MTProto session exists
   res.json({
-    authenticated: isAuthenticated,
-    state: isAuthenticated ? 'ready' : authStep,
+    authenticated: false,
+    state: authStep,
     isLiveConnected: false,
     apiId: TELEGRAM_API_ID,
-    user: isAuthenticated
-      ? {
-          name: systemAccounts.find(a => a.id === activeAccountId)?.name || 'أبو مالك',
-          username: systemAccounts.find(a => a.id === activeAccountId)?.username || '@AbuMalikAdmin',
-          phone: userPhone,
-        }
-      : null,
+    user: null,
   });
 });
 
@@ -601,6 +406,10 @@ app.post('/api/telegram/auth/logout', async (req, res) => {
   }
   isAuthenticated = false;
   authStep = 'phone';
+  userPhone = '';
+  activeAccountId = '';
+  systemAccounts.length = 0;
+  Object.keys(liveMessages).forEach(k => delete liveMessages[k]);
   res.clearCookie(COOKIE_NAME, { path: '/' });
   res.json({ authenticated: false, apiId: TELEGRAM_API_ID });
 });
@@ -650,29 +459,11 @@ app.post('/api/telegram/accounts/switch', (req, res) => {
 });
 
 app.post('/api/telegram/accounts/add', (req, res) => {
-  const { name, phone, username, role } = req.body || {};
-  if (!phone) {
-    return res.status(400).json({ error: 'PHONE_REQUIRED' });
-  }
-
-  const newAcc: SystemAccount = {
-    id: `acc_${Date.now()}`,
-    name: name || `حساب ${phone}`,
-    username: username || `@user_${Math.floor(Math.random() * 9000 + 1000)}`,
-    phone,
-    role: role || 'مساعد إضافي',
-    status: 'connected',
-    color: '#377c79',
-    lastActive: 'نشط الآن',
-  };
-
-  systemAccounts.push(newAcc);
-  activeAccountId = newAcc.id;
-  userPhone = newAcc.phone;
-  isAuthenticated = true;
-  authStep = 'ready';
-
-  res.json({ success: true, account: newAcc });
+  // Enforce strict real-accounts-only policy: reject manual creation of fake accounts
+  return res.status(403).json({
+    error: 'REAL_ACCOUNTS_ONLY',
+    message: 'النظام لا يقبل سوى الحسابات الحقيقية الموثقة عبر تسجيل الدخول المباشر برمز التحقق من تيليجرام.',
+  });
 });
 
 // -------------------------------------------------------------
@@ -680,7 +471,7 @@ app.post('/api/telegram/accounts/add', (req, res) => {
 // -------------------------------------------------------------
 
 app.get('/api/telegram/broadcast/status', (req, res) => {
-  const activeUser = systemAccounts.find(a => a.id === activeAccountId) || systemAccounts[0];
+  const activeUser = systemAccounts.find(a => a.id === activeAccountId) || null;
   res.json({
     ...broadcastSettings,
     activeAccount: activeUser,
@@ -707,22 +498,6 @@ app.post('/api/telegram/broadcast/send', (req, res) => {
   broadcastSettings.totalSentCount += targetGroups.length;
   broadcastSettings.lastSentTime = new Date().toISOString();
   if (sendType) broadcastSettings.sendType = sendType;
-
-  // Add a sample outgoing message to the active chat in the demo
-  const targetChat = demoChats.find(c => c.id === 'chat_5');
-  if (targetChat) {
-    const pubMsg: ApiMessage = {
-      id: `pub_${Date.now()}`,
-      text: `[نشر تلقائي في ${targetGroups.length} مجموعات]:\n${broadcastText.slice(0, 140)}...`,
-      time: new Date().toISOString(),
-      outgoing: true,
-      read: true,
-    };
-    if (!demoMessages['chat_5']) demoMessages['chat_5'] = [];
-    demoMessages['chat_5'].push(pubMsg);
-    targetChat.preview = `تم نشر الإعلان في ${targetGroups.length} مجموعات بنجاح`;
-    targetChat.time = pubMsg.time;
-  }
 
   res.json({
     success: true,
@@ -809,22 +584,38 @@ app.post('/api/telegram/autoreply/test', (req, res) => {
 });
 
 app.get('/api/telegram/chats', async (req, res) => {
+  const tgStatus = getTelegramServiceStatus();
+  if (!tgStatus.isLiveConnected || !tgStatus.user) {
+    return res.json({ chats: [], isReal: false });
+  }
+
   try {
     const realChats = await fetchTelegramDialogs();
-    if (realChats && realChats.length > 0) {
-      const merged = [...realChats, ...demoChats.filter(d => !realChats.some(r => r.name === d.name))];
-      return res.json({ chats: merged, isReal: true });
-    }
+    return res.json({ chats: realChats || [], isReal: true });
   } catch (err) {
     console.warn('[Chats] Error fetching dialogs:', err);
+    return res.json({ chats: [], isReal: true });
   }
-  res.json({ chats: demoChats, isReal: false });
 });
 
-app.get('/api/telegram/chats/:chatId/messages', (req, res) => {
+app.get('/api/telegram/chats/:chatId/messages', async (req, res) => {
   const chatId = req.params.chatId;
-  const messages = demoMessages[chatId] || [];
-  res.json({ messages });
+  const tgStatus = getTelegramServiceStatus();
+  if (!tgStatus.isLiveConnected) {
+    return res.json({ messages: liveMessages[chatId] || [] });
+  }
+
+  try {
+    const realMessages = await fetchTelegramMessages(chatId, 50);
+    if (realMessages && realMessages.length > 0) {
+      liveMessages[chatId] = realMessages;
+      return res.json({ messages: realMessages });
+    }
+  } catch (err) {
+    console.warn('[Messages] Error fetching messages:', err);
+  }
+
+  res.json({ messages: liveMessages[chatId] || [] });
 });
 
 app.post('/api/telegram/chats/:chatId/messages', async (req, res) => {
@@ -834,62 +625,36 @@ app.post('/api/telegram/chats/:chatId/messages', async (req, res) => {
     return res.status(400).json({ error: 'MESSAGE_REQUIRED' });
   }
 
-  // If live telegram is connected and target is a real chat, attempt sending via MTProto
+  const tgStatus = getTelegramServiceStatus();
+  if (!tgStatus.isLiveConnected) {
+    return res.status(401).json({
+      error: 'NOT_AUTHENTICATED',
+      message: 'يجب تسجيل الدخول بحساب تيليجرام حقيقي أولاً لإرسال الرسائل.',
+    });
+  }
+
   try {
     const sentReal = await sendRealTelegramMessage(chatId, text);
     if (sentReal) {
-      if (!demoMessages[chatId]) demoMessages[chatId] = [];
-      demoMessages[chatId].push(sentReal);
+      if (!liveMessages[chatId]) liveMessages[chatId] = [];
+      liveMessages[chatId].push(sentReal);
       return res.json({ message: sentReal });
     }
-  } catch (err) {
-    console.warn('[Messages] Could not send via real MTProto, falling back to local:', err);
+  } catch (err: any) {
+    console.warn('[Messages] Could not send via real MTProto:', err);
+    return res.status(500).json({
+      error: 'SEND_FAILED',
+      message: err?.message || 'فشل إرسال الرسالة عبر تيليجرام.',
+    });
   }
 
-  const newMessage: ApiMessage = {
-    id: `msg_${Date.now()}`,
-    text,
-    time: new Date().toISOString(),
-    outgoing: true,
-    read: true,
-  };
-
-  if (!demoMessages[chatId]) demoMessages[chatId] = [];
-  demoMessages[chatId].push(newMessage);
-
-  // Update chat preview & time
-  const targetChat = demoChats.find(c => c.id === chatId);
-  if (targetChat) {
-    targetChat.preview = text;
-    targetChat.time = newMessage.time;
-  }
-
-  // Generate automated reply if chatting with bot or services
-  if (chatId === 'chat_2') {
-    setTimeout(() => {
-      const replyMsg: ApiMessage = {
-        id: `reply_${Date.now()}`,
-        text: 'تم استلام طلبكم في المساعد الأكاديمي وسيتم المتابعة والتنفيذ في أقرب وقت.',
-        time: new Date().toISOString(),
-        outgoing: false,
-        read: false,
-      };
-      demoMessages[chatId].push(replyMsg);
-      if (targetChat) {
-        targetChat.preview = replyMsg.text;
-        targetChat.time = replyMsg.time;
-        targetChat.unread = (targetChat.unread || 0) + 1;
-      }
-    }, 1500);
-  }
-
-  res.status(201).json({ message: newMessage });
+  res.status(500).json({ error: 'SEND_FAILED' });
 });
 
 app.patch('/api/telegram/chats/:chatId/messages/:messageId', (req, res) => {
   const { chatId, messageId } = req.params;
   const text = String(req.body?.text ?? '').trim();
-  const list = demoMessages[chatId] || [];
+  const list = liveMessages[chatId] || [];
   const msg = list.find(m => m.id === messageId);
   if (msg) {
     msg.text = text;
@@ -901,8 +666,8 @@ app.patch('/api/telegram/chats/:chatId/messages/:messageId', (req, res) => {
 
 app.delete('/api/telegram/chats/:chatId/messages/:messageId', (req, res) => {
   const { chatId, messageId } = req.params;
-  if (demoMessages[chatId]) {
-    demoMessages[chatId] = demoMessages[chatId].filter(m => m.id !== messageId);
+  if (liveMessages[chatId]) {
+    liveMessages[chatId] = liveMessages[chatId].filter(m => m.id !== messageId);
   }
   res.status(204).send();
 });
@@ -915,32 +680,27 @@ function renderIndexTemplate(): string {
   const templatePath = path.join(workspaceRoot, 'templates/index.html');
   let content = fs.readFileSync(templatePath, 'utf8');
 
+  const tgStatus = getTelegramServiceStatus();
   const defaultUser = {
     id: 'user_1',
-    name: 'أبو مالك',
-    color: '#377c79',
-    icon: 'fas fa-user-shield',
+    name: tgStatus.user?.name || 'مستخدم تيليجرام',
+    color: '#0088cc',
+    icon: 'fas fa-user-circle',
   };
 
   const predefinedUsers: Record<string, typeof defaultUser> = {
     user_1: defaultUser,
-    user_2: {
-      id: 'user_2',
-      name: 'حساب التسويق 01',
-      color: '#ce8e49',
-      icon: 'fas fa-bullhorn',
-    },
   };
 
   // Replace Jinja template variables
-  content = content.replace(/\{\{\s*app_title\s*\}\}/g, 'خدمات أبو مالك - لوحة التحكم والخدمات');
+  content = content.replace(/\{\{\s*app_title\s*\}\}/g, 'منصة النشر والمراقبة الذكية - لوحة التحكم');
   content = content.replace(/\{\{\s*current_user\.name\s*\}\}/g, defaultUser.name);
   content = content.replace(/\{\{\s*current_user\.color\s*\}\}/g, defaultUser.color);
   content = content.replace(/\{\{\s*current_user\.id\s*\}\}/g, defaultUser.id);
-  content = content.replace(/\{\{\s*settings\.phone\s*or\s*''\s*\}\}/g, '+966501234567');
-  content = content.replace(/\{\{\s*settings\.message\s*or\s*''\s*\}\}/g, 'السلام عليكم ورحمة الله، خدمات أبو مالك في خدمتكم.');
-  content = content.replace(/\{\{\s*'\\n'\.join\(settings\.groups\s*or\s*\[\]\)\s*\}\}/g, '@saudi_groups\n@riyadh_students\n@academic_hub');
-  content = content.replace(/\{\{\s*'\\n'\.join\(settings\.watch_words\s*or\s*\[\]\)\s*\}\}/g, 'بحث\nأكاديمي\nتحويل\nتنسيق');
+  content = content.replace(/\{\{\s*settings\.phone\s*or\s*''\s*\}\}/g, tgStatus.user?.phone || '');
+  content = content.replace(/\{\{\s*settings\.message\s*or\s*''\s*\}\}/g, '');
+  content = content.replace(/\{\{\s*'\\n'\.join\(settings\.groups\s*or\s*\[\]\)\s*\}\}/g, '');
+  content = content.replace(/\{\{\s*'\\n'\.join\(settings\.watch_words\s*or\s*\[\]\)\s*\}\}/g, '');
   content = content.replace(/\{\{\s*'selected'\s*if\s*\(settings\.sanitize_mode\s*or\s*'salam'\)\s*==\s*'salam'\s*else\s*''\s*\}\}/g, 'selected');
   content = content.replace(/\{\{\s*'selected'\s*if\s*settings\.sanitize_mode\s*==\s*'[^']+'\s*else\s*''\s*\}\}/g, '');
   content = content.replace(/\{\{\s*'selected'\s*if\s*settings\.send_type\s*==\s*'manual'\s*else\s*''\s*\}\}/g, 'selected');
@@ -1052,19 +812,27 @@ app.get('/api/get_stats', (req, res) => {
 });
 
 app.get('/api/get_login_status', (req, res) => {
+  const tgStatus = getTelegramServiceStatus();
+  const isReal = tgStatus.isLiveConnected && !!tgStatus.user;
   res.json({
-    logged_in: true,
-    phone: userPhone,
-    user_name: 'أبو مالك',
-    status: 'connected',
+    logged_in: isReal,
+    phone: isReal ? tgStatus.user?.phone : '',
+    user_name: isReal ? tgStatus.user?.name : '',
+    status: isReal ? 'connected' : 'disconnected',
   });
 });
 
 app.get('/api/get_user_info', (req, res) => {
+  const tgStatus = getTelegramServiceStatus();
+  const isReal = tgStatus.isLiveConnected && !!tgStatus.user;
+  if (!isReal) {
+    return res.status(401).json({ error: 'UNAUTHORIZED' });
+  }
   res.json({
-    name: 'أبو مالك',
-    phone: userPhone,
-    role: 'admin',
+    name: tgStatus.user?.name,
+    phone: tgStatus.user?.phone,
+    username: tgStatus.user?.username,
+    role: 'telegram_user',
     account_status: 'active',
   });
 });
@@ -1220,24 +988,6 @@ app.post('/api/send_now', (req, res) => {
 
   broadcastSettings.totalSentCount += targetGroups.length;
   broadcastSettings.lastSentTime = new Date().toISOString();
-
-  // Insert message into target chats
-  ['chat_1', 'chat_5'].forEach(chatId => {
-    const targetChat = demoChats.find(c => c.id === chatId);
-    if (targetChat) {
-      const pubMsg: ApiMessage = {
-        id: `pub_${Date.now()}_${Math.floor(Math.random()*1000)}`,
-        text: `[نشر فوري عبر لوحة الإعدادات إلى ${targetGroups.length} مجموعات]:\n${broadcastText}${hasImages ? '\n[مرفق صور]' : ''}`,
-        time: new Date().toISOString(),
-        outgoing: true,
-        read: true,
-      };
-      if (!demoMessages[chatId]) demoMessages[chatId] = [];
-      demoMessages[chatId].push(pubMsg);
-      targetChat.preview = `تم النشر بنجاح إلى ${targetGroups.length} مجموعات (${targetMode})`;
-      targetChat.time = pubMsg.time;
-    }
-  });
 
   operationsLog.unshift({
     id: `log_${Date.now()}`,

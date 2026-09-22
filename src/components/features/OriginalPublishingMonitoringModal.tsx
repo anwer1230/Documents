@@ -70,25 +70,15 @@ export function OriginalPublishingMonitoringModal({
   >(null);
 
   // Accounts
-  const [accounts, setAccounts] = useState<AccountTab[]>([
-    { id: 'acc_1', name: 'أبو مالك (الرئيسي)', phone: '+966500000001', username: '@abumalik_official', color: '#377c79', role: 'المالك الرئيسي' },
-    { id: 'acc_2', name: 'حساب النشر 01', phone: '+966500000002', username: '@publisher_01', color: '#2563eb', role: 'نشر تلقائي' },
-    { id: 'acc_3', name: 'خدمة العملاء 02', phone: '+966500000003', username: '@support_02', color: '#7c3aed', role: 'دعم واستقبال' },
-  ]);
-  const [activeAccountId, setActiveAccountId] = useState('acc_1');
+  const [accounts, setAccounts] = useState<AccountTab[]>([]);
+  const [activeAccountId, setActiveAccountId] = useState('');
 
-  // Core Form State (Exact parity with templates/index.html)
-  const [message, setMessage] = useState<string>(
-    'السلام عليكم ورحمة الله 🌸\nنقدم لكم في مركز خدمات أبو مالك المتكامل:\n1. المساعد الأكاديمي والبحوث المتخصصة.\n2. تحويل وتنسيق مستندات PDF إلى Word بدقة عالية.\n3. تحليل الجداول والاستبيانات الإحصائية.\nللتواصل والاستفسار المباشر عبر المعرف: @abumalik_official'
-  );
+  // Core Form State
+  const [message, setMessage] = useState<string>('');
   const [images, setImages] = useState<{ id: string; name: string; url: string }[]>([]);
   const [sendMode, setSendMode] = useState<'specific' | 'all'>('specific');
-  const [groupsText, setGroupsText] = useState<string>(
-    '@saudi_academic\n@riyadh_students\n@gulf_research\n@arab_transcribers'
-  );
-  const [watchWordsText, setWatchWordsText] = useState<string>(
-    'بحث\nأكاديمي\nتحويل\nتنسيق\nاستبيان\nمشروع\nتخرج'
-  );
+  const [groupsText, setGroupsText] = useState<string>('');
+  const [watchWordsText, setWatchWordsText] = useState<string>('');
   const [sanitizeMode, setSanitizeMode] = useState<string>('salam');
   const [showSanitizeExplanation, setShowSanitizeExplanation] = useState<boolean>(false);
   const [sendType, setSendType] = useState<'instant' | 'scheduled'>('instant');
@@ -96,7 +86,7 @@ export function OriginalPublishingMonitoringModal({
   const [durationHours, setDurationHours] = useState<number>(0);
 
   // Stats & States
-  const [sentCount, setSentCount] = useState<number>(184);
+  const [sentCount, setSentCount] = useState<number>(0);
   const [errorCount, setErrorCount] = useState<number>(0);
   const [isMonitoringActive, setIsMonitoringActive] = useState<boolean>(true);
   const [isScheduledRunning, setIsScheduledRunning] = useState<boolean>(false);
@@ -107,8 +97,20 @@ export function OriginalPublishingMonitoringModal({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load Initial Settings & Logs
+  // Load Initial Settings, Accounts & Logs
   useEffect(() => {
+    // Load accounts
+    fetch('/api/telegram/accounts')
+      .then(r => r.json())
+      .then(d => {
+        if (d && Array.isArray(d.accounts)) {
+          setAccounts(d.accounts);
+          if (d.activeId) setActiveAccountId(d.activeId);
+          else if (d.accounts.length > 0) setActiveAccountId(d.accounts[0].id);
+        }
+      })
+      .catch(() => {});
+
     // Load unified settings
     fetch('/api/get_settings')
       .then(r => r.json())
@@ -323,7 +325,7 @@ export function OriginalPublishingMonitoringModal({
               <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                 لوحة الإعدادات والإرسال والمراقبة
                 <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-700/60 font-mono">
-                  مركز خدمات أبو مالك
+                  منظومة النشر الذكية
                 </span>
               </h2>
               <div className="flex items-center gap-3 text-xs text-slate-300 mt-0.5">
@@ -941,7 +943,7 @@ export function OriginalPublishingMonitoringModal({
         {/* Footer */}
         <div className="bg-[#09101d] px-5 py-3 border-t border-slate-800 flex items-center justify-between">
           <div className="text-xs text-slate-400 flex items-center gap-2">
-            <span>مركز أبو مالك • إصدار الإرسال والمراقبة الأكاديمي</span>
+            <span>منظومة تيليجرام المتطورة • إصدار الإرسال والمراقبة التلقائي</span>
           </div>
           <button
             onClick={onClose}

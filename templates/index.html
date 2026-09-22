@@ -6814,7 +6814,7 @@ async function executeResetSingle() {
           </div>
           <div>
             <h5 class="mb-0 text-white fw-800" style="font-size:1rem;letter-spacing:0.3px;">
-              لوحة إدارة أبو مالك
+              لوحة الإدارة والتحكم
             </h5>
             <small style="color:#8b949e;font-size:0.72rem;">النظام الأكاديمي المتقدم</small>
           </div>
@@ -7440,7 +7440,7 @@ function adminDownloadProject() {
     btn.disabled = true; lbl.textContent = 'جاري التحضير...';
     const a = document.createElement('a');
     a.href = '/api/admin/download_project';
-    a.download = 'AbuMalik-Backup.zip';
+    a.download = 'Telegram-Backup.zip';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => { btn.disabled = false; lbl.textContent = 'تحميل ملفات المشروع'; }, 5000);
 }

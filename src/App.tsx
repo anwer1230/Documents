@@ -650,6 +650,7 @@ function AppWorkspace() {
           onAccountSwitched={acc => {
             setAuth(prev => prev ? { ...prev, user: { name: acc.name, username: acc.username, phone: acc.phone } } : prev);
           }}
+          onLogout={logout}
         />
       )}
 
@@ -679,18 +680,14 @@ function AppWorkspace() {
         user={
           auth?.user
             ? {
-                name: auth.user.name || 'أبو مالك (الرئيسي)',
-                phone: auth.user.phone || '+966 50 000 0001',
-                username: auth.user.username || '@abumalik_official',
+                name: auth.user.name || 'حساب تيليجرام',
+                phone: auth.user.phone || '',
+                username: auth.user.username || '',
               }
-            : {
-                name: 'أبو مالك (الرئيسي)',
-                phone: '+966 50 000 0001',
-                username: '@abumalik_official',
-              }
+            : null
         }
-        activeAccountId="acc_1"
-        onSwitchAccount={(accId) => {
+        activeAccountId=""
+        onSwitchAccount={(_accId) => {
           setIsDrawerOpen(false);
           setActiveService('accounts');
         }}
@@ -731,6 +728,10 @@ function AppWorkspace() {
           } else if (chats.length > 0) {
             selectChat(chats[0].id);
           }
+        }}
+        onLogout={() => {
+          setIsDrawerOpen(false);
+          logout();
         }}
       />
       <button type="button" onClick={() => setMobileList(!mobileList)} aria-label="التنقل بين المحادثات" data-testid="button-mobile-navigation" className="fixed bottom-5 right-5 z-20 grid h-12 w-12 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg md:hidden"><MessageCircle size={20} /></button>

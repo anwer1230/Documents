@@ -30,7 +30,7 @@ export function SavedLinksModal({
   const savedLinks: LinkItem[] = [
     { id: '1', title: 'مجموعة الأكاديميين والباحثين السعوديين', url: 'https://t.me/saudi_academic', category: 'أكاديمي', date: 'اليوم' },
     { id: '2', title: 'ملتقى طلاب وطالبات جامعة الملك سعود', url: 'https://t.me/riyadh_students', category: 'جامعات', date: 'أمس' },
-    { id: '3', title: 'قناة خدمات أبو مالك الأكاديمية الرسمية', url: 'https://t.me/abumalik_services', category: 'قنوات', date: 'منذ أسبوع' },
+    { id: '3', title: 'قناة الإعلانات والخدمات الأكاديمية الرسمية', url: 'https://t.me/academic_services_sa', category: 'قنوات', date: 'منذ أسبوع' },
     { id: '4', title: 'مكتبة الرسائل والأطروحات العلمية', url: 'https://t.me/thesis_library', category: 'مراجع', date: 'منذ أسبوعين' },
     { id: '5', title: 'شبكة المترجمين والباحثين العرب', url: 'https://t.me/arab_transcribers', category: 'بحث', date: 'منذ شهر' },
   ];
@@ -38,7 +38,7 @@ export function SavedLinksModal({
   const sentMessages: SentMessageItem[] = [
     {
       id: 'm1',
-      text: 'السلام عليكم ورحمة الله، يسرنا في خدمات أبو مالك تقديم خدمات الأبحاث والتحويل الأكاديمي المتخصص بدقة متناهية وسرعة إنجاز.',
+      text: 'السلام عليكم ورحمة الله، يسرنا تقديم خدمات الأبحاث والتحويل الأكاديمي المتخصص بدقة متناهية وسرعة إنجاز.',
       date: 'اليوم 02:45 م',
       groupsCount: 4,
     },

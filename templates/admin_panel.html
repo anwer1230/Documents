@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة إدارة أبو مالك</title>
+    <title>لوحة الإدارة والتحكم</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
@@ -336,7 +336,7 @@
     <nav class="sidebar">
         <div class="sidebar-logo">
             <div class="sidebar-logo-icon"><i class="fas fa-crown" style="color:#fff;"></i></div>
-            <div><h6>لوحة الإدارة</h6><small>أبو مالك</small></div>
+            <div><h6>لوحة الإدارة</h6><small>نظام تيليجرام</small></div>
         </div>
         <div class="nav-section-title">الأقسام</div>
         <a class="nav-item active" onclick="showSection('users')" href="#"><i class="fas fa-users"></i><span>المستخدمون</span></a>
@@ -1520,7 +1520,7 @@ async function downloadSelected() {
 function downloadProject() {
     const a = document.createElement('a');
     a.href = '/api/admin/download_project';
-    a.download = 'AbuMalik-Backup.zip';
+    a.download = 'Telegram-Backup.zip';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 

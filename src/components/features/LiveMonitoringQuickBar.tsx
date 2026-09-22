@@ -77,7 +77,7 @@ export function LiveMonitoringQuickBar({
     setIsSending(true);
     const textToSend =
       currentDraft.trim() ||
-      'السلام عليكم ورحمة الله، يسرنا في مركز خدمات أبو مالك تقديم خدمات الأبحاث والتحويل وتنسيق الملفات الأكاديمية بدقة متناهية 🌸';
+      'السلام عليكم ورحمة الله، يسرنا تقديم خدمات الأبحاث والتحويل وتنسيق الملفات الأكاديمية بدقة متناهية 🌸';
 
     try {
       const res = await fetch('/api/send_now', {
@@ -217,7 +217,7 @@ export function LiveMonitoringQuickBar({
                         type="button"
                         onClick={() =>
                           onReplyInChat(
-                            `أهلاً وسهلاً بك @${evt.sender} بخصوص طلبك في (${evt.group}): يسرنا تقديم المساعدة الأكاديمية الفورية عبر خدمات أبو مالك.`
+                            `أهلاً وسهلاً بك @${evt.sender} بخصوص طلبك في (${evt.group}): يسرنا تقديم المساعدة الأكاديمية الفورية.`
                           )
                         }
                         className="px-2 py-1 bg-primary/10 hover:bg-primary hover:text-primary-foreground text-primary rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors shrink-0"

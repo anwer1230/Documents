@@ -30,27 +30,25 @@ export function AccountsManagerModal({
   onClose,
   onOpenLoginFlow,
   onAccountSwitched,
+  onLogout,
 }: {
   onClose: () => void;
   onOpenLoginFlow?: () => void;
   onAccountSwitched?: (acc: SystemAccount) => void;
+  onLogout?: () => void;
 }) {
   const [accounts, setAccounts] = useState<SystemAccount[]>([]);
-  const [activeId, setActiveId] = useState<string>('acc_1');
+  const [activeId, setActiveId] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newPhone, setNewPhone] = useState('');
-  const [newName, setNewName] = useState('');
-  const [newRole, setNewRole] = useState('نشر تلقائي ومراقبة');
 
   const fetchAccounts = () => {
     fetch('/api/telegram/accounts')
       .then(res => res.json())
       .then(res => {
         setAccounts(res.accounts || []);
-        setActiveId(res.activeId || 'acc_1');
+        setActiveId(res.activeId || (res.accounts?.[0]?.id ?? ''));
         setLoading(false);
       })
       .catch(() => {
@@ -61,6 +59,20 @@ export function AccountsManagerModal({
   useEffect(() => {
     fetchAccounts();
   }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/telegram/auth/logout', { method: 'POST' });
+    } catch {
+      //
+    }
+    onClose();
+    if (onLogout) {
+      onLogout();
+    } else {
+      window.location.reload();
+    }
+  };
 
   const handleSwitchAccount = async (account: SystemAccount) => {
     if (account.id === activeId) return;
@@ -82,36 +94,6 @@ export function AccountsManagerModal({
       setFeedback('تعذر التبديل بين الحسابات');
     } finally {
       setSwitchingId(null);
-    }
-  };
-
-  const handleAddAccountSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!newPhone.trim()) return;
-
-    try {
-      const res = await fetch('/api/telegram/accounts/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: newPhone.trim(),
-          name: newName.trim() || `حساب ${newPhone.trim()}`,
-          role: newRole,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setFeedback('تمت إضافة الحساب وتفعيله في النظام الرئيسي');
-        setShowAddForm(false);
-        setNewPhone('');
-        setNewName('');
-        fetchAccounts();
-        if (data.account) {
-          onAccountSwitched?.(data.account);
-        }
-      }
-    } catch {
-      setFeedback('فشل إضافة الحساب');
     }
   };
 
@@ -162,6 +144,29 @@ export function AccountsManagerModal({
               <RefreshCw className="h-5 w-5 animate-spin text-primary ml-2" />
               جارٍ تحميل بيانات الحسابات والجلسات...
             </div>
+          ) : accounts.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border p-8 text-center space-y-4">
+              <div className="grid h-14 w-14 mx-auto place-items-center rounded-2xl bg-primary/10 text-primary">
+                <Users size={28} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-foreground">لا توجد حسابات تيليجرام نشطة</h3>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto leading-relaxed">
+                  تم حذف وإلغاء جميع الحسابات التجريبية والوهمية. النظام يعمل فقط مع الحسابات الحقيقية الموثقة عبر بروتوكول تيليجرام الرسمي MTProto.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenLoginFlow?.();
+                }}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-xs font-bold text-primary-foreground shadow-sm hover:brightness-105 cursor-pointer"
+              >
+                <KeyRound size={15} />
+                <span>تسجيل الدخول برقم هاتف حقيقي</span>
+              </button>
+            </div>
           ) : (
             <>
               {/* Active Account Highlight Card */}
@@ -195,161 +200,120 @@ export function AccountsManagerModal({
                         </div>
                       </div>
 
-                      <span className="inline-flex items-center gap-1 rounded-xl bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
-                        <Check size={14} />
-                        نشط ومفعل
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleLogout}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-500 hover:bg-rose-500/20 cursor-pointer"
+                          title="تسجيل الخروج من الحساب"
+                        >
+                          <LogOut size={13} />
+                          <span>تسجيل الخروج</span>
+                        </button>
+                        <span className="inline-flex items-center gap-1 rounded-xl bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
+                          <Check size={14} />
+                          نشط
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );
               })()}
 
               {/* Accounts List for Instant Switching */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground">الحسابات المتاحة للتبديل الفوري</span>
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    {accounts.length} حسابات مهيأة
-                  </span>
-                </div>
+              {accounts.length > 1 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-foreground">الحسابات المتاحة للتبديل الفوري</span>
+                    <span className="text-[11px] text-muted-foreground font-mono">
+                      {accounts.length} حسابات موثقة
+                    </span>
+                  </div>
 
-                <div className="space-y-2.5">
-                  {accounts.map(acc => {
-                    const isCurrent = acc.id === activeId;
-                    const isSwitching = switchingId === acc.id;
+                  <div className="space-y-2.5">
+                    {accounts.map(acc => {
+                      const isCurrent = acc.id === activeId;
+                      const isSwitching = switchingId === acc.id;
 
-                    return (
-                      <div
-                        key={acc.id}
-                        className={`flex items-center justify-between rounded-2xl border p-3.5 transition ${
-                          isCurrent
-                            ? 'border-primary/40 bg-card shadow-xs'
-                            : 'border-border bg-card/60 hover:border-primary/30 hover:bg-card'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="grid h-10 w-10 place-items-center rounded-xl font-bold text-sm text-white shadow-xs"
-                            style={{ backgroundColor: acc.color || '#377c79' }}
-                          >
-                            {acc.name.slice(0, 1)}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-foreground">{acc.name}</span>
-                              <span className="font-mono text-[10px] text-muted-foreground" dir="ltr">{acc.username}</span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
-                              <span className="font-mono" dir="ltr">{acc.phone}</span>
-                              <span>•</span>
-                              <span>{acc.role}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {isCurrent ? (
-                            <span className="rounded-xl bg-secondary px-3 py-1.5 text-[11px] font-bold text-foreground">
-                              الحساب الحالي
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleSwitchAccount(acc)}
-                              disabled={isSwitching}
-                              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 py-1.5 text-xs font-bold text-foreground transition hover:border-primary hover:text-primary disabled:opacity-50 cursor-pointer"
+                      return (
+                        <div
+                          key={acc.id}
+                          className={`flex items-center justify-between rounded-2xl border p-3.5 transition ${
+                            isCurrent
+                              ? 'border-primary/40 bg-card shadow-xs'
+                              : 'border-border bg-card/60 hover:border-primary/30 hover:bg-card'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="grid h-10 w-10 place-items-center rounded-xl font-bold text-sm text-white shadow-xs"
+                              style={{ backgroundColor: acc.color || '#377c79' }}
                             >
-                              {isSwitching ? (
-                                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <ArrowRightLeft size={13} />
-                              )}
-                              <span>تبديل</span>
-                            </button>
-                          )}
+                              {acc.name.slice(0, 1)}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-foreground">{acc.name}</span>
+                                <span className="font-mono text-[10px] text-muted-foreground" dir="ltr">{acc.username}</span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
+                                <span className="font-mono" dir="ltr">{acc.phone}</span>
+                                <span>•</span>
+                                <span>{acc.role}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {isCurrent ? (
+                              <span className="rounded-xl bg-secondary px-3 py-1.5 text-[11px] font-bold text-foreground">
+                                الحساب الحالي
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleSwitchAccount(acc)}
+                                disabled={isSwitching}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 py-1.5 text-xs font-bold text-foreground transition hover:border-primary hover:text-primary disabled:opacity-50 cursor-pointer"
+                              >
+                                {isSwitching ? (
+                                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <ArrowRightLeft size={13} />
+                                )}
+                                <span>تبديل</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Login Interface Connection Box */}
               <div className="rounded-2xl border border-dashed border-border bg-muted/20 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <KeyRound size={16} className="text-primary" />
-                    <span className="text-xs font-bold text-foreground">ربط حساب جديد عبر واجهة تسجيل الدخول الرئيسية</span>
+                    <span className="text-xs font-bold text-foreground">إضافة حساب جديد عبر التحقق الرسمي</span>
                   </div>
                   <button
                     type="button"
-                    onClick={onOpenLoginFlow}
+                    onClick={() => {
+                      onClose();
+                      onOpenLoginFlow?.();
+                    }}
                     className="inline-flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-bold text-primary-foreground shadow-sm hover:brightness-105 cursor-pointer"
                   >
-                    <span>فتح شاشة الدخول الرئيسية</span>
+                    <span>تسجيل دخول رسمي</span>
                     <ExternalLink size={12} />
                   </button>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  يمكنك تسجيل الدخول برقم هاتف جديد وتأكيد الرمز وكلمة المرور الإضافية 2FA وسيتم حفظ الجلسة وربطها تلقائياً بجميع أدوات النشر والمراقبة.
+                  يتم ربط أي حساب جديد فقط عبر إرسال رمز التحقق وكلمة المرور 2FA لبروتوكول تيليجرام الرسمي MTProto. لا يسمح النظام بأي حسابات وهمية أو غير مفعلة.
                 </p>
-
-                {/* Quick In-modal Add Toggle */}
-                <div className="pt-1">
-                  {!showAddForm ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowAddForm(true)}
-                      className="text-[11px] font-bold text-primary hover:underline cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus size={13} />
-                      <span>إضافة حساب يدوي سريع داخل هذه اللوحة</span>
-                    </button>
-                  ) : (
-                    <form onSubmit={handleAddAccountSubmit} className="space-y-3 pt-2">
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <div>
-                          <label className="text-[10px] text-muted-foreground block mb-1">اسم الحساب أو المعرف</label>
-                          <input
-                            type="text"
-                            value={newName}
-                            onChange={e => setNewName(e.target.value)}
-                            placeholder="مثال: حساب التسويق رقم 2"
-                            className="h-9 w-full rounded-xl border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-primary/25"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-muted-foreground block mb-1">رقم الهاتف الدولي</label>
-                          <input
-                            type="text"
-                            value={newPhone}
-                            onChange={e => setNewPhone(e.target.value)}
-                            placeholder="+9665XXXXXXXX"
-                            className="h-9 w-full rounded-xl border border-input bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-primary/25"
-                            dir="ltr"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => setShowAddForm(false)}
-                          className="rounded-xl px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted cursor-pointer"
-                        >
-                          إلغاء
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={!newPhone.trim()}
-                          className="rounded-xl bg-primary px-4 py-1.5 text-xs font-bold text-primary-foreground disabled:opacity-40 cursor-pointer"
-                        >
-                          حفظ وتفعيل الحساب
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                </div>
               </div>
             </>
           )}
