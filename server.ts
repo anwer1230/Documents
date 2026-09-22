@@ -17,6 +17,7 @@ import {
   fetchTelegramMessages,
   sendRealTelegramMessage,
   fetchProfilePhotoBuffer,
+  fetchTelegramChatDetails,
 } from './src/server/telegramService';
 
 const app = express();
@@ -744,6 +745,19 @@ app.get('/api/telegram/avatar/:peerId', async (req, res) => {
     console.warn('[Avatar] Error delivering avatar for:', peerId, err);
   }
   res.status(404).send('Avatar not found');
+});
+
+app.get('/api/telegram/chats/:chatId/full', async (req, res) => {
+  const { chatId } = req.params;
+  try {
+    const details = await fetchTelegramChatDetails(chatId);
+    if (details) {
+      return res.json({ details });
+    }
+  } catch (err) {
+    console.warn('[ChatDetails] Error fetching chat details:', err);
+  }
+  res.status(404).json({ error: 'DETAILS_NOT_FOUND' });
 });
 
 app.post('/api/telegram/chats/:chatId/messages', async (req, res) => {

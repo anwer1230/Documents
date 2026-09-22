@@ -15,6 +15,17 @@ export interface TelegramUser {
   name: string;
   username?: string;
   phone: string;
+  avatarUrl?: string;
+}
+
+export interface ChatDetails {
+  id: string;
+  participantsCount?: number;
+  onlineCount?: number;
+  about?: string;
+  isChannel?: boolean;
+  isGroup?: boolean;
+  avatarUrl?: string;
 }
 
 export interface PendingAuth {
@@ -99,6 +110,7 @@ export async function initTelegramService() {
           name: `${me.firstName || ''} ${me.lastName || ''}`.trim() || primary.name || 'حساب تيليجرام',
           username: me.username ? `@${me.username}` : primary.username,
           phone: me.phone ? `+${me.phone.replace(/^\+/, '')}` : primary.phone,
+          avatarUrl: '/api/telegram/avatar/me',
         };
         isLiveConnected = true;
         console.log(`[TelegramService] Successfully restored live session for ${activeUser.name} (${activeUser.phone})`);
@@ -226,6 +238,7 @@ export async function verifyAuthCode(sessionId: string, code: string) {
       name: `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'حساب تيليجرام',
       username: me.username ? `@${me.username}` : undefined,
       phone: pending.phone,
+      avatarUrl: '/api/telegram/avatar/me',
     };
 
     // Save session
@@ -302,6 +315,7 @@ export async function verify2FAPassword(sessionId: string, password: string) {
       name: `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'حساب تيليجرام',
       username: me.username ? `@${me.username}` : undefined,
       phone: pending.phone,
+      avatarUrl: '/api/telegram/avatar/me',
     };
 
     const stored = loadStoredSessions();
@@ -373,6 +387,7 @@ export function getTelegramServiceStatus() {
 }
 
 const avatarCache = new Map<string, { buffer: Buffer; mime: string; expires: number }>();
+const peerEntityCache = new Map<string, any>();
 
 /**
  * Fetch profile photo buffer for a user or chat
@@ -387,13 +402,30 @@ export async function fetchProfilePhotoBuffer(peerId: string): Promise<{ buffer:
   }
 
   try {
-    const buffer = await activeClient.downloadProfilePhoto(cleanPeer, { isBig: false });
+    let target: any = cleanPeer;
+    if (cleanPeer === 'me') {
+      target = 'me';
+    } else if (peerEntityCache.has(cleanPeer)) {
+      target = peerEntityCache.get(cleanPeer);
+    } else {
+      try {
+        if (/^-?\d+$/.test(cleanPeer)) {
+          target = await activeClient.getEntity(BigInt(cleanPeer) as any);
+        } else {
+          target = await activeClient.getEntity(cleanPeer);
+        }
+      } catch {
+        target = cleanPeer;
+      }
+    }
+
+    const buffer = await activeClient.downloadProfilePhoto(target, { isBig: false });
     if (buffer && buffer.length > 0) {
       const result = { buffer: Buffer.from(buffer), mime: 'image/jpeg', expires: Date.now() + 1000 * 60 * 30 };
       avatarCache.set(cleanPeer, result);
       return result;
     }
-  } catch {
+  } catch (err: any) {
     // Entities without photo or access restrictions
   }
   return null;
@@ -412,7 +444,7 @@ const TELEGRAM_SENDER_COLORS = [
 /**
  * Fetch Real Telegram Dialogs/Chats
  */
-export async function fetchTelegramDialogs(limit = 30) {
+export async function fetchTelegramDialogs(limit = 40) {
   if (!activeClient || !isLiveConnected) {
     return null;
   }
@@ -428,7 +460,14 @@ export async function fetchTelegramDialogs(limit = 30) {
       const preview = dialog.message?.message || (dialog.message as any)?.text || '';
       const date = dialog.date ? new Date(dialog.date * 1000).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : null;
       const hasPhoto = Boolean(entity?.photo);
-      const avatarUrl = hasPhoto ? `/api/telegram/avatar/${dialog.id}` : undefined;
+      const avatarPeerId = entity?.id ? entity.id.toString() : dialog.id.toString();
+      const avatarUrl = hasPhoto ? `/api/telegram/avatar/${avatarPeerId}` : undefined;
+
+      // Cache entity for instant avatar resolution
+      if (dialog.id) peerEntityCache.set(String(dialog.id), entity);
+      if (entity?.id) peerEntityCache.set(String(entity.id), entity);
+
+      const participantsCount = entity?.participantsCount ?? entity?.participants?.length ?? undefined;
 
       return {
         id: `tg_${dialog.id}`,
@@ -441,6 +480,7 @@ export async function fetchTelegramDialogs(limit = 30) {
         kind: isChannel ? 'channel' : isGroup ? 'group' : 'direct',
         isRealTelegram: true,
         avatarUrl,
+        participantsCount,
       };
     });
   } catch (err) {
@@ -570,3 +610,82 @@ export async function fetchTelegramMessages(peerId: string, limit = 50) {
     return null;
   }
 }
+
+/**
+ * Fetch detailed chat information (subscribers, online members count, about/bio)
+ */
+export async function fetchTelegramChatDetails(chatId: string): Promise<ChatDetails | null> {
+  if (!activeClient || !isLiveConnected) return null;
+
+  const cleanPeer = chatId.startsWith('tg_') ? chatId.replace('tg_', '') : chatId;
+
+  try {
+    let entity: any = peerEntityCache.get(cleanPeer);
+    if (!entity) {
+      try {
+        if (/^-?\d+$/.test(cleanPeer)) {
+          entity = await activeClient.getEntity(BigInt(cleanPeer) as any);
+        } else {
+          entity = await activeClient.getEntity(cleanPeer);
+        }
+      } catch {
+        entity = await activeClient.getInputEntity(cleanPeer);
+      }
+    }
+
+    let participantsCount: number | undefined;
+    let onlineCount: number | undefined;
+    let about: string | undefined;
+
+    if (entity?.className === 'Channel' || entity?.broadcast || entity?.megagroup) {
+      try {
+        const full = (await activeClient.invoke(new Api.channels.GetFullChannel({ channel: entity }))) as any;
+        const fullChat = full?.fullChat;
+        participantsCount = fullChat?.participantsCount ?? entity?.participantsCount;
+        onlineCount = fullChat?.onlineCount;
+        about = fullChat?.about;
+      } catch (e: any) {
+        console.warn('[TelegramService] GetFullChannel error:', e?.message);
+        participantsCount = entity?.participantsCount;
+      }
+    } else if (entity?.className === 'Chat') {
+      try {
+        const full = (await activeClient.invoke(new Api.messages.GetFullChat({ chatId: entity.id }))) as any;
+        const fullChat = full?.fullChat;
+        const participants = fullChat?.participants?.participants || [];
+        participantsCount = participants.length;
+        if (full?.users) {
+          onlineCount = full.users.filter((u: any) => u.status?.className === 'UserStatusOnline').length;
+        }
+        about = fullChat?.about;
+      } catch (e: any) {
+        console.warn('[TelegramService] GetFullChat error:', e?.message);
+      }
+    } else if (entity?.className === 'User') {
+      try {
+        const full = (await activeClient.invoke(new Api.users.GetFullUser({ id: entity }))) as any;
+        about = full?.fullUser?.about;
+        if (entity.status?.className === 'UserStatusOnline') {
+          onlineCount = 1;
+        }
+      } catch (e: any) {
+        console.warn('[TelegramService] GetFullUser error:', e?.message);
+      }
+    }
+
+    const peerIdStr = entity?.id ? entity.id.toString() : cleanPeer;
+    return {
+      id: chatId,
+      participantsCount,
+      onlineCount,
+      about,
+      isChannel: Boolean(entity?.broadcast),
+      isGroup: Boolean(entity?.megagroup || entity?.className === 'Chat'),
+      avatarUrl: entity?.photo ? `/api/telegram/avatar/${peerIdStr}` : undefined,
+    };
+  } catch (err: any) {
+    console.warn(`[TelegramService] Error getting full chat details for ${chatId}:`, err?.message);
+    return null;
+  }
+}
+

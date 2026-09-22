@@ -7,7 +7,7 @@ import {
   Archive, ArrowDown, Bell, Check, CheckCheck, ChevronLeft, FileText, Image as ImageIcon,
   Info, LockKeyhole, Menu, MessageCircle, Mic, Moon, MoreVertical, Paperclip, Phone,
   Pin, Plus, Search, Send, Settings, ShieldCheck, SmilePlus, Sun, Trash2, UserPlus, Video, Volume2, X, Edit3, Users,
-  Folder, Megaphone, Bot, Bookmark, Sparkles, Copy
+  Folder, Megaphone, Bot, Bookmark, Sparkles, Copy, Palette
 } from 'lucide-react';
 import { NavigationDrawer } from '@/components/NavigationDrawer';
 import { ServicesCenter } from '@/components/ServicesCenter';
@@ -22,6 +22,7 @@ import { RotatingBroadcastModal } from '@/components/features/RotatingBroadcastM
 import { AutoJoinModal } from '@/components/features/AutoJoinModal';
 import { SavedLinksModal } from '@/components/features/SavedLinksModal';
 import { MessageTemplatesModal, type MessageTemplate } from '@/components/features/MessageTemplatesModal';
+import { ChatWallpaperModal, WALLPAPER_PRESETS, type WallpaperConfig } from '@/components/features/ChatWallpaperModal';
 
 type Chat = {
   id: string;
@@ -36,6 +37,9 @@ type Chat = {
   archived?: boolean;
   kind?: string;
   avatarUrl?: string;
+  participantsCount?: number;
+  onlineCount?: number;
+  about?: string;
 };
 
 type Message = {
@@ -69,9 +73,16 @@ type ApiChat = {
   kind: string;
   online?: boolean;
   avatarUrl?: string;
+  participantsCount?: number;
+  onlineCount?: number;
+  about?: string;
 };
 
-type AuthStatus = { authenticated: boolean; state: 'phone' | 'code' | 'password' | 'ready'; user?: { name: string; username: string; phone: string } | null };
+type AuthStatus = {
+  authenticated: boolean;
+  state: 'phone' | 'code' | 'password' | 'ready';
+  user?: { id?: string; name: string; username: string; phone: string; avatarUrl?: string } | null;
+};
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -100,6 +111,10 @@ function toChat(chat: ApiChat): Chat {
     archived: chat.archived,
     kind: chat.kind,
     avatarUrl: chat.avatarUrl,
+    participantsCount: chat.participantsCount,
+    onlineCount: chat.onlineCount,
+    about: chat.about,
+    online: chat.online || (chat.onlineCount !== undefined && chat.onlineCount > 0),
   };
 }
 
@@ -203,16 +218,248 @@ function EmptyState({ search }: { search: string }) {
 }
 
 function ProfilePanel({ chat, onClose, onSettings }: { chat: Chat; onClose: () => void; onSettings: () => void }) {
-  return <aside className="absolute inset-y-0 left-0 z-30 w-full max-w-[360px] border-r border-border bg-card soft-shadow fade-up" dir="rtl">
-    <div className="flex h-[74px] items-center gap-3 border-b border-border px-5"><IconButton label="إغلاق الملف" onClick={onClose}><ChevronLeft size={20} /></IconButton><h2 className="text-sm font-bold">الملف الشخصي</h2></div>
-    <div className="flex flex-col items-center border-b border-border px-6 py-8"><Avatar chat={chat} size="lg" /><h3 className="mt-3 text-lg font-bold">{chat.name}</h3><p className="mt-1 text-xs text-muted-foreground">{chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً'}</p><div className="mt-6 flex gap-2"><button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-call"><Phone size={14} className="ml-1 inline" /> اتصال</button><button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-video"><Video size={14} className="ml-1 inline" /> فيديو</button></div></div>
-    <div className="space-y-1 p-3"><button type="button" onClick={onSettings} data-testid="button-open-settings" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><Settings size={17} className="text-primary" /> إعدادات الحساب</button><button type="button" data-testid="button-notifications" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><Bell size={17} className="text-primary" /> الإشعارات <span className="mr-auto text-[10px] text-muted-foreground">مفعّلة</span></button><button type="button" data-testid="button-privacy" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted"><ShieldCheck size={17} className="text-primary" /> الخصوصية والأمان</button></div>
-  </aside>;
+  const isChannel = chat.kind === 'channel';
+  const isGroup = chat.kind === 'group';
+
+  return (
+    <aside className="absolute inset-y-0 left-0 z-30 w-full max-w-[360px] border-r border-border bg-card soft-shadow fade-up overflow-y-auto" dir="rtl">
+      <div className="flex h-[74px] items-center gap-3 border-b border-border px-5">
+        <IconButton label="إغلاق الملف" onClick={onClose}>
+          <ChevronLeft size={20} />
+        </IconButton>
+        <h2 className="text-sm font-bold">الملف التعريفي</h2>
+      </div>
+
+      <div className="flex flex-col items-center border-b border-border px-6 py-7">
+        <Avatar chat={chat} size="lg" />
+        <h3 className="mt-3 text-lg font-bold text-center leading-snug">{chat.name}</h3>
+
+        {/* Real Subscriber / Member / Online Status */}
+        <p className="mt-1 text-xs text-muted-foreground text-center">
+          {isChannel
+            ? (chat.participantsCount ? `${chat.participantsCount.toLocaleString('ar-SA')} مشترك` : 'قناة تيليجرام')
+            : isGroup
+            ? `${chat.participantsCount ? `${chat.participantsCount.toLocaleString('ar-SA')} عضو` : 'مجموعة تيليجرام'}${
+                chat.onlineCount ? ` · ${chat.onlineCount.toLocaleString('ar-SA')} متصل حالياً` : ''
+              }`
+            : (chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً')}
+        </p>
+
+        {/* Live Counters Badges */}
+        {(chat.participantsCount !== undefined || (chat.onlineCount !== undefined && chat.onlineCount > 0)) && (
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {chat.participantsCount !== undefined && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 text-primary text-xs font-bold shadow-xs">
+                <Users size={14} />
+                <span>{chat.participantsCount.toLocaleString('ar-SA')} {isChannel ? 'مشترك' : 'عضو'}</span>
+              </div>
+            )}
+            {chat.onlineCount !== undefined && chat.onlineCount > 0 && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-xs font-bold shadow-xs">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{chat.onlineCount.toLocaleString('ar-SA')} متصل حالياً</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* About / Description if present */}
+        {chat.about && (
+          <div className="mt-5 w-full rounded-2xl bg-secondary/50 p-3.5 text-right border border-border/60">
+            <span className="text-[10px] font-bold text-muted-foreground block mb-1">الوصف والنبذة</span>
+            <p className="text-xs text-foreground whitespace-pre-wrap leading-relaxed select-text">{chat.about}</p>
+          </div>
+        )}
+
+        <div className="mt-5 flex gap-2">
+          <button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-call">
+            <Phone size={14} className="ml-1 inline" /> اتصال
+          </button>
+          <button className="rounded-xl bg-secondary px-4 py-2 text-[11px] font-bold text-secondary-foreground" data-testid="button-profile-video">
+            <Video size={14} className="ml-1 inline" /> فيديو
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-1 p-3">
+        <button type="button" onClick={onSettings} data-testid="button-open-settings" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted">
+          <Settings size={17} className="text-primary" /> إعدادات الحساب
+        </button>
+        <button type="button" data-testid="button-notifications" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted">
+          <Bell size={17} className="text-primary" /> الإشعارات <span className="mr-auto text-[10px] text-muted-foreground">مفعّلة</span>
+        </button>
+        <button type="button" data-testid="button-privacy" className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-xs hover:bg-muted">
+          <ShieldCheck size={17} className="text-primary" /> الخصوصية والأمان
+        </button>
+      </div>
+    </aside>
+  );
 }
 
-function SettingsPanel({ theme, setTheme, onClose, onAddAccount, onOpenAccounts, onLogout, user }: { theme: 'light'|'dark'; setTheme: (v: 'light'|'dark') => void; onClose: () => void; onAddAccount: () => void; onOpenAccounts?: () => void; onLogout: () => void; user?: AuthStatus['user'] }) {
+function SettingsPanel({
+  theme,
+  setTheme,
+  onClose,
+  onAddAccount,
+  onOpenAccounts,
+  onOpenWallpaper,
+  onLogout,
+  user,
+}: {
+  theme: 'light' | 'dark';
+  setTheme: (v: 'light' | 'dark') => void;
+  onClose: () => void;
+  onAddAccount: () => void;
+  onOpenAccounts?: () => void;
+  onOpenWallpaper?: () => void;
+  onLogout: () => void;
+  user?: AuthStatus['user'];
+}) {
   const initials = user?.name?.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join('') || 'ت';
-  return <div className="absolute inset-0 z-40 flex justify-end bg-[hsl(211_38%_12%/.28)] backdrop-blur-sm" dir="rtl"><section className="h-full w-full max-w-[420px] overflow-y-auto bg-card soft-shadow fade-up"><div className="sticky top-0 z-10 flex h-[74px] items-center gap-3 border-b border-border bg-card/95 px-5 backdrop-blur"><IconButton label="إغلاق الإعدادات" onClick={onClose}><X size={19} /></IconButton><h2 className="text-sm font-bold">الإعدادات</h2></div><div className="p-5"><div className="mb-7 rounded-2xl bg-secondary/60 p-4"><div className="flex items-center gap-3"><div className="avatar h-12 w-12 bg-primary text-sm">{initials}</div><div><p className="text-sm font-bold">{user?.name || 'حساب Telegram'}</p><p className="mt-1 font-latin text-[11px] text-muted-foreground">{user?.username || user?.phone || 'حساب متصل'}</p></div><Check size={17} className="mr-auto text-primary" /></div></div><h3 className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">التفضيلات</h3><div className="overflow-hidden rounded-2xl border border-border"><button type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} data-testid="button-toggle-theme" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-accent/30 text-accent-foreground">{theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}</span><span><strong className="block">المظهر</strong><small className="mt-1 block text-[10px] text-muted-foreground">{theme === 'light' ? 'الوضع الفاتح' : 'الوضع الداكن'} · اضغط للتبديل</small></span><ArrowDown size={15} className="mr-auto text-muted-foreground" /></button><div className="flex items-center gap-3 px-4 py-4 text-xs"><span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary"><Volume2 size={16} /></span><span><strong className="block">الأصوات</strong><small className="mt-1 block text-[10px] text-muted-foreground">صوت الإشعارات مفعّل</small></span><span className="mr-auto h-2 w-2 rounded-full bg-[#7dbd8a]" /></div></div><h3 className="mb-2 mt-7 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">الحساب والجلسات</h3><div className="overflow-hidden rounded-2xl border border-border">{onOpenAccounts && <button type="button" onClick={onOpenAccounts} data-testid="button-manage-accounts" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-[#4c8790]/20 text-[#4c8790]"><Users size={16} /></span><span><strong className="block">إدارة الحسابات وجلسات العمل</strong><small className="mt-1 block text-[10px] text-muted-foreground">التبديل بين الحسابات وإدارة الصلاحيات</small></span><ChevronLeft size={16} className="mr-auto text-muted-foreground" /></button>}<button type="button" onClick={onAddAccount} data-testid="button-add-account" className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"><span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary"><UserPlus size={16} /></span><span><strong className="block">إضافة حساب</strong><small className="mt-1 block text-[10px] text-muted-foreground">استخدم رقم هاتف آخر</small></span><Plus size={16} className="mr-auto text-muted-foreground" /></button><button type="button" onClick={onLogout} data-testid="button-logout" className="flex w-full items-center gap-3 px-4 py-4 text-right text-xs text-destructive hover:bg-destructive/5"><span className="grid h-8 w-8 place-items-center rounded-lg bg-destructive/10"><LockKeyhole size={16} /></span><span><strong className="block">تسجيل الخروج</strong><small className="mt-1 block text-[10px] text-muted-foreground">إغلاق جلسة Telegram الحالية</small></span></button></div><div className="mt-8 flex items-center justify-center gap-2 text-[10px] text-muted-foreground"><LockKeyhole size={12} /> جلسة Telegram محفوظة على الخادم فقط</div></div></section></div>;
+  const [imgErr, setImgErr] = useState(false);
+
+  return (
+    <div className="absolute inset-0 z-40 flex justify-end bg-[hsl(211_38%_12%/.28)] backdrop-blur-sm" dir="rtl">
+      <section className="h-full w-full max-w-[420px] overflow-y-auto bg-card soft-shadow fade-up">
+        <div className="sticky top-0 z-10 flex h-[74px] items-center gap-3 border-b border-border bg-card/95 px-5 backdrop-blur">
+          <IconButton label="إغلاق الإعدادات" onClick={onClose}>
+            <X size={19} />
+          </IconButton>
+          <h2 className="text-sm font-bold">الإعدادات</h2>
+        </div>
+
+        <div className="p-5">
+          {/* User Profile Card */}
+          <div className="mb-7 rounded-2xl bg-secondary/60 p-4 border border-border/50">
+            <div className="flex items-center gap-3">
+              {user?.avatarUrl && !imgErr ? (
+                <img
+                  src={user.avatarUrl}
+                  alt={user?.name || 'حساب تيليجرام'}
+                  onError={() => setImgErr(true)}
+                  className="h-12 w-12 rounded-full object-cover border border-border/40 shadow-xs"
+                />
+              ) : (
+                <div className="avatar h-12 w-12 bg-primary text-sm font-bold">{initials}</div>
+              )}
+              <div>
+                <p className="text-sm font-bold">{user?.name || 'حساب Telegram'}</p>
+                <p className="mt-1 font-latin text-[11px] text-muted-foreground">{user?.username || user?.phone || 'حساب متصل'}</p>
+              </div>
+              <Check size={17} className="mr-auto text-primary" />
+            </div>
+          </div>
+
+          <h3 className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">التفضيلات والمظهر</h3>
+          <div className="overflow-hidden rounded-2xl border border-border">
+            <button
+              type="button"
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              data-testid="button-toggle-theme"
+              className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"
+            >
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent/30 text-accent-foreground">
+                {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+              </span>
+              <span>
+                <strong className="block">المظهر</strong>
+                <small className="mt-1 block text-[10px] text-muted-foreground">
+                  {theme === 'light' ? 'الوضع الفاتح' : 'الوضع الداكن'} · اضغط للتبديل
+                </small>
+              </span>
+              <ArrowDown size={15} className="mr-auto text-muted-foreground" />
+            </button>
+
+            {/* Chat Wallpaper Customization */}
+            {onOpenWallpaper && (
+              <button
+                type="button"
+                onClick={onOpenWallpaper}
+                data-testid="button-open-wallpaper"
+                className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted cursor-pointer"
+              >
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10 text-primary">
+                  <Palette size={16} />
+                </span>
+                <span>
+                  <strong className="block">خلفية المحادثات (Chat Wallpaper)</strong>
+                  <small className="mt-1 block text-[10px] text-muted-foreground">
+                    تخصيص أنماط تيليجرام، الألوان، والتدرجات
+                  </small>
+                </span>
+                <ChevronLeft size={16} className="mr-auto text-muted-foreground" />
+              </button>
+            )}
+
+            <div className="flex items-center gap-3 px-4 py-4 text-xs">
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary">
+                <Volume2 size={16} />
+              </span>
+              <span>
+                <strong className="block">الأصوات</strong>
+                <small className="mt-1 block text-[10px] text-muted-foreground">صوت الإشعارات مفعّل</small>
+              </span>
+              <span className="mr-auto h-2 w-2 rounded-full bg-[#7dbd8a]" />
+            </div>
+          </div>
+
+          <h3 className="mb-2 mt-7 px-2 text-[10px] font-bold uppercase tracking-[.15em] text-muted-foreground">الحساب والجلسات</h3>
+          <div className="overflow-hidden rounded-2xl border border-border">
+            {onOpenAccounts && (
+              <button
+                type="button"
+                onClick={onOpenAccounts}
+                data-testid="button-manage-accounts"
+                className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"
+              >
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#4c8790]/20 text-[#4c8790]">
+                  <Users size={16} />
+                </span>
+                <span>
+                  <strong className="block">إدارة الحسابات وجلسات العمل</strong>
+                  <small className="mt-1 block text-[10px] text-muted-foreground">التبديل بين الحسابات وإدارة الصلاحيات</small>
+                </span>
+                <ChevronLeft size={16} className="mr-auto text-muted-foreground" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onAddAccount}
+              data-testid="button-add-account"
+              className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted"
+            >
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-primary">
+                <UserPlus size={16} />
+              </span>
+              <span>
+                <strong className="block">إضافة حساب</strong>
+                <small className="mt-1 block text-[10px] text-muted-foreground">استخدم رقم هاتف آخر</small>
+              </span>
+              <Plus size={16} className="mr-auto text-muted-foreground" />
+            </button>
+            <button
+              type="button"
+              onClick={onLogout}
+              data-testid="button-logout"
+              className="flex w-full items-center gap-3 px-4 py-4 text-right text-xs text-destructive hover:bg-destructive/5"
+            >
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-destructive/10">
+                <LockKeyhole size={16} />
+              </span>
+              <span>
+                <strong className="block">تسجيل الخروج</strong>
+                <small className="mt-1 block text-[10px] text-muted-foreground">إغلاق جلسة Telegram الحالية</small>
+              </span>
+            </button>
+          </div>
+
+          <div className="mt-8 flex items-center justify-center gap-2 text-[10px] text-muted-foreground">
+            <LockKeyhole size={12} /> جلسة Telegram محفوظة على الخادم فقط
+          </div>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function AuthScreen({ onAuthenticated, onClose, modal = false }: { onAuthenticated: (status: AuthStatus) => void; onClose?: () => void; modal?: boolean }) {
@@ -597,7 +844,25 @@ function MessageBubble({
   );
 }
 
-function Conversation({ chat, messages, setMessages, onBack, onProfile, onError }: { chat: Chat; messages: Message[]; setMessages: (m: Message[]) => void; onBack: () => void; onProfile: () => void; onError: (message: string) => void }) {
+function Conversation({
+  chat,
+  messages,
+  setMessages,
+  onBack,
+  onProfile,
+  onError,
+  wallpaper,
+  onOpenWallpaper,
+}: {
+  chat: Chat;
+  messages: Message[];
+  setMessages: (m: Message[]) => void;
+  onBack: () => void;
+  onProfile: () => void;
+  onError: (message: string) => void;
+  wallpaper: WallpaperConfig;
+  onOpenWallpaper: () => void;
+}) {
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<Message | null>(null);
   const [replying, setReplying] = useState<Message | null>(null);
@@ -697,21 +962,97 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
     (tpl.shortcut && tpl.shortcut.toLowerCase().includes(templateSearch.toLowerCase()))
   );
 
-  return <section className="chat-wallpaper relative flex min-w-0 flex-1 flex-col" dir="rtl">
-    <header className="flex h-[74px] flex-none items-center gap-3 border-b border-border bg-card/90 px-4 backdrop-blur-md">
-      <IconButton label="العودة للمحادثات" onClick={onBack} className="md:hidden"><ChevronLeft size={20} /></IconButton>
-      <button type="button" onClick={onProfile} data-testid="button-open-profile" className="flex min-w-0 items-center gap-3 text-right">
-        <div className="relative"><Avatar chat={chat} /><span className={`absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full border-2 border-card ${chat.online ? 'bg-[#7dbd8a]' : 'bg-muted-foreground/30'}`} /></div>
-        <span className="min-w-0"><strong className="block truncate text-sm">{chat.name}</strong><small className="mt-1 block truncate text-[10px] text-muted-foreground">{chat.kind || (chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً')}</small></span>
-      </button>
-      <div className="mr-auto flex items-center gap-1">
-        <IconButton label="بحث في المحادثة"><Search size={18} /></IconButton>
-        <IconButton label="اتصال صوتي"><Phone size={18} /></IconButton>
-        <IconButton label="المزيد"><MoreVertical size={19} /></IconButton>
+  const isChannel = chat.kind === 'channel';
+  const isGroup = chat.kind === 'group';
+
+  return (
+    <section
+      className="chat-wallpaper relative flex min-w-0 flex-1 flex-col overflow-hidden"
+      dir="rtl"
+      style={{
+        background: wallpaper?.background || 'var(--card)',
+      }}
+    >
+      {/* Pattern Overlay if selected */}
+      {wallpaper?.patternOverlay && (
+        <div
+          className="absolute inset-0 pointer-events-none z-0"
+          style={{
+            opacity: wallpaper.patternOpacity ?? 0.12,
+            backgroundImage:
+              wallpaper.patternOverlay === 'stars'
+                ? 'radial-gradient(circle at 20% 30%, white 1.5px, transparent 1.5px), radial-gradient(circle at 80% 70%, white 1.5px, transparent 1.5px), radial-gradient(circle at 50% 50%, white 1.5px, transparent 1.5px)'
+                : 'linear-gradient(135deg, rgba(255,255,255,0.1) 25%, transparent 25%), linear-gradient(225deg, rgba(255,255,255,0.1) 25%, transparent 25%), linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%), linear-gradient(315deg, rgba(255,255,255,0.1) 25%, transparent 25%)',
+            backgroundSize: wallpaper.patternOverlay === 'stars' ? '48px 48px' : '32px 32px',
+          }}
+        />
+      )}
+
+      <header className="relative z-10 flex h-[74px] flex-none items-center gap-3 border-b border-border bg-card/90 px-4 backdrop-blur-md">
+        <IconButton label="العودة للمحادثات" onClick={onBack} className="md:hidden">
+          <ChevronLeft size={20} />
+        </IconButton>
+        <button
+          type="button"
+          onClick={onProfile}
+          data-testid="button-open-profile"
+          className="flex min-w-0 items-center gap-3 text-right hover:opacity-90 transition-opacity"
+        >
+          <div className="relative">
+            <Avatar chat={chat} />
+            <span
+              className={`absolute -bottom-0.5 -left-0.5 h-3 w-3 rounded-full border-2 border-card ${
+                chat.online ? 'bg-[#7dbd8a]' : 'bg-muted-foreground/30'
+              }`}
+            />
+          </div>
+          <span className="min-w-0">
+            <strong className="block truncate text-sm font-bold">{chat.name}</strong>
+            <small className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              {isChannel
+                ? (chat.participantsCount ? `${chat.participantsCount.toLocaleString('ar-SA')} مشترك` : 'قناة تيليجرام')
+                : isGroup
+                ? `${chat.participantsCount ? `${chat.participantsCount.toLocaleString('ar-SA')} عضو` : 'مجموعة'}${
+                    chat.onlineCount ? ` · ${chat.onlineCount.toLocaleString('ar-SA')} متصل` : ''
+                  }`
+                : (chat.online ? 'متصل الآن' : 'آخر ظهور مؤخراً')}
+            </small>
+          </span>
+        </button>
+
+        <div className="mr-auto flex items-center gap-1">
+          <IconButton label="تخصيص خلفية المحادثة" onClick={onOpenWallpaper} className="text-primary hover:bg-primary/10">
+            <Palette size={18} />
+          </IconButton>
+          <IconButton label="بحث في المحادثة">
+            <Search size={18} />
+          </IconButton>
+          <IconButton label="اتصال صوتي">
+            <Phone size={18} />
+          </IconButton>
+          <IconButton label="المزيد">
+            <MoreVertical size={19} />
+          </IconButton>
+        </div>
+      </header>
+
+      <div className="relative z-10 flex-1 overflow-y-auto px-4 py-7 sm:px-8">
+        <div className="mx-auto flex max-w-[820px] flex-col gap-4">
+          <div className="mx-auto mb-2 rounded-full bg-card/85 px-4 py-1.5 text-[10px] text-muted-foreground shadow-xs border border-border/40 backdrop-blur-xs select-none">
+            اليوم
+          </div>
+          {messages.length === 0 ? (
+            <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div>
+          ) : (
+            messages.map(message => (
+              <MessageBubble key={message.id} message={message} chatKind={chat.kind} onAction={handleAction} />
+            ))
+          )}
+          <div ref={endRef} />
+        </div>
       </div>
-    </header>
-    <div className="flex-1 overflow-y-auto px-4 py-7 sm:px-8"><div className="mx-auto flex max-w-[820px] flex-col gap-4"><div className="mx-auto mb-2 rounded-full bg-card/75 px-4 py-1.5 text-[10px] text-muted-foreground shadow-sm">اليوم</div>{messages.length === 0 ? <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div> : messages.map(message => <MessageBubble key={message.id} message={message} chatKind={chat.kind} onAction={handleAction} />)}<div ref={endRef} /></div></div>
-    <div className="composer-shadow flex-none border-t border-border bg-card/90 px-3 py-3 backdrop-blur-md sm:px-7">
+
+      <div className="relative z-10 composer-shadow flex-none border-t border-border bg-card/90 px-3 py-3 backdrop-blur-md sm:px-7">
       <div className="mx-auto max-w-[820px]">
         {/* Quick Templates Bar above Composer */}
         {templates.length > 0 && !replying && !editing && (
@@ -901,7 +1242,8 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
         }}
       />
     )}
-  </section>;
+    </section>
+  );
 }
 
 function ChatList({
@@ -1095,7 +1437,22 @@ function AppWorkspace() {
   const [mobileList, setMobileList] = useState(false);
   const [ready, setReady] = useState(false);
   const [activeService, setActiveService] = useState<string | null>(null);
+  const [wallpaper, setWallpaper] = useState<WallpaperConfig>(() => {
+    try {
+      const saved = localStorage.getItem('telegram_chat_wallpaper');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return WALLPAPER_PRESETS[0];
+  });
+  const [showWallpaperModal, setShowWallpaperModal] = useState(false);
   const [, setLocation] = useLocation();
+
+  const handleSelectWallpaper = (newWp: WallpaperConfig) => {
+    setWallpaper(newWp);
+    try {
+      localStorage.setItem('telegram_chat_wallpaper', JSON.stringify(newWp));
+    } catch {}
+  };
 
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); storage.set('telegram-theme', theme); }, [theme]);
   useEffect(() => {
@@ -1123,8 +1480,86 @@ function AppWorkspace() {
       .catch(requestError => setError(requestError instanceof Error ? requestError.message : 'تعذر تحميل الرسائل'));
   }, [auth?.authenticated, selected]);
 
+  // Real-time Chat Details (Subscribers, Members, Online count, Bio/About, Verified Avatar)
+  useEffect(() => {
+    if (!auth?.authenticated || !selected) return;
+    void apiFetch<{ details: { participantsCount?: number; onlineCount?: number; about?: string; avatarUrl?: string } }>(
+      `/telegram/chats/${encodeURIComponent(selected)}/full`
+    ).then(res => {
+      if (res?.details) {
+        setChats(currentChats =>
+          currentChats.map(c =>
+            c.id === selected
+              ? {
+                  ...c,
+                  participantsCount: res.details.participantsCount ?? c.participantsCount,
+                  onlineCount: res.details.onlineCount ?? c.onlineCount,
+                  about: res.details.about ?? c.about,
+                  avatarUrl: res.details.avatarUrl ?? c.avatarUrl,
+                  online: (res.details.onlineCount !== undefined && res.details.onlineCount > 0) || c.online,
+                }
+              : c
+          )
+        );
+      }
+    }).catch(() => {});
+  }, [auth?.authenticated, selected]);
+
+  // Mobile Back Button Navigation Fix (Hardware back button / Swipe / Browser back)
+  useEffect(() => {
+    const handlePopState = () => {
+      if (showWallpaperModal) {
+        setShowWallpaperModal(false);
+        return;
+      }
+      if (showProfile) {
+        setShowProfile(false);
+        return;
+      }
+      if (showSettings) {
+        setShowSettings(false);
+        return;
+      }
+      if (showAdd) {
+        setShowAdd(false);
+        return;
+      }
+      if (isDrawerOpen) {
+        setIsDrawerOpen(false);
+        return;
+      }
+      if (activeService) {
+        setActiveService(null);
+        return;
+      }
+      // If user is inside a chat on mobile, back navigation returns to the chat list rather than exiting the app
+      if (!mobileList && window.innerWidth < 768) {
+        setMobileList(true);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [showWallpaperModal, showProfile, showSettings, showAdd, isDrawerOpen, activeService, mobileList]);
+
   const current = chats.find(chat => chat.id === selected);
-  const selectChat = (id: string) => { setSelected(id); setShowProfile(false); setMobileList(false); setChats(currentChats => currentChats.map(chat => chat.id === id ? { ...chat, unread: undefined } : chat)); };
+  const selectChat = (id: string) => {
+    setSelected(id);
+    setShowProfile(false);
+    setMobileList(false);
+    setChats(currentChats => currentChats.map(chat => chat.id === id ? { ...chat, unread: undefined } : chat));
+    if (window.innerWidth < 768) {
+      window.history.pushState({ telegramView: 'chat', id }, '');
+    }
+  };
+
+  const handleBack = () => {
+    if (window.innerWidth < 768 && window.history.state?.telegramView === 'chat') {
+      window.history.back();
+    } else {
+      setMobileList(true);
+    }
+  };
 
   const handleSendToChat = (text: string) => {
     const targetChatId = selected || chats[0]?.id;
@@ -1190,9 +1625,11 @@ function AppWorkspace() {
                   chat={current}
                   messages={messages[selected] || []}
                   setMessages={next => setMessages(currentMessages => ({ ...currentMessages, [selected]: next }))}
-                  onBack={() => setMobileList(true)}
+                  onBack={handleBack}
                   onProfile={() => setShowProfile(true)}
                   onError={setError}
+                  wallpaper={wallpaper}
+                  onOpenWallpaper={() => setShowWallpaperModal(true)}
                 />
               ) : (
                 <EmptyState search="" />
@@ -1273,7 +1710,25 @@ function AppWorkspace() {
 
       {error && <div role="alert" className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-destructive px-4 py-2 text-[11px] text-destructive-foreground shadow-lg">{error}<button type="button" className="mr-3 font-bold" onClick={() => setError('')}>×</button></div>}
       {showProfile && current && <ProfilePanel chat={current} onClose={() => setShowProfile(false)} onSettings={() => { setShowProfile(false); setShowSettings(true); }} />}
-      {showSettings && <SettingsPanel theme={theme} setTheme={setTheme} onClose={() => setShowSettings(false)} onAddAccount={() => { setShowSettings(false); setShowAdd(true); }} onOpenAccounts={() => { setShowSettings(false); setActiveService('accounts'); }} onLogout={logout} user={auth.user} />}
+      {showSettings && (
+        <SettingsPanel
+          theme={theme}
+          setTheme={setTheme}
+          onClose={() => setShowSettings(false)}
+          onAddAccount={() => { setShowSettings(false); setShowAdd(true); }}
+          onOpenAccounts={() => { setShowSettings(false); setActiveService('accounts'); }}
+          onOpenWallpaper={() => { setShowSettings(false); setShowWallpaperModal(true); }}
+          onLogout={logout}
+          user={auth.user}
+        />
+      )}
+      {showWallpaperModal && (
+        <ChatWallpaperModal
+          currentWallpaper={wallpaper}
+          onSelectWallpaper={handleSelectWallpaper}
+          onClose={() => setShowWallpaperModal(false)}
+        />
+      )}
       {showAdd && <AddAccount onClose={() => setShowAdd(false)} onAuthenticated={status => { setShowAdd(false); setAuth(status); }} />}
 
       {/* Telegram Navigation Drawer (الدرج الجانبي المماثل لتطبيق تيليجرام) */}
