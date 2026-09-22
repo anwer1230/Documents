@@ -43,8 +43,17 @@ export function AccountsManagerModal({
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
+  const TG_SESSION_STORAGE_KEY = 'telegram_session_string';
+
   const fetchAccounts = () => {
-    fetch('/api/telegram/accounts')
+    const savedSession = typeof window !== 'undefined' ? localStorage.getItem(TG_SESSION_STORAGE_KEY) : null;
+    const headers: Record<string, string> = {};
+    if (savedSession) {
+      headers['Authorization'] = `Bearer ${savedSession}`;
+      headers['x-telegram-session'] = savedSession;
+    }
+
+    fetch('/api/telegram/accounts', { headers })
       .then(res => res.json())
       .then(res => {
         setAccounts(res.accounts || []);
@@ -62,6 +71,12 @@ export function AccountsManagerModal({
 
   const handleLogout = async () => {
     try {
+      localStorage.removeItem(TG_SESSION_STORAGE_KEY);
+      localStorage.removeItem('tg_session_string');
+      document.cookie = 'tg_session_string=; Max-Age=0; path=/;';
+    } catch {}
+
+    try {
       await fetch('/api/telegram/auth/logout', { method: 'POST' });
     } catch {
       //
@@ -78,13 +93,27 @@ export function AccountsManagerModal({
     if (account.id === activeId) return;
     setSwitchingId(account.id);
     try {
+      const savedSession = typeof window !== 'undefined' ? localStorage.getItem(TG_SESSION_STORAGE_KEY) : null;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (savedSession) {
+        headers['Authorization'] = `Bearer ${savedSession}`;
+        headers['x-telegram-session'] = savedSession;
+      }
+
       const res = await fetch('/api/telegram/accounts/switch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ accountId: account.id }),
       });
       const data = await res.json();
       if (data.success) {
+        if (data.sessionString) {
+          try {
+            localStorage.setItem(TG_SESSION_STORAGE_KEY, data.sessionString);
+            localStorage.setItem('tg_session_string', data.sessionString);
+            document.cookie = `tg_session_string=${encodeURIComponent(data.sessionString)}; Max-Age=31536000; path=/; SameSite=Lax`;
+          } catch {}
+        }
         setActiveId(account.id);
         setFeedback(`تم التبديل بنجاح إلى حساب: ${account.name}`);
         onAccountSwitched?.(account);

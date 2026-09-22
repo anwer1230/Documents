@@ -83,12 +83,25 @@ type AuthStatus = {
   authenticated: boolean;
   state: 'phone' | 'code' | 'password' | 'ready';
   user?: { id?: string; name: string; username: string; phone: string; avatarUrl?: string } | null;
+  sessionString?: string;
 };
 
+const TG_SESSION_STORAGE_KEY = 'telegram_session_string';
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const savedSession = typeof window !== 'undefined' ? localStorage.getItem(TG_SESSION_STORAGE_KEY) : null;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> || {}),
+  };
+  if (savedSession && !headers['Authorization']) {
+    headers['Authorization'] = `Bearer ${savedSession}`;
+    headers['x-telegram-session'] = savedSession;
+  }
+
   const response = await fetch(`/api${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers,
     credentials: 'include',
   });
   const data = await response.json().catch(() => ({}));
@@ -504,10 +517,23 @@ function AuthScreen({ onAuthenticated, onClose, modal = false }: { onAuthenticat
         setStep('code');
       } else if (step === 'code') {
         const result = await apiFetch<AuthStatus>('/telegram/auth/verify', { method: 'POST', body: JSON.stringify({ code }) });
-        if (result.state === 'password') setStep('password');
-        else onAuthenticated(result);
+        if (result.state === 'password') {
+          setStep('password');
+        } else {
+          if (result.sessionString) {
+            try {
+              localStorage.setItem(TG_SESSION_STORAGE_KEY, result.sessionString);
+            } catch {}
+          }
+          onAuthenticated(result);
+        }
       } else {
         const result = await apiFetch<AuthStatus>('/telegram/auth/password', { method: 'POST', body: JSON.stringify({ password }) });
+        if (result.sessionString) {
+          try {
+            localStorage.setItem(TG_SESSION_STORAGE_KEY, result.sessionString);
+          } catch {}
+        }
         onAuthenticated(result);
       }
     } catch (requestError) {
@@ -1498,7 +1524,14 @@ function AppWorkspace() {
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); storage.set('telegram-theme', theme); }, [theme]);
   useEffect(() => {
     void apiFetch<AuthStatus>('/telegram/status')
-      .then(status => setAuth(status))
+      .then(status => {
+        if (status.sessionString) {
+          try {
+            localStorage.setItem(TG_SESSION_STORAGE_KEY, status.sessionString);
+          } catch {}
+        }
+        setAuth(status);
+      })
       .catch(() => setAuth({ authenticated: false, state: 'phone' }))
       .finally(() => setAuthLoading(false));
   }, []);
@@ -1634,6 +1667,12 @@ function AppWorkspace() {
   };
 
   const logout = () => {
+    try {
+      localStorage.removeItem(TG_SESSION_STORAGE_KEY);
+      localStorage.removeItem('tg_session_string');
+      document.cookie = 'tg_session_string=; Max-Age=0; path=/;';
+    } catch {}
+
     void apiFetch('/telegram/auth/logout', { method: 'POST' })
       .then(() => {
         setAuth({ authenticated: false, state: 'phone' });

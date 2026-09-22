@@ -13,12 +13,17 @@ import {
   verify2FAPassword,
   logoutTelegram,
   getTelegramServiceStatus,
+  restoreSessionFromString,
+  getActiveSessionString,
+  getAllStoredAccounts,
+  switchAccountByPhone,
   fetchTelegramDialogs,
   fetchTelegramMessages,
   sendRealTelegramMessage,
   fetchProfilePhotoBuffer,
   fetchTelegramChatDetails,
 } from './src/server/telegramService';
+import { getStorageDiagnostics } from './src/server/cloudStorage';
 
 const app = express();
 const PORT = 3000;
@@ -260,19 +265,127 @@ let learningSystemData = {
 // Live message cache for active session
 const liveMessages: Record<string, ApiMessage[]> = {};
 
+/**
+ * Extract session string from incoming request headers, query, or cookies (Plan 1)
+ */
+function extractSessionString(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.substring(7).trim();
+    if (token && token !== 'null' && token !== 'undefined' && token.length > 10) {
+      return token;
+    }
+  }
+  const customHeader = req.headers['x-telegram-session'];
+  if (customHeader && typeof customHeader === 'string' && customHeader.trim().length > 10) {
+    return customHeader.trim();
+  }
+  if (req.cookies && req.cookies.tg_session_string && typeof req.cookies.tg_session_string === 'string' && req.cookies.tg_session_string.length > 10) {
+    return req.cookies.tg_session_string;
+  }
+  if (req.query && typeof req.query.sessionString === 'string' && req.query.sessionString.trim().length > 10) {
+    return req.query.sessionString.trim();
+  }
+  return null;
+}
+
+/**
+ * Synchronize real Telegram user into active system accounts list
+ */
+function syncAccountIntoSystem(user: { id: string; name: string; username?: string; phone: string }) {
+  const existingIndex = systemAccounts.findIndex(a => a.phone === user.phone);
+  if (existingIndex >= 0) {
+    systemAccounts[existingIndex].name = user.name;
+    systemAccounts[existingIndex].username = user.username || systemAccounts[existingIndex].username;
+    systemAccounts[existingIndex].status = 'connected';
+    systemAccounts[existingIndex].lastActive = 'نشط الآن (MTProto)';
+    activeAccountId = systemAccounts[existingIndex].id;
+  } else {
+    const liveAccount: SystemAccount = {
+      id: `acc_${user.id || Date.now()}`,
+      name: user.name,
+      username: user.username || `@tg_${user.id}`,
+      phone: user.phone,
+      role: 'حساب تيليجرام موثق (MTProto)',
+      status: 'connected',
+      color: '#0088cc',
+      lastActive: 'نشط الآن (MTProto)',
+    };
+    systemAccounts.unshift(liveAccount);
+    activeAccountId = liveAccount.id;
+  }
+}
+
+/**
+ * Refresh in-memory system accounts from persistent multi-layer store
+ */
+function refreshSystemAccountsFromStorage() {
+  try {
+    const stored = getAllStoredAccounts();
+    for (const item of stored) {
+      const exists = systemAccounts.some(a => a.phone === item.phone);
+      if (!exists) {
+        systemAccounts.push({
+          id: `acc_${item.userId || item.phone.replace(/[^\d]/g, '')}`,
+          name: item.name,
+          username: item.username || `@tg_${item.phone}`,
+          phone: item.phone,
+          role: 'حساب تيليجرام محفوظ',
+          status: 'ready',
+          color: '#0088cc',
+          lastActive: 'محفوظ في السحابة',
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[Server] Failed to refresh accounts from storage:', err);
+  }
+}
+
 // -------------------------------------------------------------
 // Telegram Authentication & Chat Endpoints
 // -------------------------------------------------------------
 
-app.get('/api/telegram/status', (req, res) => {
-  const tgStatus = getTelegramServiceStatus();
+app.get('/api/telegram/status', async (req, res) => {
+  let tgStatus = getTelegramServiceStatus();
+  const clientSession = extractSessionString(req);
+
+  // Plan 1: Client-Side Persistent Session Relay (Auto-reconnection)
+  if (!tgStatus.isLiveConnected && clientSession) {
+    console.log('[Server] Attempting auto-reconnection via Client Session Relay header...');
+    try {
+      const restored = await restoreSessionFromString(clientSession);
+      if (restored.success && restored.user) {
+        userPhone = restored.user.phone;
+        isAuthenticated = true;
+        authStep = 'ready';
+        syncAccountIntoSystem(restored.user);
+        tgStatus = getTelegramServiceStatus();
+      }
+    } catch (e: any) {
+      console.warn('[Server] Auto-reconnection attempt encountered error:', e?.message || e);
+    }
+  }
+
   if (tgStatus.isLiveConnected && tgStatus.user) {
+    syncAccountIntoSystem(tgStatus.user);
+    const activeSession = tgStatus.sessionString || clientSession || getActiveSessionString();
+
+    if (activeSession) {
+      res.cookie('tg_session_string', activeSession, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        path: '/',
+        sameSite: 'lax',
+      });
+    }
+
     return res.json({
       authenticated: true,
       state: 'ready',
       isLiveConnected: true,
       apiId: TELEGRAM_API_ID,
       user: tgStatus.user,
+      sessionString: activeSession || undefined,
     });
   }
 
@@ -283,6 +396,56 @@ app.get('/api/telegram/status', (req, res) => {
     isLiveConnected: false,
     apiId: TELEGRAM_API_ID,
     user: null,
+  });
+});
+
+/**
+ * Plan 1: Explicit session restore endpoint
+ */
+app.post('/api/telegram/session/restore', async (req, res) => {
+  const sessionString = req.body?.sessionString || extractSessionString(req);
+  if (!sessionString) {
+    return res.status(400).json({ error: 'SESSION_STRING_REQUIRED', message: 'مفتاح الجلسة مطلوب لاستعادة الاتصال' });
+  }
+
+  try {
+    const result = await restoreSessionFromString(sessionString);
+    if (!result.success || !result.user) {
+      return res.status(401).json({ error: result.error || 'RESTORE_FAILED', message: 'تعذر استعادة الجلسة من المفتاح المقدم' });
+    }
+
+    userPhone = result.user.phone;
+    isAuthenticated = true;
+    authStep = 'ready';
+    syncAccountIntoSystem(result.user);
+
+    res.cookie('tg_session_string', sessionString, {
+      maxAge: 365 * 24 * 60 * 60 * 1000,
+      path: '/',
+      sameSite: 'lax',
+    });
+
+    res.json({
+      success: true,
+      authenticated: true,
+      state: 'ready',
+      isLiveConnected: true,
+      user: result.user,
+      sessionString,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err?.message || 'حدث خطأ أثناء استعادة الجلسة' });
+  }
+});
+
+/**
+ * Plan 2: Storage diagnostics endpoint
+ */
+app.get('/api/telegram/storage/status', (req, res) => {
+  const diagnostics = getStorageDiagnostics();
+  res.json({
+    success: true,
+    diagnostics,
   });
 });
 
@@ -328,27 +491,14 @@ app.post('/api/telegram/auth/verify', async (req, res) => {
     isAuthenticated = true;
     userPhone = result.user.phone;
 
-    // Update active system account to real Telegram account
-    const existingIndex = systemAccounts.findIndex(a => a.phone === result.user.phone);
-    if (existingIndex >= 0) {
-      systemAccounts[existingIndex].name = result.user.name;
-      systemAccounts[existingIndex].username = result.user.username || systemAccounts[existingIndex].username;
-      systemAccounts[existingIndex].status = 'connected';
-      systemAccounts[existingIndex].lastActive = 'نشط الآن (MTProto)';
-      activeAccountId = systemAccounts[existingIndex].id;
-    } else {
-      const liveAccount: SystemAccount = {
-        id: `acc_${Date.now()}`,
-        name: result.user.name,
-        username: result.user.username || `@tg_${result.user.id}`,
-        phone: result.user.phone,
-        role: 'حساب تيليجرام موثق (MTProto)',
-        status: 'connected',
-        color: '#0088cc',
-        lastActive: 'نشط الآن (MTProto)',
-      };
-      systemAccounts.unshift(liveAccount);
-      activeAccountId = liveAccount.id;
+    syncAccountIntoSystem(result.user);
+
+    if (result.sessionString) {
+      res.cookie('tg_session_string', result.sessionString, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        path: '/',
+        sameSite: 'lax',
+      });
     }
 
     res.json({
@@ -357,6 +507,7 @@ app.post('/api/telegram/auth/verify', async (req, res) => {
       isLiveConnected: true,
       apiId: TELEGRAM_API_ID,
       user: result.user,
+      sessionString: result.sessionString,
     });
   } catch (error: any) {
     const message = error?.message || 'PHONE_CODE_INVALID';
@@ -375,26 +526,14 @@ app.post('/api/telegram/auth/password', async (req, res) => {
     isAuthenticated = true;
     userPhone = result.user.phone;
 
-    const existingIndex = systemAccounts.findIndex(a => a.phone === result.user.phone);
-    if (existingIndex >= 0) {
-      systemAccounts[existingIndex].name = result.user.name;
-      systemAccounts[existingIndex].username = result.user.username || systemAccounts[existingIndex].username;
-      systemAccounts[existingIndex].status = 'connected';
-      systemAccounts[existingIndex].lastActive = 'نشط الآن (MTProto)';
-      activeAccountId = systemAccounts[existingIndex].id;
-    } else {
-      const liveAccount: SystemAccount = {
-        id: `acc_${Date.now()}`,
-        name: result.user.name,
-        username: result.user.username || `@tg_${result.user.id}`,
-        phone: result.user.phone,
-        role: 'حساب تيليجرام موثق (MTProto)',
-        status: 'connected',
-        color: '#0088cc',
-        lastActive: 'نشط الآن (MTProto)',
-      };
-      systemAccounts.unshift(liveAccount);
-      activeAccountId = liveAccount.id;
+    syncAccountIntoSystem(result.user);
+
+    if (result.sessionString) {
+      res.cookie('tg_session_string', result.sessionString, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        path: '/',
+        sameSite: 'lax',
+      });
     }
 
     res.json({
@@ -403,6 +542,7 @@ app.post('/api/telegram/auth/password', async (req, res) => {
       isLiveConnected: true,
       apiId: TELEGRAM_API_ID,
       user: result.user,
+      sessionString: result.sessionString,
     });
   } catch (error: any) {
     const message = error?.message || 'PASSWORD_HASH_INVALID';
@@ -424,6 +564,7 @@ app.post('/api/telegram/auth/logout', async (req, res) => {
   systemAccounts.length = 0;
   Object.keys(liveMessages).forEach(k => delete liveMessages[k]);
   res.clearCookie(COOKIE_NAME, { path: '/' });
+  res.clearCookie('tg_session_string', { path: '/' });
   res.json({ authenticated: false, apiId: TELEGRAM_API_ID });
 });
 
@@ -432,6 +573,7 @@ app.post('/api/telegram/auth/logout', async (req, res) => {
 // -------------------------------------------------------------
 
 app.get('/api/telegram/accounts', (req, res) => {
+  refreshSystemAccountsFromStorage();
   res.json({
     accounts: systemAccounts,
     activeId: activeAccountId,
@@ -440,11 +582,25 @@ app.get('/api/telegram/accounts', (req, res) => {
   });
 });
 
-app.post('/api/telegram/accounts/switch', (req, res) => {
+app.post('/api/telegram/accounts/switch', async (req, res) => {
   const accountId = String(req.body?.accountId || '');
   const target = systemAccounts.find(a => a.id === accountId);
   if (!target) {
     return res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
+  }
+
+  // Live switch MTProto connection if saved session exists
+  let newSessionString: string | undefined;
+  if (target.phone) {
+    const switchRes = await switchAccountByPhone(target.phone);
+    if (switchRes.success && switchRes.sessionString) {
+      newSessionString = switchRes.sessionString;
+      res.cookie('tg_session_string', switchRes.sessionString, {
+        maxAge: 365 * 24 * 60 * 60 * 1000,
+        path: '/',
+        sameSite: 'lax',
+      });
+    }
   }
 
   activeAccountId = target.id;
@@ -463,6 +619,7 @@ app.post('/api/telegram/accounts/switch', (req, res) => {
   res.json({
     success: true,
     activeAccount: target,
+    sessionString: newSessionString,
     user: {
       name: target.name,
       username: target.username,
@@ -1320,6 +1477,17 @@ app.post('/api/auto_join/advanced', (req, res) => {
 // -------------------------------------------------------------
 async function startServer() {
   await initTelegramService();
+
+  // Sync restored live MTProto account and persistent accounts on boot
+  const status = getTelegramServiceStatus();
+  if (status.isLiveConnected && status.user) {
+    isAuthenticated = true;
+    authStep = 'ready';
+    userPhone = status.user.phone;
+    syncAccountIntoSystem(status.user);
+    console.log(`[Server] Live session active on boot for ${status.user.name} (${status.user.phone})`);
+  }
+  refreshSystemAccountsFromStorage();
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

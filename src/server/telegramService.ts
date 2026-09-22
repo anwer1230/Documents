@@ -3,12 +3,18 @@ import { StringSession } from 'telegram/sessions/index.js';
 import { computeCheck } from 'telegram/Password.js';
 import fs from 'fs';
 import path from 'path';
+import {
+  initCloudStorage,
+  saveSession,
+  deleteSession,
+  clearAllSessions,
+  loadAllSessionsSync,
+  type StoredSession,
+} from './cloudStorage.js';
 
 // Production Telegram API Credentials
 export const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID) || 22043994;
 export const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || '56f64582b363d367280db96586b97801';
-
-const SESSIONS_FILE = path.join(process.cwd(), 'data', 'telegram_sessions.json');
 
 export interface TelegramUser {
   id: string;
@@ -36,89 +42,143 @@ export interface PendingAuth {
   createdAt: number;
 }
 
-export interface StoredSession {
-  phone: string;
-  sessionString: string;
-  name: string;
-  username?: string;
-  userId?: string;
-  savedAt: string;
-}
+export type { StoredSession };
 
 // In-memory runtime state
 let activeClient: TelegramClient | null = null;
 let activeUser: TelegramUser | null = null;
+let activeSessionString: string | null = null;
 let isLiveConnected = false;
 
 const pendingAuths = new Map<string, PendingAuth>();
 
 /**
- * Load stored sessions from disk
+ * Get active session string for relay to client
  */
-function loadStoredSessions(): Record<string, StoredSession> {
-  try {
-    if (fs.existsSync(SESSIONS_FILE)) {
-      const content = fs.readFileSync(SESSIONS_FILE, 'utf-8');
-      const parsed = JSON.parse(content);
-      return parsed?.sessions || {};
-    }
-  } catch (error) {
-    console.error('[TelegramService] Error reading sessions file:', error);
-  }
-  return {};
+export function getActiveSessionString(): string | null {
+  return activeSessionString;
 }
 
 /**
- * Save sessions to disk
+ * Get all stored accounts across local & cloud storage
  */
-function saveStoredSessions(sessions: Record<string, StoredSession>) {
+export function getAllStoredAccounts(): StoredSession[] {
+  const sessions = loadAllSessionsSync();
+  return Object.values(sessions);
+}
+
+/**
+ * Restore Telegram MTProto Client session from a session string (Plan 1: Client-Side Session Relay)
+ */
+export async function restoreSessionFromString(sessionString: string): Promise<{ success: boolean; user?: TelegramUser; sessionString?: string; error?: string }> {
+  if (!sessionString || typeof sessionString !== 'string' || sessionString.trim().length < 10) {
+    return { success: false, error: 'INVALID_SESSION_STRING' };
+  }
+
+  const cleanSession = sessionString.trim();
+
+  // If already connected with this exact session string and authorized, return current active user immediately
+  if (activeClient && isLiveConnected && activeUser && activeSessionString === cleanSession) {
+    return { success: true, user: activeUser, sessionString: cleanSession };
+  }
+
   try {
-    const dir = path.dirname(SESSIONS_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    console.log('[TelegramService] Reconnecting MTProto Client via session relay...');
+    const client = new TelegramClient(new StringSession(cleanSession), TELEGRAM_API_ID, TELEGRAM_API_HASH, {
+      connectionRetries: 5,
+      useWSS: false,
+    });
+
+    await client.connect();
+    const isAuth = await client.isUserAuthorized();
+    if (!isAuth) {
+      try {
+        await client.disconnect();
+      } catch {
+        // ignore
+      }
+      return { success: false, error: 'SESSION_REVOKED_OR_EXPIRED' };
     }
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify({ sessions, updatedAt: new Date().toISOString() }, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('[TelegramService] Error saving sessions file:', error);
+
+    const me = (await client.getMe()) as any;
+    const user: TelegramUser = {
+      id: me.id?.toString() || `tg_${Date.now()}`,
+      name: `${me.firstName || ''} ${me.lastName || ''}`.trim() || 'حساب تيليجرام',
+      username: me.username ? `@${me.username}` : undefined,
+      phone: me.phone ? `+${me.phone.replace(/^\+/, '')}` : '',
+      avatarUrl: '/api/telegram/avatar/me',
+    };
+
+    // Safely disconnect previous client if distinct
+    if (activeClient && activeClient !== client) {
+      try {
+        await activeClient.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+
+    activeClient = client;
+    activeUser = user;
+    activeSessionString = cleanSession;
+    isLiveConnected = true;
+
+    // Persist to multi-layer store (local disk + Firestore/cloud storage)
+    const sessionRecord: StoredSession = {
+      phone: user.phone || `user_${user.id}`,
+      sessionString: cleanSession,
+      name: user.name,
+      username: user.username,
+      userId: user.id,
+      savedAt: new Date().toISOString(),
+    };
+    await saveSession(sessionRecord);
+
+    console.log(`[TelegramService] Successfully restored live MTProto session: ${user.name} (${user.phone})`);
+    return { success: true, user, sessionString: cleanSession };
+  } catch (err: any) {
+    console.warn('[TelegramService] Auto-reconnection failed:', err?.message || err);
+    return { success: false, error: err?.message || 'AUTO_RECONNECT_FAILED' };
   }
 }
 
 /**
- * Initialize Telegram Service on Server Startup
+ * Switch active account by phone number using stored sessions
+ */
+export async function switchAccountByPhone(phone: string): Promise<{ success: boolean; user?: TelegramUser; sessionString?: string; error?: string }> {
+  const sessions = loadAllSessionsSync();
+  const target = sessions[phone] || Object.values(sessions).find(s => s.phone === phone || s.userId === phone);
+  if (!target || !target.sessionString) {
+    return { success: false, error: 'SESSION_NOT_FOUND' };
+  }
+  return await restoreSessionFromString(target.sessionString);
+}
+
+/**
+ * Initialize Telegram Service on Server Startup (Plan 2: Persistent Cloud Storage)
  */
 export async function initTelegramService() {
   console.log(`[TelegramService] Initializing MTProto Client with API_ID: ${TELEGRAM_API_ID}`);
-  const stored = loadStoredSessions();
-  const sessionEntries = Object.values(stored);
+  try {
+    const stored = await initCloudStorage();
+    const sessionEntries = Object.values(stored);
 
-  if (sessionEntries.length > 0) {
-    const primary = sessionEntries[0];
-    try {
-      console.log(`[TelegramService] Found saved session for ${primary.phone}, attempting restore...`);
-      const client = new TelegramClient(new StringSession(primary.sessionString), TELEGRAM_API_ID, TELEGRAM_API_HASH, {
-        connectionRetries: 5,
-        useWSS: false,
-      });
-
-      await client.connect();
-      const isAuth = await client.isUserAuthorized();
-      if (isAuth) {
-        const me = (await client.getMe()) as any;
-        activeClient = client;
-        activeUser = {
-          id: me.id?.toString() || primary.userId || 'tg_user',
-          name: `${me.firstName || ''} ${me.lastName || ''}`.trim() || primary.name || 'حساب تيليجرام',
-          username: me.username ? `@${me.username}` : primary.username,
-          phone: me.phone ? `+${me.phone.replace(/^\+/, '')}` : primary.phone,
-          avatarUrl: '/api/telegram/avatar/me',
-        };
-        isLiveConnected = true;
-        console.log(`[TelegramService] Successfully restored live session for ${activeUser.name} (${activeUser.phone})`);
-        return;
+    if (sessionEntries.length > 0) {
+      // Pick the most recently saved or primary session
+      const primary = sessionEntries.sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''))[0];
+      try {
+        console.log(`[TelegramService] Found persistent session for ${primary.phone}, attempting boot restoration...`);
+        const result = await restoreSessionFromString(primary.sessionString);
+        if (result.success && result.user) {
+          console.log(`[TelegramService] Boot restore completed for ${result.user.name} (${result.user.phone})`);
+          return;
+        }
+      } catch (err: any) {
+        console.warn(`[TelegramService] Failed boot session restoration for ${primary.phone}:`, err?.message || err);
       }
-    } catch (err: any) {
-      console.warn(`[TelegramService] Failed to restore session for ${primary.phone}:`, err?.message || err);
     }
+  } catch (err: any) {
+    console.error('[TelegramService] Error initializing persistent storage layer:', err);
   }
 }
 
@@ -241,9 +301,8 @@ export async function verifyAuthCode(sessionId: string, code: string) {
       avatarUrl: '/api/telegram/avatar/me',
     };
 
-    // Save session
-    const stored = loadStoredSessions();
-    stored[pending.phone] = {
+    // Save session to persistent store (memory, disk, cloud)
+    const sessionRecord: StoredSession = {
       phone: pending.phone,
       sessionString,
       name: user.name,
@@ -251,10 +310,11 @@ export async function verifyAuthCode(sessionId: string, code: string) {
       userId: user.id,
       savedAt: new Date().toISOString(),
     };
-    saveStoredSessions(stored);
+    await saveSession(sessionRecord);
 
     activeClient = pending.client;
     activeUser = user;
+    activeSessionString = sessionString;
     isLiveConnected = true;
     pendingAuths.delete(sessionId);
 
@@ -264,6 +324,7 @@ export async function verifyAuthCode(sessionId: string, code: string) {
       state: 'ready' as const,
       authenticated: true,
       user,
+      sessionString,
       isLiveConnected: true,
       apiId: TELEGRAM_API_ID,
     };
@@ -318,8 +379,7 @@ export async function verify2FAPassword(sessionId: string, password: string) {
       avatarUrl: '/api/telegram/avatar/me',
     };
 
-    const stored = loadStoredSessions();
-    stored[pending.phone] = {
+    const sessionRecord: StoredSession = {
       phone: pending.phone,
       sessionString,
       name: user.name,
@@ -327,10 +387,11 @@ export async function verify2FAPassword(sessionId: string, password: string) {
       userId: user.id,
       savedAt: new Date().toISOString(),
     };
-    saveStoredSessions(stored);
+    await saveSession(sessionRecord);
 
     activeClient = pending.client;
     activeUser = user;
+    activeSessionString = sessionString;
     isLiveConnected = true;
     pendingAuths.delete(sessionId);
 
@@ -340,6 +401,7 @@ export async function verify2FAPassword(sessionId: string, password: string) {
       state: 'ready' as const,
       authenticated: true,
       user,
+      sessionString,
       isLiveConnected: true,
       apiId: TELEGRAM_API_ID,
     };
@@ -356,7 +418,7 @@ export async function verify2FAPassword(sessionId: string, password: string) {
 /**
  * Logout from Telegram
  */
-export async function logoutTelegram() {
+export async function logoutTelegram(phone?: string) {
   if (activeClient) {
     try {
       await activeClient.disconnect();
@@ -364,13 +426,18 @@ export async function logoutTelegram() {
       // ignore
     }
   }
+  const phoneToClear = phone || activeUser?.phone;
   activeClient = null;
   activeUser = null;
+  activeSessionString = null;
   isLiveConnected = false;
 
-  // Clear saved sessions
-  saveStoredSessions({});
-  console.log('[TelegramService] Logged out successfully and sessions cleared.');
+  if (phoneToClear) {
+    await deleteSession(phoneToClear);
+  } else {
+    await clearAllSessions();
+  }
+  console.log('[TelegramService] Logged out successfully and sessions cleared from storage.');
 }
 
 /**
@@ -382,6 +449,7 @@ export function getTelegramServiceStatus() {
     apiId: TELEGRAM_API_ID,
     apiHashConfigured: Boolean(TELEGRAM_API_HASH),
     user: activeUser,
+    sessionString: activeSessionString,
     hasActiveClient: Boolean(activeClient),
   };
 }
