@@ -1,9 +1,16 @@
 // ════════════════════════════════════════════════════════════════
-//  سرعة انجاز — Service Worker v9
-//  يتعامل مع: كاش الملفات، Web Push، الإشعارات على الهاتف
+//  Telegram Web Pro — Service Worker PWA
+//  يتعامل مع: كاش PWA، تثبيت التطبيق، Web Push، الإشعارات على الهاتف
 // ════════════════════════════════════════════════════════════════
-const CACHE_NAME = 'speed-center-v9';
-const CACHE_URLS = ['/', '/static/js/app.js', '/static/icons/app-logo.png'];
+const CACHE_NAME = 'telegram-pwa-v10';
+const CACHE_URLS = [
+  '/',
+  '/manifest.json',
+  '/icons/icon-72.png',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/app-logo.png'
+];
 
 self.addEventListener('install', e => {
     e.waitUntil(
@@ -22,7 +29,19 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
     if (e.request.method !== 'GET') return;
-    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+    const url = new URL(e.request.url);
+    // Don't cache API requests or non-http protocols
+    if (url.pathname.startsWith('/api') || url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return;
+    }
+    e.respondWith(
+        fetch(e.request)
+            .then(response => {
+                // If it's a valid static resource, optionally cache it
+                return response;
+            })
+            .catch(() => caches.match(e.request).then(cached => cached || caches.match('/')))
+    );
 });
 
 // ── استقبال Web Push ──────────────────────────────────────────

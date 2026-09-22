@@ -7,7 +7,7 @@ import {
   Archive, ArrowDown, Bell, Check, CheckCheck, ChevronLeft, FileText, Image as ImageIcon,
   Info, LockKeyhole, Menu, MessageCircle, Mic, Moon, MoreVertical, Paperclip, Phone,
   Pin, Plus, Search, Send, Settings, ShieldCheck, SmilePlus, Sun, Trash2, UserPlus, Video, Volume2, X, Edit3, Users,
-  Folder, Megaphone, Bot, Bookmark, Sparkles, Copy, Palette
+  Folder, Megaphone, Bot, Bookmark, Sparkles, Copy, Palette, Download
 } from 'lucide-react';
 import { NavigationDrawer } from '@/components/NavigationDrawer';
 import { ServicesCenter } from '@/components/ServicesCenter';
@@ -23,6 +23,7 @@ import { AutoJoinModal } from '@/components/features/AutoJoinModal';
 import { SavedLinksModal } from '@/components/features/SavedLinksModal';
 import { MessageTemplatesModal, type MessageTemplate } from '@/components/features/MessageTemplatesModal';
 import { ChatWallpaperModal, WALLPAPER_PRESETS, type WallpaperConfig } from '@/components/features/ChatWallpaperModal';
+import { PWAInstallModal } from '@/components/features/PWAInstallModal';
 
 type Chat = {
   id: string;
@@ -303,6 +304,7 @@ function SettingsPanel({
   onAddAccount,
   onOpenAccounts,
   onOpenWallpaper,
+  onOpenInstall,
   onLogout,
   user,
 }: {
@@ -312,6 +314,7 @@ function SettingsPanel({
   onAddAccount: () => void;
   onOpenAccounts?: () => void;
   onOpenWallpaper?: () => void;
+  onOpenInstall?: () => void;
   onLogout: () => void;
   user?: AuthStatus['user'];
 }) {
@@ -388,6 +391,28 @@ function SettingsPanel({
                   </small>
                 </span>
                 <ChevronLeft size={16} className="mr-auto text-muted-foreground" />
+              </button>
+            )}
+
+            {onOpenInstall && (
+              <button
+                type="button"
+                onClick={onOpenInstall}
+                data-testid="button-open-pwa-install"
+                className="flex w-full items-center gap-3 border-b border-border px-4 py-4 text-right text-xs hover:bg-muted cursor-pointer"
+              >
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <Download size={16} />
+                </span>
+                <span>
+                  <strong className="block text-emerald-600 dark:text-emerald-400">تثبيت التطبيق على الجوال (PWA)</strong>
+                  <small className="mt-1 block text-[10px] text-muted-foreground">
+                    تثبيت كـ تطبيق أصلي مستقل على الشاشة الرئيسية لهاتفك
+                  </small>
+                </span>
+                <span className="mr-auto px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                  تثبيت
+                </span>
               </button>
             )}
 
@@ -1253,6 +1278,7 @@ function ChatList({
   onSettings,
   onAdd,
   onOpenDrawer,
+  onOpenInstall,
   mobileList,
 }: {
   chats: Chat[];
@@ -1261,6 +1287,7 @@ function ChatList({
   onSettings: () => void;
   onAdd: () => void;
   onOpenDrawer: () => void;
+  onOpenInstall?: () => void;
   mobileList: boolean;
 }) {
   const [search, setSearch] = useState('');
@@ -1312,7 +1339,20 @@ function ChatList({
           </div>
         </div>
 
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1.5">
+          {onOpenInstall && (
+            <button
+              type="button"
+              onClick={onOpenInstall}
+              title="تثبيت التطبيق على الجوال (PWA)"
+              data-testid="header-pwa-install-btn"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-500/20 transition-all text-xs font-bold shadow-2xs active:scale-95 cursor-pointer"
+            >
+              <Download size={14} className="shrink-0 text-sky-500 animate-pulse" />
+              <span className="hidden sm:inline">تثبيت التطبيق</span>
+              <span className="sm:hidden text-[10px]">تثبيت</span>
+            </button>
+          )}
           <IconButton label="محادثة جديدة" onClick={onAdd}>
             <Edit3 size={18} />
           </IconButton>
@@ -1445,6 +1485,7 @@ function AppWorkspace() {
     return WALLPAPER_PRESETS[0];
   });
   const [showWallpaperModal, setShowWallpaperModal] = useState(false);
+  const [showPWAInstall, setShowPWAInstall] = useState(false);
   const [, setLocation] = useLocation();
 
   const handleSelectWallpaper = (newWp: WallpaperConfig) => {
@@ -1508,6 +1549,10 @@ function AppWorkspace() {
   // Mobile Back Button Navigation Fix (Hardware back button / Swipe / Browser back)
   useEffect(() => {
     const handlePopState = () => {
+      if (showPWAInstall) {
+        setShowPWAInstall(false);
+        return;
+      }
       if (showWallpaperModal) {
         setShowWallpaperModal(false);
         return;
@@ -1540,7 +1585,7 @@ function AppWorkspace() {
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [showWallpaperModal, showProfile, showSettings, showAdd, isDrawerOpen, activeService, mobileList]);
+  }, [showPWAInstall, showWallpaperModal, showProfile, showSettings, showAdd, isDrawerOpen, activeService, mobileList]);
 
   const current = chats.find(chat => chat.id === selected);
   const selectChat = (id: string) => {
@@ -1617,6 +1662,7 @@ function AppWorkspace() {
               onSettings={() => setShowSettings(true)}
               onAdd={() => setShowAdd(true)}
               onOpenDrawer={() => setIsDrawerOpen(true)}
+              onOpenInstall={() => setShowPWAInstall(true)}
               mobileList={mobileList}
             />
             <div className={`${mobileList ? 'mobile-chat-hidden' : 'flex'} min-w-0 flex-1`}>
@@ -1695,7 +1741,7 @@ function AppWorkspace() {
       )}
 
       {/* In-App Quick Service Overlay Viewer for other tools */}
-      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links', 'templates'].includes(activeService) && (
+      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links', 'templates', 'install'].includes(activeService) && (
         <div className="fixed inset-0 z-50 flex h-full w-full bg-background fade-up" dir="rtl">
           <InAppServiceViewer
             serviceId={activeService}
@@ -1708,6 +1754,17 @@ function AppWorkspace() {
         </div>
       )}
 
+      {/* PWA Native Mobile App Install Modal */}
+      {(showPWAInstall || activeService === 'install') && (
+        <PWAInstallModal
+          isOpen={showPWAInstall || activeService === 'install'}
+          onClose={() => {
+            setShowPWAInstall(false);
+            if (activeService === 'install') setActiveService(null);
+          }}
+        />
+      )}
+
       {error && <div role="alert" className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-xl bg-destructive px-4 py-2 text-[11px] text-destructive-foreground shadow-lg">{error}<button type="button" className="mr-3 font-bold" onClick={() => setError('')}>×</button></div>}
       {showProfile && current && <ProfilePanel chat={current} onClose={() => setShowProfile(false)} onSettings={() => { setShowProfile(false); setShowSettings(true); }} />}
       {showSettings && (
@@ -1718,6 +1775,7 @@ function AppWorkspace() {
           onAddAccount={() => { setShowSettings(false); setShowAdd(true); }}
           onOpenAccounts={() => { setShowSettings(false); setActiveService('accounts'); }}
           onOpenWallpaper={() => { setShowSettings(false); setShowWallpaperModal(true); }}
+          onOpenInstall={() => { setShowSettings(false); setShowPWAInstall(true); }}
           onLogout={logout}
           user={auth.user}
         />
@@ -1753,9 +1811,15 @@ function AppWorkspace() {
           setIsDrawerOpen(false);
           if (serviceId === 'services_center') {
             setLocation('/services');
+          } else if (serviceId === 'install') {
+            setShowPWAInstall(true);
           } else {
             setActiveService(serviceId);
           }
+        }}
+        onOpenInstall={() => {
+          setIsDrawerOpen(false);
+          setShowPWAInstall(true);
         }}
         onOpenSettings={() => {
           setIsDrawerOpen(false);

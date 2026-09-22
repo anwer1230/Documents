@@ -68,6 +68,7 @@ interface NavigationDrawerProps {
   onNewSecretChat?: () => void;
   onSavedMessages?: () => void;
   onLogout?: () => void;
+  onOpenInstall?: () => void;
 }
 
 export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
@@ -85,6 +86,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   onNewSecretChat,
   onSavedMessages,
   onLogout,
+  onOpenInstall,
 }) => {
   const [isAccountsExpanded, setIsAccountsExpanded] = useState(false);
 
@@ -491,10 +493,10 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                   <span>المكالمات الصوتية</span>
                 </button>
 
-                {/* Direct Install & APK Suite (DrKLO Engine) */}
+                {/* Direct Install & PWA Mobile App Suite */}
                 <button
                   type="button"
-                  onClick={() => handleAction(() => onOpenService('install'))}
+                  onClick={() => handleAction(() => (onOpenInstall ? onOpenInstall() : onOpenService('install')))}
                   className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 transition-all text-right"
                 >
                   <div className="flex items-center gap-3.5">
@@ -502,7 +504,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                     <span>تثبيت التطبيق على الجوال</span>
                   </div>
                   <span className="px-2 py-0.5 text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full">
-                    v12.9.2
+                    PWA
                   </span>
                 </button>
 
