@@ -55,3 +55,6 @@ outputType = "webview"
 [userenv.shared]
 API_ID = "22043994"
 API_HASH = " '56f64582b363d367280db96586b97801'  "
+
+[agent]
+expertMode = true
