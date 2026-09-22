@@ -24,6 +24,7 @@ import {
   fetchTelegramChatDetails,
 } from './src/server/telegramService';
 import { getStorageDiagnostics } from './src/server/cloudStorage';
+import { triggerRenderDeploy, RENDER_DEPLOY_HOOK_URL } from './src/server/renderDeploy';
 
 const app = express();
 const PORT = 3000;
@@ -447,6 +448,27 @@ app.get('/api/telegram/storage/status', (req, res) => {
     success: true,
     diagnostics,
   });
+});
+
+/**
+ * Render Instant Deployment Hook Endpoints
+ * Permanent Deploy Hook: https://api.render.com/deploy/srv-d9acni5aeets73dk554g?key=BULyDDcebf8
+ */
+app.get('/api/deploy/render/status', (req, res) => {
+  res.json({
+    configured: true,
+    serviceId: 'srv-d9acni5aeets73dk554g',
+    deployHookUrl: RENDER_DEPLOY_HOOK_URL.replace(/key=([^&]+)/, 'key=***'),
+  });
+});
+
+app.post('/api/deploy/render', async (req, res) => {
+  try {
+    const result = await triggerRenderDeploy();
+    res.status(result.success ? 200 : 502).json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'DEPLOY_TRIGGER_FAILED' });
+  }
 });
 
 app.post('/api/telegram/auth/start', async (req, res) => {

@@ -66,3 +66,12 @@
 ## 🔍 3. التحقق من سلامة النشر (Health Check)
 بمجرد اكتمال النشر وتحول الحالة إلى **Live**، يمكنك زيارة:
 - `https://your-service.onrender.com/api/health`
+
+---
+
+## ⚡ 4. رابط النشر التلقائي المباشر (Deploy Hook)
+تم تثبيت رابط النشر الخاص في كود المشروع وأتمتة إطلاقه:
+- **Deploy Hook URL:** `https://api.render.com/deploy/srv-d9acni5aeets73dk554g?key=BULyDDcebf8`
+- **GitHub Actions:** تم تفعيل سير عمل `.github/workflows/deploy.yml` ليقوم بطلب الرابط تلقائياً عند أي دفع للفرع `master`.
+- **أمر التشغيل السريع:** `npm run deploy:render`
+
