@@ -1,0 +1,1 @@
+- [GitHub remote authentication](github-remote-auth.md) — this project uses a `github` remote, and noninteractive pushes may need a secret-backed askpass.
