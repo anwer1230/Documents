@@ -544,6 +544,7 @@
         <button class="tab-btn" onclick="showTab('tab-autoreply', event)"><i class="fas fa-reply"></i> رد تلقائي</button>
         <button class="tab-btn" onclick="showTab('tab-sent', event)"><i class="fas fa-history"></i> المرسلة</button>
         <button class="tab-btn" onclick="showTab('tab-groups', event)"><i class="fas fa-link"></i> انضمام</button>
+        <button class="tab-btn" onclick="showTab('tab-link-monitor', event)"><i class="fas fa-link"></i> صائد الروابط</button>
         <button class="tab-btn" onclick="showTab('tab-logs', event)"><i class="fas fa-terminal"></i> السجل</button>
         <button class="tab-btn" onclick="showAdminTab(event)" style="color:#faa81a"><i class="fas fa-shield-alt"></i> إدارة</button>
     </div>
@@ -733,6 +734,51 @@
                         <i class="fas fa-bell-slash" style="font-size:30px;margin-bottom:10px;display:block"></i>
                         لا توجد تنبيهات بعد
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Link Monitor -->
+    <div id="tab-link-monitor" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon" style="background:rgba(0,212,170,.15);color:var(--accent)"><i class="fas fa-link"></i></div>
+                <div>
+                    <h3>صائد الروابط</h3>
+                    <p>مراقبة كاملة للحساب وإرسال الروابط إلى الرسائل المحفوظة فوراً</p>
+                </div>
+                <span class="badge badge-success" style="margin-right:auto"><i class="fas fa-circle" style="font-size:8px"></i> يعمل افتراضياً</span>
+            </div>
+            <div style="background:rgba(0,212,170,.06);border:1px solid rgba(0,212,170,.22);border-radius:10px;padding:12px;font-size:12px;color:var(--text-muted);margin-bottom:16px">
+                <i class="fas fa-shield-alt" style="color:var(--accent)"></i>
+                تتم مراقبة الرسائل الواردة في جميع الدردشات. يتم التعرف على روابط واتساب وتليجرام،
+                والتحقق من روابط تليجرام العامة والدعوات الخاصة، ثم حفظ التفاصيل في «الرسائل المحفوظة».
+            </div>
+            <div class="grid-3">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background:rgba(37,211,102,.15);color:#25d366"><i class="fab fa-whatsapp"></i></div>
+                    <div class="stat-info"><p>روابط واتساب</p><h3 id="linkStatWhatsapp">0</h3></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon" style="background:rgba(88,101,242,.15);color:var(--primary)"><i class="fab fa-telegram"></i></div>
+                    <div class="stat-info"><p>تليجرام عام</p><h3 id="linkStatTelegramPublic">0</h3></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon" style="background:rgba(250,168,26,.15);color:var(--warning)"><i class="fas fa-lock"></i></div>
+                    <div class="stat-info"><p>تليجرام خاص</p><h3 id="linkStatTelegramPrivate">0</h3></div>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon" style="background:rgba(88,101,242,.15);color:var(--primary)"><i class="fas fa-stream"></i></div>
+                <div><h3>آخر الروابط المكتشفة</h3><p>تحديث فوري من جميع المحادثات</p></div>
+            </div>
+            <div id="linkEventsList">
+                <div style="text-align:center;padding:30px;color:var(--text-muted)">
+                    <i class="fas fa-link" style="font-size:30px;margin-bottom:10px;display:block;opacity:.4"></i>
+                    لم يتم اكتشاف روابط بعد
                 </div>
             </div>
         </div>
@@ -959,6 +1005,8 @@ let groups = [];
 let watchWords = [];
 let defaultWatchWords = [];
 let autoReplies = [];
+let linkStats = { whatsapp: 0, telegram_public: 0, telegram_private: 0, other: 0 };
+let linkEvents = [];
 let savedImagePath = null;
 let savedImageFilename = null;
 let sendType = 'manual';
@@ -1010,6 +1058,7 @@ function showTab(tabId, event) {
     document.getElementById(tabId).classList.add('active');
     if (event) event.currentTarget.classList.add('active');
     if (tabId === 'tab-sent') loadSentBatches();
+    if (tabId === 'tab-link-monitor') loadLinkMonitorStats();
 }
 
 function showAdminTab(event) {
@@ -1075,7 +1124,10 @@ function initSocket() {
         if (data.errors !== undefined) document.getElementById('statErrors').textContent = data.errors;
         if (data.alerts !== undefined) document.getElementById('statAlerts').textContent = data.alerts;
         if (data.replies !== undefined) document.getElementById('statReplies').textContent = data.replies;
+        if (data.link_stats) updateLinkStats(data.link_stats);
     });
+    socket.on('link_stats_update', data => updateLinkStats(data));
+    socket.on('link_detected', data => handleDetectedLink(data));
 
     socket.on('send_progress', data => {
         const pct = Math.round((data.index / data.total) * 100);
@@ -1153,6 +1205,8 @@ function refreshStatus() {
             document.getElementById('statErrors').textContent = d.errors || 0;
             document.getElementById('statAlerts').textContent = d.alerts || 0;
             document.getElementById('statReplies').textContent = d.replies || 0;
+            updateLinkStats(d.link_stats || {});
+            renderLinkEvents(d.link_events || []);
         });
 
     fetch('/api/get_settings')
@@ -1255,6 +1309,84 @@ function loadSettingsToUI(s) {
     if (s.auto_replies) {
         autoReplies = s.auto_replies;
         renderAutoReplies();
+    }
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+    }[char]));
+}
+
+function updateLinkStats(data) {
+    linkStats = {
+        whatsapp: Number(data.whatsapp || 0),
+        telegram_public: Number(data.telegram_public || 0),
+        telegram_private: Number(data.telegram_private || 0),
+        other: Number(data.other || 0)
+    };
+    const values = {
+        linkStatWhatsapp: linkStats.whatsapp,
+        linkStatTelegramPublic: linkStats.telegram_public,
+        linkStatTelegramPrivate: linkStats.telegram_private
+    };
+    Object.entries(values).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+    });
+}
+
+function linkTypeColor(type) {
+    if (type === 'whatsapp') return '#25d366';
+    if (type === 'telegram_public') return 'var(--primary)';
+    if (type === 'telegram_private') return 'var(--warning)';
+    return 'var(--text-muted)';
+}
+
+function renderLinkEvents(events) {
+    const container = document.getElementById('linkEventsList');
+    if (!container) return;
+    linkEvents = Array.isArray(events) ? events.slice(0, 100) : [];
+    if (!linkEvents.length) {
+        container.innerHTML = `<div style="text-align:center;padding:30px;color:var(--text-muted)">
+            <i class="fas fa-link" style="font-size:30px;margin-bottom:10px;display:block;opacity:.4"></i>
+            لم يتم اكتشاف روابط بعد
+        </div>`;
+        return;
+    }
+    container.innerHTML = linkEvents.map(event => `
+        <div style="background:var(--bg-card2);border:1px solid var(--border);border-right:4px solid ${linkTypeColor(event.type)};border-radius:10px;padding:12px;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:7px">
+                <strong style="color:${linkTypeColor(event.type)}"><i class="fas fa-link"></i> ${escapeHtml(event.type_label)}</strong>
+                <span style="font-size:11px;color:var(--text-muted)">${escapeHtml(event.detected_at || event.message_time)}</span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:7px">
+                <i class="fas fa-comments" style="color:var(--accent)"></i>
+                ${escapeHtml(event.chat)} — ${escapeHtml(event.validity)}
+            </div>
+            <a href="${escapeHtml(event.url)}" target="_blank" rel="noopener noreferrer"
+               style="display:block;direction:ltr;text-align:left;color:var(--text);font-size:12px;word-break:break-all">${escapeHtml(event.url)}</a>
+        </div>
+    `).join('');
+}
+
+function handleDetectedLink(data) {
+    updateLinkStats(data.link_stats || linkStats);
+    linkEvents.unshift(data);
+    renderLinkEvents(linkEvents);
+    addLog(`🔗 رابط ${data.type_label} جديد من ${data.chat}`, 'success');
+}
+
+async function loadLinkMonitorStats() {
+    try {
+        const response = await fetch('/api/get_stats');
+        const data = await response.json();
+        if (data.success) {
+            updateLinkStats(data.link_stats || {});
+            renderLinkEvents(data.link_events || []);
+        }
+    } catch (error) {
+        addLog('⚠️ تعذر تحميل إحصائيات صائد الروابط', 'alert');
     }
 }
 
@@ -1388,7 +1520,8 @@ async function switchUser(userId) {
         if (btn) { btn.classList.add('active'); btn.style.background = 'rgba(88,101,242,0.1)'; }
 
         // إعادة تعيين البيانات المحلية
-        groups = []; watchWords = []; autoReplies = [];
+        groups = []; watchWords = []; autoReplies = []; linkEvents = [];
+        linkStats = { whatsapp: 0, telegram_public: 0, telegram_private: 0, other: 0 };
         savedImagePath = null; savedImageFilename = null;
         document.getElementById('groupsList').innerHTML = '';
         document.getElementById('watchWordsList').innerHTML = '';
@@ -1401,6 +1534,8 @@ async function switchUser(userId) {
         document.getElementById('sendMessage').value = '';
         document.getElementById('rawGroupsInput').value = '';
         document.getElementById('rawKeywordsInput').value = '';
+        updateLinkStats(linkStats);
+        renderLinkEvents([]);
 
         if (data.settings) loadSettingsToUI(data.settings);
         showToast(data.message, 'success');
@@ -1746,6 +1881,8 @@ async function resetStats() {
     document.getElementById('statErrors').textContent = '0';
     document.getElementById('statAlerts').textContent = '0';
     document.getElementById('statReplies').textContent = '0';
+    updateLinkStats({ whatsapp: 0, telegram_public: 0, telegram_private: 0, other: 0 });
+    renderLinkEvents([]);
 }
 
 // ========================

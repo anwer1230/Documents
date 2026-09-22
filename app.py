@@ -9,6 +9,7 @@ import re
 import uuid
 from threading import Lock
 from datetime import datetime
+from urllib.parse import urlparse
 from flask import Flask, session, request, jsonify, render_template, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -135,6 +136,64 @@ def parse_keywords(raw_text):
             kws.append(kw)
     return kws
 
+MESSAGE_URL_PATTERN = re.compile(
+    r'(?<![\w@])(?:(?:https?://)|(?:www\.)|(?:t\.me/)|'
+    r'(?:telegram\.me/)|(?:telegram\.dog/)|(?:wa\.me/)|'
+    r'(?:chat\.whatsapp\.com/))[^\s<>"\'`]+',
+    re.IGNORECASE,
+)
+TRAILING_URL_PUNCTUATION = '.,،؛;:!?؟)]}>"\''
+TELEGRAM_HOSTS = {'t.me', 'telegram.me', 'telegram.dog'}
+
+
+def extract_message_links(text):
+    """استخراج الروابط من رسالة واحدة مع إزالة علامات الترقيم."""
+    links = []
+    seen = set()
+    for raw in MESSAGE_URL_PATTERN.findall(text or ''):
+        link = raw.rstrip(TRAILING_URL_PUNCTUATION)
+        if not link:
+            continue
+        normalized = link if link.lower().startswith(('http://', 'https://')) else f'https://{link}'
+        key = normalized.casefold()
+        if key not in seen:
+            seen.add(key)
+            links.append(normalized)
+    return links
+
+
+def classify_message_link(link):
+    """تصنيف رابط واتساب أو تليجرام وتحديد نوع رابط تليجرام."""
+    if not re.match(r'^[a-z][a-z0-9+.-]*://', link, re.IGNORECASE):
+        link = f'https://{link}'
+    parsed = urlparse(link)
+    host = (parsed.netloc or '').lower().split(':', 1)[0]
+    host = host[4:] if host.startswith('www.') else host
+    path = parsed.path.rstrip('/')
+    path_lower = path.casefold()
+
+    if host == 'wa.me' or host.endswith('whatsapp.com'):
+        return 'whatsapp'
+
+    if host in TELEGRAM_HOSTS:
+        if re.search(r'/(?:joinchat/|\+)[A-Za-z0-9_-]+$', path, re.IGNORECASE):
+            return 'telegram_private'
+        if re.match(r'^/c/\d+(?:/\d+)?$', path_lower):
+            return 'telegram_private'
+        return 'telegram_public'
+
+    return 'other'
+
+
+def telegram_invite_hash(link):
+    match = re.search(
+        r'(?:t\.me|telegram\.me|telegram\.dog)/(?:joinchat/|\+)([A-Za-z0-9_-]+)',
+        link,
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 PREDEFINED_USERS = {
     "user_1": {"id": "user_1", "name": "المستخدم الأول", "icon": "fas fa-user", "color": "#5865f2"},
     "user_2": {"id": "user_2", "name": "المستخدم الثاني", "icon": "fas fa-user-tie", "color": "#3ba55c"},
@@ -181,6 +240,14 @@ class UserData:
         self.awaiting_password = False
         self.phone_code_hash = None
         self.monitoring_active = False
+        self.link_monitoring_active = True
+        self.link_stats = {
+            "whatsapp": 0,
+            "telegram_public": 0,
+            "telegram_private": 0,
+            "other": 0,
+        }
+        self.link_events = []
         self.is_running = False
         self.thread = None
         self.phone_number = None
@@ -405,6 +472,114 @@ class TelegramClientManager:
         except Exception as e:
             logger.error(f"Register handlers error: {e}")
 
+    async def _validate_telegram_link(self, link, category):
+        """التحقق من صلاحية رابط تليجرام عبر جلسة Telethon الحالية."""
+        if category == 'telegram_private':
+            invite_hash = telegram_invite_hash(link)
+            if not invite_hash:
+                return "رابط خاص — يتطلب عضوية ولا يمكن التحقق من صلاحيته من الرابط"
+            from telethon import functions
+            try:
+                checked = await self.client(
+                    functions.messages.CheckChatInviteRequest(hash=invite_hash)
+                )
+                if type(checked).__name__ == 'ChatInviteAlready':
+                    return "صالح — الحساب منضم مسبقاً"
+                return "صالح — دعوة خاصة"
+            except Exception as error:
+                error_name = type(error).__name__
+                if 'InviteHashExpired' in error_name or 'Expired' in str(error):
+                    return "منتهي الصلاحية"
+                if 'InviteHashInvalid' in error_name or 'Invalid' in error_name:
+                    return "غير صالح"
+                return f"تعذر التحقق فعلياً ({error_name})"
+
+        parsed = urlparse(link)
+        path_parts = [part for part in parsed.path.split('/') if part]
+        username = path_parts[0] if path_parts else ''
+        if username.casefold() in {'joinchat', 'c', 's'}:
+            return "تعذر تحديد المعرف العام"
+        try:
+            await self.client.get_entity(username)
+            return "صالح — رابط عام"
+        except Exception as error:
+            return f"غير صالح أو منتهي ({type(error).__name__})"
+
+    async def _process_message_links(self, event, chat_title, chat_id, msg_text, msg_time_str):
+        """اكتشاف الروابط في كل المحادثات وإرسال ملخص فوري إلى الرسائل المحفوظة."""
+        with USERS_LOCK:
+            ud = USERS.get(self.user_id)
+            if not ud or not ud.link_monitoring_active:
+                return
+
+        # تجاهل الرسائل التي أنشأها النظام في الرسائل المحفوظة حتى لا يعيد
+        # اكتشاف الروابط الموجودة داخل إشعاراته مرة أخرى.
+        if getattr(event.message, 'out', False):
+            return
+
+        links = extract_message_links(msg_text)
+        for link in links:
+            category = classify_message_link(link)
+            if category == 'whatsapp':
+                type_label = "واتساب"
+                validity = "تم التعرف عليه كرابط واتساب"
+            elif category == 'telegram_public':
+                type_label = "تليجرام عام"
+                validity = await self._validate_telegram_link(link, category)
+            elif category == 'telegram_private':
+                type_label = "تليجرام خاص (قناة/محادثة)"
+                validity = await self._validate_telegram_link(link, category)
+            else:
+                type_label = "رابط آخر"
+                validity = "تم اكتشافه وتصنيفه كرابط غير واتساب/تليجرام"
+
+            detected_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            event_data = {
+                "url": link,
+                "type": category,
+                "type_label": type_label,
+                "validity": validity,
+                "chat": chat_title,
+                "chat_id": chat_id,
+                "message_id": getattr(event.message, 'id', None),
+                "message_time": msg_time_str,
+                "detected_at": detected_at,
+            }
+
+            with USERS_LOCK:
+                ud = USERS.get(self.user_id)
+                if not ud:
+                    continue
+                ud.link_stats[category] = ud.link_stats.get(category, 0) + 1
+                ud.link_events.insert(0, event_data)
+                del ud.link_events[100:]
+                link_stats = dict(ud.link_stats)
+
+            socketio.emit('link_detected', {
+                **event_data,
+                "link_stats": link_stats,
+            }, to=self.user_id)
+            socketio.emit('link_stats_update', link_stats, to=self.user_id)
+
+            saved_message = (
+                f"🔗 رابط جديد مكتشف\n"
+                f"📌 النوع: {type_label}\n"
+                f"✅ الحالة: {validity}\n"
+                f"📍 المحادثة: {chat_title}\n"
+                f"⏰ الوقت: {msg_time_str}\n"
+                f"🌐 الرابط:\n{link}"
+            )
+            try:
+                await self.client.send_message('me', saved_message)
+                socketio.emit('log_update', {
+                    "message": f"🔗 تم حفظ رابط {type_label}: {link}"
+                }, to=self.user_id)
+            except Exception as error:
+                logger.error(f"Saved link notification error for {self.user_id}: {error}")
+                socketio.emit('log_update', {
+                    "message": f"⚠️ تم اكتشاف الرابط لكن تعذر حفظه: {str(error)[:100]}"
+                }, to=self.user_id)
+
     async def _handle_message(self, event):
         try:
             if not event.message.text:
@@ -445,6 +620,10 @@ class TelegramClientManager:
                     msg_time_str = msg_date.strftime('%Y-%m-%d %H:%M:%S')
             else:
                 msg_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            await self._process_message_links(
+                event, chat_title, chat_id, msg_text, msg_time_str
+            )
 
             if monitoring:
                 # الكلمات الأساسية ثابتة في الخلفية وتُضاف إليها كلمات المستخدم.
@@ -954,6 +1133,7 @@ def api_get_login_status():
         "awaiting_password": ud.awaiting_password,
         "is_running": ud.is_running,
         "monitoring_active": ud.monitoring_active,
+        "link_monitoring_active": ud.link_monitoring_active,
         "phone": ud.phone_number or "",
         "no_user_selected": False
     })
@@ -963,13 +1143,22 @@ def api_get_login_status():
 def api_get_stats():
     uid = get_current_user_id()
     ud = get_or_create_user(uid)
+    with USERS_LOCK:
+        link_stats = dict(ud.link_stats)
+        link_events = list(ud.link_events)
     stats = {
         "sent": ud.stats.get("sent", 0),
         "errors": ud.stats.get("errors", 0),
         "alerts": ud.stats.get("alerts", 0),
         "replies": ud.stats.get("replies", 0),
     }
-    return jsonify({"success": True, **stats})
+    return jsonify({
+        "success": True,
+        **stats,
+        "link_monitoring_active": ud.link_monitoring_active,
+        "link_stats": link_stats,
+        "link_events": link_events,
+    })
 
 
 @app.route("/api/parse_input", methods=["POST"])
@@ -1297,7 +1486,15 @@ def api_reset_stats():
     ud = get_or_create_user(uid)
     with USERS_LOCK:
         ud.stats = {"sent": 0, "errors": 0, "alerts": 0, "replies": 0}
+        ud.link_stats = {
+            "whatsapp": 0,
+            "telegram_public": 0,
+            "telegram_private": 0,
+            "other": 0,
+        }
+        ud.link_events = []
     socketio.emit('stats_update', dict(ud.stats), to=uid)
+    socketio.emit('link_stats_update', dict(ud.link_stats), to=uid)
     return jsonify({"success": True, "message": "✅ تم إعادة تعيين الإحصائيات"})
 
 
