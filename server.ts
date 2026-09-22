@@ -16,6 +16,7 @@ import {
   fetchTelegramDialogs,
   fetchTelegramMessages,
   sendRealTelegramMessage,
+  fetchProfilePhotoBuffer,
 } from './src/server/telegramService';
 
 const app = express();
@@ -46,6 +47,7 @@ type ApiChat = {
   archived: boolean;
   kind: string;
   online?: boolean;
+  avatarUrl?: string;
 };
 
 type ApiMessage = {
@@ -56,6 +58,16 @@ type ApiMessage = {
   read?: boolean;
   reaction?: string;
   edited?: boolean;
+  senderName?: string;
+  senderId?: string;
+  senderAvatar?: string;
+  senderColor?: string;
+  senderInitials?: string;
+  replyTo?: {
+    id: string;
+    senderName?: string;
+    text: string;
+  };
 };
 
 let userPhone = '';
@@ -719,9 +731,27 @@ app.get('/api/telegram/chats/:chatId/messages', async (req, res) => {
   res.json({ messages: liveMessages[chatId] || [] });
 });
 
+app.get('/api/telegram/avatar/:peerId', async (req, res) => {
+  const { peerId } = req.params;
+  try {
+    const photo = await fetchProfilePhotoBuffer(peerId);
+    if (photo && photo.buffer) {
+      res.setHeader('Content-Type', photo.mime);
+      res.setHeader('Cache-Control', 'public, max-age=1800');
+      return res.send(photo.buffer);
+    }
+  } catch (err) {
+    console.warn('[Avatar] Error delivering avatar for:', peerId, err);
+  }
+  res.status(404).send('Avatar not found');
+});
+
 app.post('/api/telegram/chats/:chatId/messages', async (req, res) => {
   const chatId = req.params.chatId;
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  const replyToMsgId = req.body?.replyToMsgId ? Number(req.body.replyToMsgId) : undefined;
+  const replyTo = req.body?.replyTo as { id: string; senderName?: string; text: string } | undefined;
+
   if (!text) {
     return res.status(400).json({ error: 'MESSAGE_REQUIRED' });
   }
@@ -735,11 +765,18 @@ app.post('/api/telegram/chats/:chatId/messages', async (req, res) => {
   }
 
   try {
-    const sentReal = await sendRealTelegramMessage(chatId, text);
+    const sentReal = await sendRealTelegramMessage(chatId, text, replyToMsgId);
     if (sentReal) {
+      const fullMessage: ApiMessage = {
+        ...sentReal,
+        senderName: tgStatus.user?.name,
+        senderId: tgStatus.user?.id,
+        senderAvatar: tgStatus.user?.id ? `/api/telegram/avatar/${tgStatus.user.id}` : undefined,
+        replyTo: replyTo || undefined,
+      };
       if (!liveMessages[chatId]) liveMessages[chatId] = [];
-      liveMessages[chatId].push(sentReal);
-      return res.json({ message: sentReal });
+      liveMessages[chatId].push(fullMessage);
+      return res.json({ message: fullMessage });
     }
   } catch (err: any) {
     console.warn('[Messages] Could not send via real MTProto:', err);

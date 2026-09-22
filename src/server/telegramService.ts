@@ -372,6 +372,43 @@ export function getTelegramServiceStatus() {
   };
 }
 
+const avatarCache = new Map<string, { buffer: Buffer; mime: string; expires: number }>();
+
+/**
+ * Fetch profile photo buffer for a user or chat
+ */
+export async function fetchProfilePhotoBuffer(peerId: string): Promise<{ buffer: Buffer; mime: string } | null> {
+  if (!activeClient || !isLiveConnected) return null;
+
+  const cleanPeer = peerId.startsWith('tg_') ? peerId.replace('tg_', '') : peerId;
+  const cached = avatarCache.get(cleanPeer);
+  if (cached && cached.expires > Date.now()) {
+    return { buffer: cached.buffer, mime: cached.mime };
+  }
+
+  try {
+    const buffer = await activeClient.downloadProfilePhoto(cleanPeer, { isBig: false });
+    if (buffer && buffer.length > 0) {
+      const result = { buffer: Buffer.from(buffer), mime: 'image/jpeg', expires: Date.now() + 1000 * 60 * 30 };
+      avatarCache.set(cleanPeer, result);
+      return result;
+    }
+  } catch {
+    // Entities without photo or access restrictions
+  }
+  return null;
+}
+
+const TELEGRAM_SENDER_COLORS = [
+  '#e56555', // Red
+  '#e08244', // Orange
+  '#a667e5', // Violet
+  '#439fe0', // Blue
+  '#4fae4e', // Green
+  '#c45479', // Pink
+  '#3ca3b5', // Cyan
+];
+
 /**
  * Fetch Real Telegram Dialogs/Chats
  */
@@ -390,6 +427,8 @@ export async function fetchTelegramDialogs(limit = 30) {
       const unread = dialog.unreadCount || 0;
       const preview = dialog.message?.message || (dialog.message as any)?.text || '';
       const date = dialog.date ? new Date(dialog.date * 1000).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : null;
+      const hasPhoto = Boolean(entity?.photo);
+      const avatarUrl = hasPhoto ? `/api/telegram/avatar/${dialog.id}` : undefined;
 
       return {
         id: `tg_${dialog.id}`,
@@ -401,6 +440,7 @@ export async function fetchTelegramDialogs(limit = 30) {
         archived: Boolean(dialog.archived),
         kind: isChannel ? 'channel' : isGroup ? 'group' : 'direct',
         isRealTelegram: true,
+        avatarUrl,
       };
     });
   } catch (err) {
@@ -412,15 +452,17 @@ export async function fetchTelegramDialogs(limit = 30) {
 /**
  * Send real message via Telegram MTProto
  */
-export async function sendRealTelegramMessage(peerId: string, message: string) {
+export async function sendRealTelegramMessage(peerId: string, message: string, replyToMsgId?: number) {
   if (!activeClient || !isLiveConnected) {
     return null;
   }
 
   try {
-    // If peerId starts with tg_, strip it
     const cleanPeer = peerId.startsWith('tg_') ? peerId.replace('tg_', '') : peerId;
-    const sent = await activeClient.sendMessage(cleanPeer, { message });
+    const sent = await activeClient.sendMessage(cleanPeer, {
+      message,
+      replyTo: replyToMsgId ? Number(replyToMsgId) : undefined,
+    });
     return {
       id: sent.id.toString(),
       text: sent.message,
@@ -437,7 +479,7 @@ export async function sendRealTelegramMessage(peerId: string, message: string) {
 /**
  * Fetch real messages for a Telegram chat/dialog
  */
-export async function fetchTelegramMessages(peerId: string, limit = 40) {
+export async function fetchTelegramMessages(peerId: string, limit = 50) {
   if (!activeClient || !isLiveConnected) {
     return null;
   }
@@ -445,13 +487,84 @@ export async function fetchTelegramMessages(peerId: string, limit = 40) {
   try {
     const cleanPeer = peerId.startsWith('tg_') ? peerId.replace('tg_', '') : peerId;
     const messages = await activeClient.getMessages(cleanPeer, { limit });
-    return messages.map(msg => ({
-      id: msg.id.toString(),
-      text: msg.message || '',
-      time: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
-      outgoing: Boolean(msg.out),
-      read: true,
-    })).reverse();
+
+    return messages.map(msg => {
+      let senderName = '';
+      let senderId = '';
+      let senderAvatar: string | undefined = undefined;
+      let senderColor = TELEGRAM_SENDER_COLORS[0];
+      let senderInitials = 'ت';
+
+      const sender = (msg as any).sender;
+      if (sender) {
+        senderId = sender.id?.toString() || '';
+        senderName = sender.firstName
+          ? `${sender.firstName} ${sender.lastName || ''}`.trim()
+          : (sender.title || sender.username || '');
+        if (sender.photo) {
+          senderAvatar = `/api/telegram/avatar/${senderId}`;
+        }
+      } else if ((msg as any).fromId) {
+        const from = (msg as any).fromId;
+        senderId = (from.userId || from.channelId || from.chatId)?.toString() || '';
+      }
+
+      if (!senderName && msg.out && activeUser) {
+        senderName = activeUser.name;
+        senderId = activeUser.id;
+      }
+
+      if (senderName) {
+        senderInitials = senderName.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('') || 'ت';
+      }
+
+      if (senderId) {
+        const colorIndex = Math.abs([...senderId].reduce((acc, c) => acc + c.charCodeAt(0), 0)) % TELEGRAM_SENDER_COLORS.length;
+        senderColor = TELEGRAM_SENDER_COLORS[colorIndex];
+        if (!senderAvatar) {
+          senderAvatar = `/api/telegram/avatar/${senderId}`;
+        }
+      }
+
+      // Quoted reply info
+      let replyTo: { id: string; senderName?: string; text: string } | undefined = undefined;
+      const replyHeader = (msg as any).replyTo;
+      if (replyHeader && replyHeader.replyToMsgId) {
+        const replyId = replyHeader.replyToMsgId.toString();
+        const replied = messages.find(m => m.id.toString() === replyId);
+        if (replied) {
+          const rSender = (replied as any).sender;
+          const rName = rSender?.firstName
+            ? `${rSender.firstName} ${rSender.lastName || ''}`.trim()
+            : (rSender?.title || 'رسالة');
+          replyTo = {
+            id: replyId,
+            senderName: rName,
+            text: (replied.message || '').slice(0, 70),
+          };
+        } else {
+          replyTo = {
+            id: replyId,
+            senderName: 'رد على رسالة',
+            text: '...',
+          };
+        }
+      }
+
+      return {
+        id: msg.id.toString(),
+        text: msg.message || '',
+        time: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
+        outgoing: Boolean(msg.out),
+        read: true,
+        senderName: senderName || undefined,
+        senderId: senderId || undefined,
+        senderAvatar,
+        senderColor,
+        senderInitials,
+        replyTo,
+      };
+    }).reverse();
   } catch (err: any) {
     console.warn('[TelegramService] Error fetching messages for peer:', peerId, err?.message);
     return null;

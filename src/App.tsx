@@ -7,7 +7,7 @@ import {
   Archive, ArrowDown, Bell, Check, CheckCheck, ChevronLeft, FileText, Image as ImageIcon,
   Info, LockKeyhole, Menu, MessageCircle, Mic, Moon, MoreVertical, Paperclip, Phone,
   Pin, Plus, Search, Send, Settings, ShieldCheck, SmilePlus, Sun, Trash2, UserPlus, Video, Volume2, X, Edit3, Users,
-  Folder, Megaphone, Bot, Bookmark, Sparkles
+  Folder, Megaphone, Bot, Bookmark, Sparkles, Copy
 } from 'lucide-react';
 import { NavigationDrawer } from '@/components/NavigationDrawer';
 import { ServicesCenter } from '@/components/ServicesCenter';
@@ -24,11 +24,53 @@ import { SavedLinksModal } from '@/components/features/SavedLinksModal';
 import { MessageTemplatesModal, type MessageTemplate } from '@/components/features/MessageTemplatesModal';
 
 type Chat = {
-  id: string; name: string; initials: string; preview: string; time: string; color: string;
-  online?: boolean; unread?: number; pinned?: boolean; archived?: boolean; kind?: string;
+  id: string;
+  name: string;
+  initials: string;
+  preview: string;
+  time: string;
+  color: string;
+  online?: boolean;
+  unread?: number;
+  pinned?: boolean;
+  archived?: boolean;
+  kind?: string;
+  avatarUrl?: string;
 };
-type Message = { id: string; text: string; time: string; outgoing?: boolean; read?: boolean; reaction?: string; edited?: boolean };
-type ApiChat = { id: string; name: string; preview: string; time: string | null; unread: number; pinned: boolean; archived: boolean; kind: string };
+
+type Message = {
+  id: string;
+  text: string;
+  time: string;
+  outgoing?: boolean;
+  read?: boolean;
+  reaction?: string;
+  edited?: boolean;
+  senderName?: string;
+  senderId?: string;
+  senderAvatar?: string;
+  senderColor?: string;
+  senderInitials?: string;
+  replyTo?: {
+    id: string;
+    senderName?: string;
+    text: string;
+  };
+};
+
+type ApiChat = {
+  id: string;
+  name: string;
+  preview: string;
+  time: string | null;
+  unread: number;
+  pinned: boolean;
+  archived: boolean;
+  kind: string;
+  online?: boolean;
+  avatarUrl?: string;
+};
+
 type AuthStatus = { authenticated: boolean; state: 'phone' | 'code' | 'password' | 'ready'; user?: { name: string; username: string; phone: string } | null };
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -46,11 +88,50 @@ function toChat(chat: ApiChat): Chat {
   const initials = chat.name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join('') || 'ت';
   const colors = ['#ce8e49', '#4c8790', '#a86b85', '#8a9b5b', '#697db2', '#377c79'];
   const color = colors[Math.abs([...chat.id].reduce((total, char) => total + char.charCodeAt(0), 0)) % colors.length];
-  return { id: chat.id, name: chat.name, initials, preview: chat.preview || 'لا توجد رسائل بعد', time: chat.time ? new Date(chat.time).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }) : '', color, unread: chat.unread || undefined, pinned: chat.pinned, archived: chat.archived, kind: chat.kind };
+  return {
+    id: chat.id,
+    name: chat.name,
+    initials,
+    preview: chat.preview || 'لا توجد رسائل بعد',
+    time: chat.time ? new Date(chat.time).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : '',
+    color,
+    unread: chat.unread || undefined,
+    pinned: chat.pinned,
+    archived: chat.archived,
+    kind: chat.kind,
+    avatarUrl: chat.avatarUrl,
+  };
 }
 
-function toMessage(message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean }): Message {
-  return { id: message.id, text: message.text, time: message.time ? new Date(message.time).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }) : '', outgoing: message.outgoing, read: message.outgoing, edited: message.edited };
+function toMessage(message: {
+  id: string;
+  text: string;
+  time: string | null;
+  outgoing?: boolean;
+  edited?: boolean;
+  senderName?: string;
+  senderId?: string;
+  senderAvatar?: string;
+  senderColor?: string;
+  senderInitials?: string;
+  replyTo?: { id: string; senderName?: string; text: string };
+  reaction?: string;
+}): Message {
+  return {
+    id: message.id,
+    text: message.text,
+    time: message.time ? new Date(message.time).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) : '',
+    outgoing: message.outgoing,
+    read: message.outgoing,
+    edited: message.edited,
+    senderName: message.senderName,
+    senderId: message.senderId,
+    senderAvatar: message.senderAvatar,
+    senderColor: message.senderColor,
+    senderInitials: message.senderInitials,
+    replyTo: message.replyTo,
+    reaction: message.reaction,
+  };
 }
 
 const storage = {
@@ -58,9 +139,45 @@ const storage = {
   set(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* local-only prototype */ } },
 };
 
-function Avatar({ chat, size = 'md' }: { chat: Pick<Chat, 'initials' | 'color'>; size?: 'sm' | 'md' | 'lg' }) {
-  const dimensions = size === 'lg' ? 'h-16 w-16 text-xl' : size === 'sm' ? 'h-9 w-9 text-xs' : 'h-12 w-12 text-sm';
-  return <div className={`avatar ${dimensions}`} style={{ background: `linear-gradient(145deg, ${chat.color}, hsl(var(--primary) / .75))` }} aria-hidden="true">{chat.initials}</div>;
+function Avatar({
+  chat,
+  size = 'md',
+  className = '',
+}: {
+  chat: { initials: string; color: string; avatarUrl?: string; name?: string };
+  size?: 'xs' | 'sm' | 'md' | 'lg';
+  className?: string;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const dimensions =
+    size === 'lg'
+      ? 'h-16 w-16 text-xl'
+      : size === 'sm'
+      ? 'h-9 w-9 text-xs'
+      : size === 'xs'
+      ? 'h-7 w-7 text-[10px]'
+      : 'h-12 w-12 text-sm';
+
+  if (chat.avatarUrl && !imgError) {
+    return (
+      <img
+        src={chat.avatarUrl}
+        alt={chat.name || chat.initials}
+        onError={() => setImgError(true)}
+        className={`avatar ${dimensions} object-cover rounded-full select-none shrink-0 border border-border/40 shadow-xs ${className}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`avatar ${dimensions} select-none shrink-0 font-bold ${className}`}
+      style={{ background: `linear-gradient(145deg, ${chat.color}, hsl(var(--primary) / .75))` }}
+      aria-hidden="true"
+    >
+      {chat.initials}
+    </div>
+  );
 }
 
 function IconButton({ label, children, onClick, active = false, className = '' }: { label: string; children: ReactNode; onClick?: () => void; active?: boolean; className?: string }) {
@@ -247,8 +364,237 @@ function AddAccount({ onClose, onAuthenticated }: { onClose: () => void; onAuthe
   return <AuthScreen modal onClose={onClose} onAuthenticated={onAuthenticated} />;
 }
 
-function MessageBubble({ message, onAction }: { key?: Key; message: Message; onAction: (action: 'reply'|'edit'|'delete'|'react', message: Message) => void }) {
-  return <div className={`group flex items-end gap-2 ${message.outgoing ? 'flex-row' : 'flex-row-reverse'} fade-up`}><div className={`relative max-w-[min(72%,520px)] px-4 py-2.5 shadow-sm ${message.outgoing ? 'message-out' : 'message-in'}`}><p className="whitespace-pre-wrap text-[12px] leading-7">{message.text}</p><div className={`mt-1 flex items-center gap-1 font-mono-app text-[9px] text-muted-foreground ${message.outgoing ? 'justify-start' : 'justify-end'}`}><span>{message.time}</span>{message.edited && <span>· تم التعديل</span>}{message.outgoing && (message.read ? <CheckCheck size={13} className="text-primary" /> : <Check size={12} />)}</div>{message.reaction && <button type="button" onClick={() => onAction('react', message)} data-testid={`button-reaction-${message.id}`} className="absolute -bottom-3 right-3 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] shadow-sm">{message.reaction}</button>}</div><div className="invisible flex items-center gap-0.5 opacity-0 transition-all group-hover:visible group-hover:opacity-100"><IconButton label="رد" onClick={() => onAction('reply', message)} className="h-7 w-7"><MessageCircle size={13} /></IconButton>{message.outgoing && <IconButton label="تعديل" onClick={() => onAction('edit', message)} className="h-7 w-7"><Edit3 size={13} /></IconButton>}<IconButton label="تفاعل" onClick={() => onAction('react', message)} className="h-7 w-7"><SmilePlus size={13} /></IconButton><IconButton label="حذف" onClick={() => onAction('delete', message)} className="h-7 w-7 text-destructive"><Trash2 size={13} /></IconButton></div></div>;
+function MessageBubble({
+  message,
+  chatKind,
+  onAction,
+}: {
+  key?: Key;
+  message: Message;
+  chatKind?: string;
+  onAction: (action: 'reply' | 'edit' | 'delete' | 'react' | 'copy', message: Message, emoji?: string) => void;
+}) {
+  const [showMobileActions, setShowMobileActions] = useState(false);
+  const [showReactionsPicker, setShowReactionsPicker] = useState(false);
+  const [avatarErr, setAvatarErr] = useState(false);
+
+  const isIncoming = !message.outgoing;
+  const shouldShowSenderName = isIncoming && (Boolean(message.senderName) || chatKind === 'group' || chatKind === 'channel');
+  const senderColor = message.senderColor || '#e56555';
+  const senderDisplayName = message.senderName || 'مستخدم';
+  const senderInitials = message.senderInitials || (senderDisplayName.slice(0, 2) || 'ت');
+
+  const QUICK_EMOJIS = ['👍', '❤️', '🔥', '😂', '👏', '😮', '🎉'];
+
+  return (
+    <div
+      className={`group relative flex items-end gap-2 sm:gap-2.5 ${message.outgoing ? 'flex-row' : 'flex-row-reverse'} fade-up select-text`}
+      dir="rtl"
+    >
+      {/* Sender Avatar for incoming messages (Official Telegram style) */}
+      {isIncoming && (
+        <div className="shrink-0 mb-1 select-none">
+          {message.senderAvatar && !avatarErr ? (
+            <img
+              src={message.senderAvatar}
+              alt={senderDisplayName}
+              onError={() => setAvatarErr(true)}
+              className="h-8 w-8 sm:h-9 sm:w-9 rounded-full object-cover border border-border/40 shadow-xs"
+            />
+          ) : (
+            <div
+              className="h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center text-[11px] font-bold text-white shadow-xs"
+              style={{ background: `linear-gradient(135deg, ${senderColor}, #222)` }}
+            >
+              {senderInitials}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Message Bubble Container */}
+      <div className="relative max-w-[86%] sm:max-w-[78%] md:max-w-[min(72%,560px)]">
+        {/* Main Bubble */}
+        <div
+          onClick={() => setShowMobileActions(!showMobileActions)}
+          className={`relative px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-2xl shadow-xs transition-all cursor-pointer ${
+            message.outgoing
+              ? 'bg-primary text-primary-foreground rounded-br-xs message-out'
+              : 'bg-card border border-border/80 text-card-foreground rounded-bl-xs message-in'
+          }`}
+        >
+          {/* Sender Name (Official Telegram Colored Header) */}
+          {shouldShowSenderName && (
+            <div
+              className="mb-1 text-[11px] sm:text-[12px] font-bold tracking-tight select-none"
+              style={{ color: message.outgoing ? 'inherit' : senderColor }}
+            >
+              {senderDisplayName}
+            </div>
+          )}
+
+          {/* Telegram Quoted Reply Block */}
+          {message.replyTo && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+              className={`mb-2 flex items-stretch gap-2 rounded-lg px-2.5 py-1.5 border-r-3 text-right text-[11px] transition-all select-none ${
+                message.outgoing
+                  ? 'bg-black/15 border-primary-foreground/80 text-primary-foreground'
+                  : 'bg-muted/70 border-primary text-foreground'
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <span
+                  className="block font-bold text-[10.5px] truncate"
+                  style={{ color: message.outgoing ? 'inherit' : (message.senderColor || '#0284c7') }}
+                >
+                  {message.replyTo.senderName || 'رد على رسالة'}
+                </span>
+                <span className="block truncate text-[10px] opacity-85 mt-0.5">
+                  {message.replyTo.text}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Message Text */}
+          <p className="whitespace-pre-wrap text-[13px] sm:text-[13.5px] leading-relaxed break-words font-normal">
+            {message.text}
+          </p>
+
+          {/* Time & Read / Edited Indicators */}
+          <div
+            className={`mt-1 flex items-center gap-1.5 font-mono-app text-[9.5px] select-none ${
+              message.outgoing ? 'justify-start text-primary-foreground/75' : 'justify-end text-muted-foreground'
+            }`}
+          >
+            <span>{message.time}</span>
+            {message.edited && <span className="opacity-80">· تم التعديل</span>}
+            {message.outgoing && (
+              message.read ? (
+                <CheckCheck size={14} className="text-primary-foreground inline" />
+              ) : (
+                <Check size={13} className="text-primary-foreground/80 inline" />
+              )
+            )}
+          </div>
+
+          {/* Reaction Badge */}
+          {message.reaction && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction('react', message);
+              }}
+              data-testid={`button-reaction-${message.id}`}
+              className="absolute -bottom-3 right-2 flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] shadow-sm hover:scale-105 active:scale-95 transition"
+            >
+              <span>{message.reaction}</span>
+            </button>
+          )}
+        </div>
+
+        {/* Quick Reactions Picker Popover */}
+        {showReactionsPicker && (
+          <div
+            className="absolute -top-11 z-30 flex items-center gap-1 rounded-full border border-border bg-card p-1 shadow-lg fade-up"
+            dir="ltr"
+          >
+            {QUICK_EMOJIS.map(emoji => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => {
+                  onAction('react', message, emoji);
+                  setShowReactionsPicker(false);
+                }}
+                className="h-8 w-8 rounded-full hover:bg-secondary flex items-center justify-center text-sm hover:scale-125 transition"
+              >
+                {emoji}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setShowReactionsPicker(false)}
+              className="h-7 w-7 rounded-full text-muted-foreground hover:bg-secondary flex items-center justify-center text-xs"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
+        {/* Action Strip (Visible on tap on mobile, or on hover on desktop) */}
+        <div
+          className={`flex items-center gap-1 mt-1 transition-all ${
+            showMobileActions ? 'flex opacity-100' : 'hidden sm:group-hover:flex sm:opacity-100 opacity-0'
+          } ${message.outgoing ? 'justify-start' : 'justify-end'}`}
+        >
+          <button
+            type="button"
+            title="رد"
+            onClick={() => {
+              onAction('reply', message);
+              setShowMobileActions(false);
+            }}
+            className="h-7 px-2 flex items-center gap-1 rounded-lg bg-secondary/90 hover:bg-primary/20 hover:text-primary text-muted-foreground text-[11px] font-medium transition cursor-pointer"
+          >
+            <MessageCircle size={12} />
+            <span>رد</span>
+          </button>
+
+          <button
+            type="button"
+            title="تفاعل"
+            onClick={() => setShowReactionsPicker(!showReactionsPicker)}
+            className="h-7 px-2 flex items-center gap-1 rounded-lg bg-secondary/90 hover:bg-secondary text-muted-foreground text-[11px] font-medium transition cursor-pointer"
+          >
+            <SmilePlus size={12} />
+          </button>
+
+          <button
+            type="button"
+            title="نسخ النص"
+            onClick={() => {
+              onAction('copy', message);
+              setShowMobileActions(false);
+            }}
+            className="h-7 px-2 flex items-center gap-1 rounded-lg bg-secondary/90 hover:bg-secondary text-muted-foreground text-[11px] font-medium transition cursor-pointer"
+          >
+            <Copy size={12} />
+          </button>
+
+          {message.outgoing && (
+            <button
+              type="button"
+              title="تعديل"
+              onClick={() => {
+                onAction('edit', message);
+                setShowMobileActions(false);
+              }}
+              className="h-7 px-2 flex items-center gap-1 rounded-lg bg-secondary/90 hover:bg-primary/20 hover:text-primary text-muted-foreground text-[11px] font-medium transition cursor-pointer"
+            >
+              <Edit3 size={12} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            title="حذف"
+            onClick={() => {
+              onAction('delete', message);
+              setShowMobileActions(false);
+            }}
+            className="h-7 px-2 flex items-center gap-1 rounded-lg bg-secondary/90 hover:bg-destructive/20 hover:text-destructive text-muted-foreground text-[11px] font-medium transition cursor-pointer"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Conversation({ chat, messages, setMessages, onBack, onProfile, onError }: { chat: Chat; messages: Message[]; setMessages: (m: Message[]) => void; onBack: () => void; onProfile: () => void; onError: (message: string) => void }) {
@@ -278,11 +624,21 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
 
-  const handleAction = (action: 'reply'|'edit'|'delete'|'react', message: Message) => {
+  const handleAction = (action: 'reply'|'edit'|'delete'|'react'|'copy', message: Message, emoji?: string) => {
     if (action === 'reply') setReplying(message);
     if (action === 'edit') { setEditing(message); setDraft(message.text); }
-    if (action === 'delete') void apiFetch(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${message.id}`, { method: 'DELETE' }).then(() => setMessages(messages.filter(item => item.id !== message.id))).catch(error => onError(error instanceof Error ? error.message : 'تعذر حذف الرسالة'));
-    if (action === 'react') setMessages(messages.map(item => item.id === message.id ? { ...item, reaction: item.reaction ? undefined : 'مفيد' } : item));
+    if (action === 'delete') {
+      void apiFetch(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${message.id}`, { method: 'DELETE' })
+        .then(() => setMessages(messages.filter(item => item.id !== message.id)))
+        .catch(error => onError(error instanceof Error ? error.message : 'تعذر حذف الرسالة'));
+    }
+    if (action === 'react') {
+      const reactionVal = emoji || (message.reaction ? undefined : '👍');
+      setMessages(messages.map(item => item.id === message.id ? { ...item, reaction: reactionVal } : item));
+    }
+    if (action === 'copy') {
+      navigator.clipboard?.writeText(message.text).then(() => {}).catch(() => {});
+    }
   };
 
   const applyTemplate = (content: string, autoSend: boolean = false, id?: string) => {
@@ -290,10 +646,18 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
       fetch(`/api/telegram/templates/use/${id}`, { method: 'POST' }).catch(() => {});
     }
     if (autoSend) {
-      const text = replying ? `رداً على: ${replying.text}\n${content}` : content;
-      void apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(
+      const bodyPayload: any = { text: content };
+      if (replying) {
+        bodyPayload.replyToMsgId = replying.id;
+        bodyPayload.replyTo = {
+          id: replying.id,
+          senderName: replying.senderName || 'رسالة',
+          text: replying.text.slice(0, 70),
+        };
+      }
+      void apiFetch<{ message: any }>(
         `/telegram/chats/${encodeURIComponent(chat.id)}/messages`,
-        { method: 'POST', body: JSON.stringify({ text }) }
+        { method: 'POST', body: JSON.stringify(bodyPayload) }
       ).then(result => {
         const next = toMessage(result.message);
         setMessages([...messages, next]);
@@ -308,9 +672,18 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
 
   const send = () => {
     const text = draft.trim(); if (!text) return;
+    const bodyPayload: any = { text };
+    if (replying) {
+      bodyPayload.replyToMsgId = replying.id;
+      bodyPayload.replyTo = {
+        id: replying.id,
+        senderName: replying.senderName || 'رسالة',
+        text: replying.text.slice(0, 70),
+      };
+    }
     const request = editing
-      ? apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${editing.id}`, { method: 'PATCH', body: JSON.stringify({ text }) })
-      : apiFetch<{ message: { id: string; text: string; time: string | null; outgoing?: boolean; edited?: boolean } }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages`, { method: 'POST', body: JSON.stringify({ text: replying ? `رداً على: ${replying.text}\n${text}` : text }) });
+      ? apiFetch<{ message: any }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages/${editing.id}`, { method: 'PATCH', body: JSON.stringify({ text }) })
+      : apiFetch<{ message: any }>(`/telegram/chats/${encodeURIComponent(chat.id)}/messages`, { method: 'POST', body: JSON.stringify(bodyPayload) });
     void request.then(result => {
       const next = toMessage(result.message);
       setMessages(editing ? messages.map(item => item.id === editing.id ? next : item) : [...messages, next]);
@@ -337,7 +710,7 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
         <IconButton label="المزيد"><MoreVertical size={19} /></IconButton>
       </div>
     </header>
-    <div className="flex-1 overflow-y-auto px-4 py-7 sm:px-8"><div className="mx-auto flex max-w-[820px] flex-col gap-4"><div className="mx-auto mb-2 rounded-full bg-card/75 px-4 py-1.5 text-[10px] text-muted-foreground shadow-sm">اليوم</div>{messages.length === 0 ? <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div> : messages.map(message => <MessageBubble key={message.id} message={message} onAction={handleAction} />)}<div ref={endRef} /></div></div>
+    <div className="flex-1 overflow-y-auto px-4 py-7 sm:px-8"><div className="mx-auto flex max-w-[820px] flex-col gap-4"><div className="mx-auto mb-2 rounded-full bg-card/75 px-4 py-1.5 text-[10px] text-muted-foreground shadow-sm">اليوم</div>{messages.length === 0 ? <div className="py-20 text-center text-xs text-muted-foreground">ابدأ محادثة جديدة</div> : messages.map(message => <MessageBubble key={message.id} message={message} chatKind={chat.kind} onAction={handleAction} />)}<div ref={endRef} /></div></div>
     <div className="composer-shadow flex-none border-t border-border bg-card/90 px-3 py-3 backdrop-blur-md sm:px-7">
       <div className="mx-auto max-w-[820px]">
         {/* Quick Templates Bar above Composer */}
@@ -377,7 +750,24 @@ function Conversation({ chat, messages, setMessages, onBack, onProfile, onError 
           </div>
         )}
 
-        {(replying || editing) && <div className="mb-2 flex items-center gap-2 rounded-xl bg-secondary/80 px-3 py-2 text-[10px]"><span className="h-5 w-1 rounded-full bg-primary" /><span className="min-w-0 flex-1 truncate">{editing ? 'تعديل الرسالة' : `الرد على: ${replying?.text}`}</span><IconButton label="إلغاء" onClick={() => { setReplying(null); setEditing(null); setDraft(''); }} className="h-6 w-6"><X size={13} /></IconButton></div>}
+        {(replying || editing) && (
+          <div className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-secondary/80 border-r-3 border-primary px-3.5 py-2 text-right transition-all fade-up">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <MessageCircle size={16} className="text-primary shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="block text-[11px] font-bold text-primary truncate">
+                  {editing ? 'تعديل الرسالة' : `الرد على: ${replying?.senderName || 'رسالة'}`}
+                </span>
+                <span className="block text-[10.5px] text-muted-foreground truncate">
+                  {editing ? editing.text : replying?.text}
+                </span>
+              </div>
+            </div>
+            <IconButton label="إلغاء" onClick={() => { setReplying(null); setEditing(null); if (editing) setDraft(''); }} className="h-7 w-7 shrink-0">
+              <X size={14} />
+            </IconButton>
+          </div>
+        )}
         <div className="relative flex items-end gap-2">
           {/* Quick Templates Drawer Popover */}
           {templatesOpen && (
@@ -947,7 +1337,18 @@ function AppWorkspace() {
           logout();
         }}
       />
-      <button type="button" onClick={() => setMobileList(!mobileList)} aria-label="التنقل بين المحادثات" data-testid="button-mobile-navigation" className="fixed bottom-5 right-5 z-20 grid h-12 w-12 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg md:hidden"><MessageCircle size={20} /></button>
+      {mobileList && current && (
+        <button
+          type="button"
+          onClick={() => setMobileList(false)}
+          aria-label="العودة للمحادثة النشطة"
+          data-testid="button-mobile-navigation"
+          className="fixed bottom-5 right-5 z-20 flex items-center gap-2 rounded-2xl bg-primary px-4 py-3 text-primary-foreground shadow-xl md:hidden font-medium text-xs active:scale-95 transition"
+        >
+          <MessageCircle size={18} />
+          <span>المحادثة النشطة</span>
+        </button>
+      )}
     </main>
   );
 }
