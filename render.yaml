@@ -4,8 +4,10 @@ services:
     env: python
     region: oregon
     plan: free
-    buildCommand: pip install flask flask-socketio telethon gunicorn python-socketio python-engineio requests cryptg gevent gevent-websocket
+    buildCommand: pip install flask flask-socketio telethon gunicorn python-socketio python-engineio simple-websocket requests cryptg gevent gevent-websocket
     startCommand: gunicorn -k gthread --threads 4 -w 1 -b 0.0.0.0:$PORT app:app
+    healthCheckPath: /api/get_login_status
+    autoDeploy: true
     envVars:
       - key: SESSION_SECRET
         generateValue: true

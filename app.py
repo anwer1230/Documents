@@ -38,6 +38,51 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 API_ID = 22043994
 API_HASH = '56f64582b363d367280db96586b97801'
 
+# كلمات المراقبة الأساسية تعمل دائماً لكل حساب مسجّل الدخول.
+# يمكن للمستخدم إضافة كلمات أخرى من الواجهة، لكن لا يمكن حذف هذه القائمة من
+# المراقبة الخلفية.
+DEFAULT_WATCH_WORDS = (
+    "اريد مساعدة",
+    "ابي مساعدة",
+    "من يسوي تكليف",
+    "من يحل",
+    "عندي بحث",
+    "معي واجب",
+    "عندي اسايمنت",
+    "من يسوي اسايمنت",
+    "ابي سكليف",
+    "ابي عذر",
+    "من يسوي سكليف",
+    "ابي شخص مضمون",
+    "ابي مختص",
+    "هيليب",
+    "من يستطيع",
+    "تعرفون احد",
+    "تعرفون شخص",
+    "من يساعدني",
+    "من يعرف مختص",
+    "مين يعرف يحل واجب",
+    "من يحل واجبات الجامعه",
+    "أحتاج مساعدتكم",
+    "ابي احد يسوي بحث",
+    "مين يعرف مختص",
+    "من يعرف احد كويس",
+)
+
+
+def get_effective_watch_words(settings=None):
+    """إرجاع الكلمات الثابتة مع أي كلمات إضافية حفظها المستخدم."""
+    settings = settings or {}
+    result = []
+    seen = set()
+    for word in (*DEFAULT_WATCH_WORDS, *(settings.get('watch_words') or [])):
+        word = str(word or '').strip()
+        key = word.casefold()
+        if word and key not in seen:
+            seen.add(key)
+            result.append(word)
+    return result
+
 
 def parse_entities(raw_text):
     """استخراج معرفات/روابط المجموعات من نص مختلط تلقائياً"""
@@ -55,9 +100,9 @@ def parse_entities(raw_text):
         add(f"+{m}")
     # روابط joinchat
     for m in re.findall(r'https?://t\.me/joinchat/([A-Za-z0-9_-]+)', raw_text):
-        add(m)
+        add(f"+{m}")
     # روابط t.me/username عادية
-    for m in re.findall(r'https?://t\.me/([A-Za-z][A-Za-z0-9_]{3,})', raw_text):
+    for m in re.findall(r'https?://t\.me/(?!joinchat(?:/|$))([A-Za-z][A-Za-z0-9_]{3,})', raw_text):
         add(m)
     # t.me مختصرة بدون http
     for m in re.findall(r'(?<![/\w@])t\.me/\+?([A-Za-z0-9_-]{4,})', raw_text):
@@ -202,6 +247,7 @@ class TelegramClientManager:
                         ud.authenticated = True
                         ud.connected = True
                 await self._register_event_handlers()
+                enable_default_monitoring(self.user_id)
                 logger.info(f"✅ {self.user_id} auto-authorized")
 
             check_counter = 0
@@ -401,14 +447,12 @@ class TelegramClientManager:
                 msg_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             if monitoring:
-                watch_words = current_settings.get('watch_words', [])
-                # إعادة قراءة من الملف للتأكد من الكلمات الحديثة
-                if not watch_words:
-                    fresh = load_settings(self.user_id)
-                    watch_words = fresh.get('watch_words', [])
+                # الكلمات الأساسية ثابتة في الخلفية وتُضاف إليها كلمات المستخدم.
+                fresh = load_settings(self.user_id)
+                watch_words = get_effective_watch_words(fresh or current_settings)
 
                 for kw in watch_words:
-                    if kw and kw.lower() in msg_lower:
+                    if kw and kw.casefold() in msg_lower.casefold():
                         sender = await event.get_sender()
                         sender_id = getattr(sender, 'id', None)
                         sender_first = getattr(sender, 'first_name', '') or ''
@@ -552,8 +596,97 @@ class TelegramClientManager:
             self.scheduled_stop.wait(timeout=interval_minutes * 60)
         socketio.emit('log_update', {"message": "⏹ تم إيقاف الإرسال المجدول"}, to=self.user_id)
 
-    async def _send_to_groups(self, groups, message, image_path):
+    @staticmethod
+    def _is_already_joined_error(error):
+        error_name = type(error).__name__
+        error_text = str(error)
+        return any(token in error_name or token in error_text for token in (
+            'AlreadyParticipant',
+            'USER_ALREADY',
+            'UserAlready',
+            'already a participant',
+        ))
+
+    @staticmethod
+    def _extract_invite_hash(entity):
+        value = str(entity or '').strip().split('?', 1)[0].rstrip('/')
+        if value.startswith('+'):
+            return value[1:]
+        match = re.search(r'(?:https?://)?t\.me/(?:joinchat/|\+)([A-Za-z0-9_-]+)', value, re.IGNORECASE)
+        return match.group(1) if match else None
+
+    async def _resolve_group_for_send(self, entity):
+        """حل المجموعة والانضمام إليها تلقائياً قبل الإرسال أو المراقبة."""
         from telethon import functions
+
+        original = str(entity or '').strip()
+        if not original:
+            raise ValueError("رابط المجموعة فارغ")
+
+        invite_hash = self._extract_invite_hash(original)
+        if invite_hash:
+            try:
+                result = await self.client(functions.messages.ImportChatInviteRequest(hash=invite_hash))
+                chats = getattr(result, 'chats', None) or []
+                if chats:
+                    return chats[0]
+            except Exception as join_error:
+                if not self._is_already_joined_error(join_error):
+                    if 'InviteRequestSent' in type(join_error).__name__:
+                        raise Exception("تم إرسال طلب الانضمام وينتظر موافقة المشرف")
+                    raise
+
+                # إذا كان الحساب عضواً مسبقاً، تعيد CheckChatInviteRequest
+                # المجموعة المرتبطة برابط الدعوة من دون محاولة انضمام ثانية.
+                try:
+                    checked = await self.client(
+                        functions.messages.CheckChatInviteRequest(hash=invite_hash)
+                    )
+                    chat = getattr(checked, 'chat', None)
+                    if chat is not None:
+                        return chat
+                except Exception:
+                    pass
+
+                for candidate in (original, f"https://t.me/+{invite_hash}"):
+                    try:
+                        return await self.client.get_entity(candidate)
+                    except Exception:
+                        continue
+                raise Exception("أنت منضم مسبقاً، لكن تعذر حل المجموعة من رابط الدعوة")
+
+            raise Exception("تعذر الحصول على المجموعة من رابط الدعوة")
+
+        clean = original.split('?', 1)[0].rstrip('/')
+        public_match = re.search(
+            r'(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{3,})',
+            clean,
+            re.IGNORECASE,
+        )
+        if public_match:
+            target = public_match.group(1)
+        else:
+            target = clean.lstrip('@')
+
+        if target.lstrip('-').isdigit():
+            chat = await self.client.get_entity(int(target))
+        else:
+            chat = await self.client.get_entity(target)
+
+        # JoinChannelRequest ينجح للمجموعات/القنوات العامة. إذا كان الحساب
+        # عضواً مسبقاً نكمل مباشرة إلى الإرسال.
+        try:
+            await self.client(functions.channels.JoinChannelRequest(channel=chat))
+            socketio.emit('log_update', {
+                "message": f"🔗 تم الانضمام تلقائياً قبل الإرسال: {original}"
+            }, to=self.user_id)
+        except Exception as join_error:
+            if not self._is_already_joined_error(join_error):
+                raise
+
+        return chat
+
+    async def _send_to_groups(self, groups, message, image_path):
         sent = 0
         errors = 0
         total = len(groups)
@@ -566,29 +699,10 @@ class TelegramClientManager:
         for i, group in enumerate(groups):
             try:
                 entity_str = group.strip()
-                chat = None
-
-                # رابط دعوة خاص +HASH
-                if entity_str.startswith('+') and len(entity_str) > 8:
-                    try:
-                        result = await self.client(functions.messages.ImportChatInviteRequest(hash=entity_str[1:]))
-                        chat = result.chats[0] if hasattr(result, 'chats') and result.chats else None
-                    except Exception as je:
-                        if 'Already' in str(je) or 'USER_ALREADY' in str(je):
-                            async for dialog in self.client.iter_dialogs():
-                                if hasattr(dialog.entity, 'username'):
-                                    chat = dialog.entity
-                                    break
-                        else:
-                            raise je
-                elif entity_str.lstrip('-').isdigit():
-                    chat = await self.client.get_entity(int(entity_str))
-                else:
-                    username = entity_str.lstrip('@')
-                    chat = await self.client.get_entity(f"@{username}")
-
-                if chat is None:
-                    raise Exception("لم يتم العثور على المجموعة")
+                socketio.emit('log_update', {
+                    "message": f"🔗 [{i+1}/{total}] التحقق من العضوية والانضمام تلقائياً: {entity_str}"
+                }, to=self.user_id)
+                chat = await self._resolve_group_for_send(entity_str)
 
                 sent_msg = None
                 if has_media:
@@ -753,6 +867,29 @@ def get_or_create_user(user_id):
         return USERS[user_id]
 
 
+def enable_default_monitoring(user_id, announce=True):
+    """تشغيل المراقبة تلقائياً بعد نجاح الاتصال لكل حساب."""
+    ud = get_or_create_user(user_id)
+    fresh_settings = load_settings(user_id)
+    watch_words = get_effective_watch_words(fresh_settings)
+    with USERS_LOCK:
+        ud.monitoring_active = True
+        ud.is_running = True
+        ud.settings = fresh_settings
+
+    if announce:
+        socketio.emit('monitoring_status', {
+            "is_running": True,
+            "monitoring_active": True,
+            "watch_words": watch_words,
+            "default": True,
+        }, to=user_id)
+        socketio.emit('log_update', {
+            "message": f"🔎 المراقبة التلقائية نشطة دائماً — {len(watch_words)} كلمة"
+        }, to=user_id)
+    return watch_words
+
+
 def get_current_user_id():
     uid = session.get('user_id', 'user_1')
     if uid not in PREDEFINED_USERS:
@@ -816,6 +953,7 @@ def api_get_login_status():
         "awaiting_code": ud.awaiting_code,
         "awaiting_password": ud.awaiting_password,
         "is_running": ud.is_running,
+        "monitoring_active": ud.monitoring_active,
         "phone": ud.phone_number or "",
         "no_user_selected": False
     })
@@ -852,6 +990,8 @@ def api_parse_input():
 def api_get_settings():
     uid = get_current_user_id()
     settings = load_settings(uid)
+    settings['watch_words'] = get_effective_watch_words(settings)
+    settings['default_watch_words'] = list(DEFAULT_WATCH_WORDS)
     return jsonify({"success": True, "settings": settings})
 
 
@@ -917,6 +1057,7 @@ def api_save_login():
             settings = load_settings(uid)
             settings['phone'] = phone
             save_settings(uid, settings)
+            enable_default_monitoring(uid)
             socketio.emit('log_update', {"message": "✅ تم الدخول تلقائياً (جلسة محفوظة)"}, to=uid)
             return jsonify({"success": True, "message": "✅ أنت مسجل دخول بالفعل", "status": "already_authorized"})
 
@@ -981,6 +1122,7 @@ def api_verify_code():
             ud.awaiting_code = False
 
         ud.client_manager.run_coroutine(ud.client_manager._register_event_handlers())
+        enable_default_monitoring(uid)
         socketio.emit('log_update', {"message": "✅ تم تسجيل الدخول بنجاح"}, to=uid)
         return jsonify({"success": True, "message": "✅ تم تسجيل الدخول بنجاح", "status": "success"})
 
@@ -1026,6 +1168,7 @@ def api_verify_password():
             ud.awaiting_password = False
 
         ud.client_manager.run_coroutine(ud.client_manager._register_event_handlers())
+        enable_default_monitoring(uid)
         socketio.emit('log_update', {"message": "✅ تم التحقق من كلمة المرور"}, to=uid)
         return jsonify({"success": True, "message": "✅ تم تسجيل الدخول بنجاح"})
 
@@ -1294,7 +1437,7 @@ def api_start_monitoring():
         ud.is_running = True
         ud.settings = fresh_settings  # ← تحديث الإعدادات في الذاكرة
 
-    watch_words = fresh_settings.get('watch_words', [])
+    watch_words = enable_default_monitoring(uid, announce=False)
 
     # التأكد من تسجيل معالجات الأحداث إذا لم تكن مسجّلة
     if ud.client_manager and ud.client_manager.loop and not ud.client_manager.event_handlers_registered:
@@ -1373,14 +1516,8 @@ def api_join_group():
         return jsonify({"success": False, "message": "أدخل رابط المجموعة"})
 
     async def do_join():
-        from telethon import functions
         try:
-            if 't.me/+' in link or 'joinchat' in link:
-                hash_part = link.split('+')[-1] if '+' in link else link.split('/')[-1]
-                await ud.client_manager.client(functions.messages.ImportChatInviteRequest(hash=hash_part))
-            else:
-                entity = link.split('/')[-1]
-                await ud.client_manager.client(functions.channels.JoinChannelRequest(channel=entity))
+            await ud.client_manager._resolve_group_for_send(link)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1441,36 +1578,15 @@ def api_bulk_join():
         return jsonify({"success": False, "message": "❌ الاتصال غير جاهز"})
 
     async def do_bulk_join():
-        from telethon import functions
         ok = skip = fail = 0
         total = len(links)
         for i, item in enumerate(links):
             entity_str = item.get('entity', '').strip()
             label = item.get('label', entity_str)
             try:
-                if entity_str.startswith('+'):
-                    try:
-                        await ud.client_manager.client(
-                            functions.messages.ImportChatInviteRequest(hash=entity_str[1:])
-                        )
-                        ok += 1
-                        msg = f"✅ [{i+1}/{total}] {label}"
-                    except Exception as je:
-                        if 'Already' in str(je) or 'USER_ALREADY' in str(je):
-                            skip += 1
-                            msg = f"⚠️ [{i+1}/{total}] مسجّل مسبقاً: {label}"
-                        else:
-                            raise je
-                elif entity_str.lstrip('-').isdigit():
-                    chat = await ud.client_manager.client.get_entity(int(entity_str))
-                    await ud.client_manager.client(functions.channels.JoinChannelRequest(channel=chat))
-                    ok += 1
-                    msg = f"✅ [{i+1}/{total}] {label}"
-                else:
-                    username = entity_str.lstrip('@')
-                    await ud.client_manager.client(functions.channels.JoinChannelRequest(channel=username))
-                    ok += 1
-                    msg = f"✅ [{i+1}/{total}] @{username}"
+                await ud.client_manager._resolve_group_for_send(entity_str)
+                ok += 1
+                msg = f"✅ [{i+1}/{total}] {label}"
                 socketio.emit('log_update', {"message": msg}, to=uid)
                 socketio.emit('join_progress', {"index": i+1, "total": total, "ok": ok, "skip": skip, "fail": fail}, to=uid)
                 await asyncio.sleep(2)
@@ -1478,7 +1594,7 @@ def api_bulk_join():
             except Exception as e:
                 fail += 1
                 err = str(e)
-                if 'Already' in err or 'USER_ALREADY' in err:
+                if ud.client_manager._is_already_joined_error(e):
                     skip += 1; fail -= 1
                     socketio.emit('log_update', {"message": f"⚠️ [{i+1}/{total}] مسجّل: {label}"}, to=uid)
                 else:
@@ -1664,11 +1780,22 @@ def load_all_sessions():
                 settings = load_settings(uid)
                 if settings.get('phone'):
                     ud = get_or_create_user(uid)
+                    if not ud.client_manager:
+                        ud.client_manager = TelegramClientManager(uid)
+                    # استعادة الجلسات في الخلفية حتى تبدأ المراقبة تلقائياً
+                    # بعد إعادة تشغيل التطبيق أو نشره على Render.
+                    threading.Thread(
+                        target=ud.client_manager.start_client_thread,
+                        name=f"restore-telegram-{uid}",
+                        daemon=True,
+                    ).start()
                     logger.info(f"Loaded settings for {uid}")
 
 
+load_all_sessions()
+
+
 if __name__ == '__main__':
-    load_all_sessions()
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting on port {port}")
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

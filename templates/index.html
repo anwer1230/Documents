@@ -693,7 +693,7 @@
                             حالة المراقبة
                             <span id="monitoringIndicator" class="monitoring-active-indicator" style="display:none"></span>
                         </div>
-                        <div class="sublabel" id="monitoringSubLabel">المراقبة متوقفة</div>
+                        <div class="sublabel" id="monitoringSubLabel">تبدأ تلقائياً بعد الاتصال</div>
                     </div>
                     <div style="display:flex;gap:8px">
                         <button class="btn btn-success btn-sm" id="btnStartMonitor" onclick="startMonitoring()">
@@ -957,6 +957,7 @@ let isMonitoring = false;
 let alertCount = 0;
 let groups = [];
 let watchWords = [];
+let defaultWatchWords = [];
 let autoReplies = [];
 let savedImagePath = null;
 let savedImageFilename = null;
@@ -1224,7 +1225,7 @@ function updateMonitoringUI(active) {
     const stat = document.getElementById('statStatus');
     const dot = document.getElementById('statStatusDot');
     ind.style.display = active ? 'inline-block' : 'none';
-    lbl.textContent = active ? 'المراقبة نشطة' : 'المراقبة متوقفة';
+    lbl.textContent = active ? 'المراقبة نشطة تلقائياً' : 'المراقبة متوقفة مؤقتاً';
     start.style.display = active ? 'none' : 'inline-flex';
     stop.style.display = active ? 'inline-flex' : 'none';
     stat.textContent = active ? 'نشط' : 'متوقف';
@@ -1239,6 +1240,7 @@ function loadSettingsToUI(s) {
         groups = s.groups;
         renderGroups();
     }
+    if (s.default_watch_words) defaultWatchWords = s.default_watch_words;
     if (s.watch_words && s.watch_words.length) {
         watchWords = s.watch_words;
         renderWatchWords();
@@ -1503,15 +1505,23 @@ async function extractGroups() {
 function addWatchWord() {
     const input = document.getElementById('watchWordInput');
     const val = input.value.trim();
-    if (!val || watchWords.includes(val)) return;
+    if (!val || watchWords.some(word => word.toLocaleLowerCase() === val.toLocaleLowerCase())) return;
     watchWords.push(val); renderWatchWords(); input.value = '';
 }
-function removeWatchWord(w) { watchWords = watchWords.filter(x => x !== w); renderWatchWords(); }
+function removeWatchWord(w) {
+    if (defaultWatchWords.some(word => word.toLocaleLowerCase() === w.toLocaleLowerCase())) {
+        showToast('هذه الكلمة ثابتة في المراقبة الخلفية ولا يمكن حذفها', 'info');
+        return;
+    }
+    watchWords = watchWords.filter(x => x !== w); renderWatchWords();
+}
 function renderWatchWords() {
     document.getElementById('watchWordsList').innerHTML = watchWords.map(w => `
         <span class="group-tag" style="background:rgba(237,66,69,.1);border-color:rgba(237,66,69,.3);color:var(--danger)">
             <i class="fas fa-search" style="font-size:10px"></i>${w}
-            <span class="remove" onclick="removeWatchWord('${w.replace(/'/g,"\\'")}')">✕</span>
+            ${defaultWatchWords.some(word => word.toLocaleLowerCase() === w.toLocaleLowerCase())
+                ? '<span title="كلمة ثابتة في الخلفية" style="color:var(--warning)">🔒</span>'
+                : `<span class="remove" onclick="removeWatchWord('${w.replace(/'/g,"\\'")}')">✕</span>`}
         </span>`).join('');
 }
 
@@ -1760,6 +1770,33 @@ async function stopMonitoring() {
 // ========================
 // Alerts
 // ========================
+async function showBackgroundAlertNotification(alert) {
+    if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+
+    const title = `🚨 تنبيه تيليجرام — ${alert.keyword}`;
+    const options = {
+        body: `المجموعة: ${alert.group}\n${(alert.message || '').slice(0, 180)}`,
+        icon: '/static/icons/icon-192.png',
+        badge: '/static/icons/icon-192.png',
+        dir: 'rtl',
+        lang: 'ar',
+        tag: `telegram-alert-${alert.message_id || Date.now()}`,
+        data: { url: window.location.origin + '/' }
+    };
+
+    try {
+        if ('serviceWorker' in navigator) {
+            const registration = await navigator.serviceWorker.ready;
+            await registration.showNotification(title, options);
+        } else {
+            new Notification(title, options);
+        }
+    } catch (error) {
+        // بعض المتصفحات تمنع إشعار الصفحة عند عملها بالخلفية؛ لا نوقف استقبال التنبيه.
+        console.debug('Background notification unavailable', error);
+    }
+}
+
 function handleNewAlert(alert) {
     alertCount++;
     document.getElementById('statAlerts').textContent = alertCount;
@@ -1788,12 +1825,7 @@ function handleNewAlert(alert) {
 
     addLog(`🚨 تنبيه: "${alert.keyword}" في ${alert.group}`, 'alert');
 
-    if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('🚨 تنبيه تيليجرام', {
-            body: `الكلمة: ${alert.keyword}\nالمجموعة: ${alert.group}`,
-            icon: '/static/icons/icon-192.png'
-        });
-    }
+    showBackgroundAlertNotification(alert);
 }
 
 // ========================
