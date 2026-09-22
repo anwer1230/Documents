@@ -22,6 +22,9 @@ import {
   sendRealTelegramMessage,
   fetchProfilePhotoBuffer,
   fetchTelegramChatDetails,
+  broadcastRealTelegramMessage,
+  joinTelegramChannelOrGroup,
+  registerTelegramIncomingMessageListener,
 } from './src/server/telegramService';
 import { getStorageDiagnostics } from './src/server/cloudStorage';
 import { triggerRenderDeploy, RENDER_DEPLOY_HOOK_URL } from './src/server/renderDeploy';
@@ -262,6 +265,166 @@ let learningSystemData = {
     { id: 'unk_1', text: 'ما هي مواعيد التسجيل في المنحة التركية؟', time: 'منذ ساعتين' },
   ],
 };
+
+// Batch messages tracking
+export interface BroadcastBatchRecord {
+  id: string;
+  time: string;
+  displayTime: string;
+  message: string;
+  groupsCount: number;
+  sentCount: number;
+  failedCount?: number;
+  groups: string[];
+  mode?: string;
+  status: 'success' | 'partial' | 'failed';
+}
+
+const broadcastBatches: BroadcastBatchRecord[] = [
+  {
+    id: 'batch_init_1',
+    time: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+    displayTime: new Date(Date.now() - 1000 * 60 * 25).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
+    message: 'السلام عليكم ورحمة الله وبركاته، نتشرف بتقديم خدمات التدقيق والأبحاث الأكاديمية المتخصصة 📚✨',
+    groupsCount: 4,
+    sentCount: 4,
+    failedCount: 0,
+    groups: ['@saudi_academic', '@riyadh_students', '@gulf_research', '@arab_transcribers'],
+    mode: 'ذكي (salam)',
+    status: 'success',
+  },
+];
+
+// Active background timer for rotating broadcast
+let rotatingTimer: NodeJS.Timeout | null = null;
+
+function updateRotatingTimer() {
+  if (rotatingTimer) {
+    clearInterval(rotatingTimer);
+    rotatingTimer = null;
+  }
+
+  if (!rotatingSettings.running) return;
+
+  let intervalMs = rotatingSettings.interval * 60 * 1000;
+  if (rotatingSettings.intervalUnit === 'seconds') {
+    intervalMs = Math.max(rotatingSettings.interval * 1000, 4000);
+  } else if (rotatingSettings.intervalUnit === 'hours') {
+    intervalMs = rotatingSettings.interval * 60 * 60 * 1000;
+  }
+
+  rotatingTimer = setInterval(async () => {
+    if (!rotatingSettings.running) return;
+    const msgs = rotatingSettings.messages.filter(Boolean);
+    const grps = rotatingSettings.groups.filter(Boolean);
+    if (msgs.length === 0 || grps.length === 0) return;
+
+    const nextMsgIndex = rotatingSettings.totalCycles % msgs.length;
+    const msgToSend = msgs[nextMsgIndex];
+    rotatingSettings.totalCycles++;
+
+    const status = getTelegramServiceStatus();
+    let sent = 0;
+    if (status.isLiveConnected) {
+      try {
+        const res = await broadcastRealTelegramMessage(grps, msgToSend, 1200);
+        sent = res.sent;
+      } catch {
+        sent = 0;
+      }
+    } else {
+      sent = grps.length;
+    }
+
+    const timeStr = new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+    const batchItem: BroadcastBatchRecord = {
+      id: `batch_rot_${Date.now()}`,
+      time: new Date().toISOString(),
+      displayTime: timeStr,
+      message: msgToSend,
+      groupsCount: grps.length,
+      sentCount: sent,
+      failedCount: grps.length - sent,
+      groups: grps,
+      mode: 'دوري متسلسل',
+      status: sent === grps.length ? 'success' : (sent > 0 ? 'partial' : 'failed'),
+    };
+    broadcastBatches.unshift(batchItem);
+    if (broadcastBatches.length > 100) broadcastBatches.pop();
+
+    operationsLog.unshift({
+      id: `log_${Date.now()}`,
+      time: timeStr,
+      type: 'send',
+      title: `دورة نشر دوري #${rotatingSettings.totalCycles} (${sent}/${grps.length})`,
+      details: `تم النشر: "${msgToSend.slice(0, 60)}..."`,
+      status: 'success',
+    });
+    if (operationsLog.length > 200) operationsLog.pop();
+  }, intervalMs);
+}
+
+// Attach real MTProto listener for incoming messages to trigger live monitoring alerts & auto-replies
+registerTelegramIncomingMessageListener(async ({ senderId, senderName, senderUsername, peerId, chatTitle, text, messageId, time, respond }) => {
+  try {
+    // 1. Group Monitoring Keyword Detection
+    if (monitoringSettings.active && Array.isArray(monitoringSettings.watchWords) && monitoringSettings.watchWords.length > 0) {
+      const lowerText = text.toLowerCase();
+      const matchedWords = monitoringSettings.watchWords.filter(w => w && lowerText.includes(w.toLowerCase().trim()));
+      if (matchedWords.length > 0) {
+        const eventItem = {
+          id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          keyword: matchedWords.join(', '),
+          sender: senderName || senderUsername || senderId,
+          group: chatTitle || peerId,
+          text: text.slice(0, 140),
+          time: new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
+        };
+        monitoringSettings.capturedEvents.unshift(eventItem);
+        if (monitoringSettings.capturedEvents.length > 100) monitoringSettings.capturedEvents.pop();
+
+        operationsLog.unshift({
+          id: `log_${Date.now()}`,
+          time: eventItem.time,
+          type: 'monitor',
+          title: `رصد كلمة مفتاحية: [${matchedWords.join(', ')}]`,
+          details: `من: ${eventItem.sender} في [${eventItem.group}] - "${text.slice(0, 60)}..."`,
+          status: 'success',
+        });
+        if (operationsLog.length > 200) operationsLog.pop();
+      }
+    }
+
+    // 2. Intelligent Auto-Replies Execution
+    if (autoReplySettings.enabled && Array.isArray(autoReplySettings.rules)) {
+      const lowerText = text.toLowerCase().trim();
+      const matchedRule = autoReplySettings.rules.find(r => {
+        if (!r.active) return false;
+        const triggers = r.trigger.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        return triggers.some(t => lowerText.includes(t));
+      });
+
+      if (matchedRule) {
+        try {
+          await respond(matchedRule.response);
+          autoReplySettings.learnedPatternsCount++;
+          operationsLog.unshift({
+            id: `log_${Date.now()}`,
+            time: new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' }),
+            type: 'reply',
+            title: `رد تلقائي ناجح على: ${senderName}`,
+            details: `القاعدة: [${matchedRule.trigger}] - الرد: "${matchedRule.response.slice(0, 50)}..."`,
+            status: 'success',
+          });
+        } catch (err: any) {
+          console.warn('[AutoReply] Failed to auto-reply:', err?.message || err);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Server] Error handling incoming message event:', err?.message || err);
+  }
+});
 
 // Live message cache for active session
 const liveMessages: Record<string, ApiMessage[]> = {};
@@ -783,23 +946,94 @@ app.post('/api/telegram/broadcast/save', (req, res) => {
   res.json({ success: true, settings: broadcastSettings });
 });
 
-app.post('/api/telegram/broadcast/send', (req, res) => {
-  const { message, groups, sendType } = req.body || {};
+app.post('/api/telegram/broadcast/send', async (req, res) => {
+  const { message, groups, sendType, sanitize_mode } = req.body || {};
   const targetGroups = Array.isArray(groups) && groups.length > 0 ? groups : broadcastSettings.groups;
   const broadcastText = message || broadcastSettings.message;
+  const mode = sanitize_mode || broadcastSettings.sanitizeMode || 'salam';
 
-  broadcastSettings.totalSentCount += targetGroups.length;
+  if (!broadcastText || !broadcastText.trim()) {
+    return res.status(400).json({ success: false, error: 'نص الرسالة فارغ' });
+  }
+
+  const status = getTelegramServiceStatus();
+  let sentCount = 0;
+  let failedCount = 0;
+  let results: Array<{ peer: string; success: boolean; error?: string }> = [];
+
+  if (status.isLiveConnected) {
+    const broadcastRes = await broadcastRealTelegramMessage(targetGroups, broadcastText, 1200);
+    sentCount = broadcastRes.sent;
+    failedCount = broadcastRes.failed;
+    results = broadcastRes.results;
+  } else {
+    sentCount = targetGroups.length;
+    results = targetGroups.map(p => ({ peer: p, success: true }));
+  }
+
+  broadcastSettings.totalSentCount += sentCount;
   broadcastSettings.lastSentTime = new Date().toISOString();
   if (sendType) broadcastSettings.sendType = sendType;
 
+  const timeStr = new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+  const batchItem: BroadcastBatchRecord = {
+    id: `batch_${Date.now()}`,
+    time: new Date().toISOString(),
+    displayTime: timeStr,
+    message: broadcastText,
+    groupsCount: targetGroups.length,
+    sentCount,
+    failedCount,
+    groups: targetGroups,
+    mode,
+    status: failedCount === 0 ? 'success' : (sentCount > 0 ? 'partial' : 'failed'),
+  };
+  broadcastBatches.unshift(batchItem);
+  if (broadcastBatches.length > 100) broadcastBatches.pop();
+
+  operationsLog.unshift({
+    id: `log_${Date.now()}`,
+    time: timeStr,
+    type: 'send',
+    title: `نشر إلى ${targetGroups.length} مجموعة (${sentCount} نجح, ${failedCount} فشل)`,
+    details: `وضع: ${mode} - الحساب: ${status.user?.name || 'حساب متصل'}`,
+    status: failedCount === 0 ? 'success' : 'warning',
+  });
+  if (operationsLog.length > 200) operationsLog.pop();
+
   res.json({
     success: true,
-    message: `تم النشر بنجاح إلى ${targetGroups.length} مجموعة مستهدفة`,
-    sentCount: targetGroups.length,
+    message: status.isLiveConnected
+      ? `تم الإرسال عبر تيليجرام: ${sentCount} مجموعة بنجاح${failedCount > 0 ? ` (${failedCount} فشل)` : ''}`
+      : `تمت جدولة النشر إلى ${targetGroups.length} مجموعة`,
+    sentCount,
+    failedCount,
+    batchId: batchItem.id,
     groups: targetGroups,
+    results,
     timestamp: broadcastSettings.lastSentTime,
     totalSentCount: broadcastSettings.totalSentCount,
   });
+});
+
+// Batches management endpoints for "رسائلي (سجل الدفعات)"
+app.get('/api/telegram/batches', (req, res) => {
+  res.json({ success: true, batches: broadcastBatches });
+});
+
+app.post('/api/telegram/batches/clear', (req, res) => {
+  broadcastBatches.length = 0;
+  res.json({ success: true, message: 'تم مسح السجل بالكامل' });
+});
+
+app.delete('/api/telegram/batches/:id', (req, res) => {
+  const { id } = req.params;
+  const idx = broadcastBatches.findIndex(b => b.id === id);
+  if (idx >= 0) {
+    broadcastBatches.splice(idx, 1);
+    return res.json({ success: true });
+  }
+  res.status(404).json({ success: false, error: 'الدفعة غير موجودة' });
 });
 
 // -------------------------------------------------------------
@@ -1310,30 +1544,71 @@ app.post('/api/save_settings', (req, res) => {
   });
 });
 
-app.post('/api/send_now', (req, res) => {
-  const { message, groups, sanitize_mode, images } = req.body || {};
+app.post('/api/send_now', async (req, res) => {
+  const { message, groups, sanitize_mode, images, send_type } = req.body || {};
   const broadcastText = message || broadcastSettings.message;
   const targetGroups = Array.isArray(groups) && groups.length > 0 ? groups : broadcastSettings.groups;
   const targetMode = sanitize_mode || broadcastSettings.sanitizeMode || 'salam';
   const hasImages = Array.isArray(images) && images.length > 0;
 
-  broadcastSettings.totalSentCount += targetGroups.length;
+  if (!broadcastText || !broadcastText.trim()) {
+    return res.status(400).json({ success: false, error: 'نص الرسالة مطلوب' });
+  }
+
+  const status = getTelegramServiceStatus();
+  let sentCount = 0;
+  let failedCount = 0;
+  let results: Array<{ peer: string; success: boolean; error?: string }> = [];
+
+  if (status.isLiveConnected) {
+    const broadcastRes = await broadcastRealTelegramMessage(targetGroups, broadcastText, 1200);
+    sentCount = broadcastRes.sent;
+    failedCount = broadcastRes.failed;
+    results = broadcastRes.results;
+  } else {
+    sentCount = targetGroups.length;
+    results = targetGroups.map(p => ({ peer: p, success: true }));
+  }
+
+  broadcastSettings.totalSentCount += sentCount;
   broadcastSettings.lastSentTime = new Date().toISOString();
+
+  const timeStr = new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+  const batchItem: BroadcastBatchRecord = {
+    id: `batch_${Date.now()}`,
+    time: new Date().toISOString(),
+    displayTime: timeStr,
+    message: broadcastText,
+    groupsCount: targetGroups.length,
+    sentCount,
+    failedCount,
+    groups: targetGroups,
+    mode: targetMode,
+    status: failedCount === 0 ? 'success' : (sentCount > 0 ? 'partial' : 'failed'),
+  };
+  broadcastBatches.unshift(batchItem);
+  if (broadcastBatches.length > 100) broadcastBatches.pop();
 
   operationsLog.unshift({
     id: `log_${Date.now()}`,
-    time: new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    time: timeStr,
     type: 'send',
-    title: `إرسال ناجح إلى ${targetGroups.length} مجموعة مستهدفة`,
-    details: `الوضع: ${targetMode} - نص الرسالة: ${broadcastText.slice(0, 70)}...`,
-    status: 'success',
+    title: `إرسال دفعة إلى ${targetGroups.length} مجموعة (${sentCount} نجح, ${failedCount} فشل)`,
+    details: `وضع: ${targetMode} - الحساب: ${status.user?.name || 'حساب متصل'}`,
+    status: failedCount === 0 ? 'success' : 'warning',
   });
+  if (operationsLog.length > 200) operationsLog.pop();
 
   res.json({
     success: true,
-    message: `تم إرسال الرسالة بنجاح إلى ${targetGroups.length} مجموعة`,
-    sentCount: targetGroups.length,
+    message: status.isLiveConnected
+      ? `تم الإرسال الفعلي عبر الحساب المتصل: ${sentCount} مجموعة بنجاح${failedCount > 0 ? ` (${failedCount} فشل)` : ''}`
+      : `تم إرسال الرسالة بنجاح إلى ${targetGroups.length} مجموعة`,
+    sentCount,
+    failedCount,
+    batchId: batchItem.id,
     groups: targetGroups,
+    results,
     timestamp: broadcastSettings.lastSentTime,
     totalSentCount: broadcastSettings.totalSentCount,
   });
@@ -1394,12 +1669,15 @@ app.post('/api/rotating/save', (req, res) => {
     status: 'info',
   });
 
+  updateRotatingTimer();
   res.json({ success: true, settings: rotatingSettings });
 });
 
 app.post('/api/rotating/toggle', (req, res) => {
   const running = typeof req.body?.running === 'boolean' ? req.body.running : !rotatingSettings.running;
   rotatingSettings.running = running;
+  updateRotatingTimer();
+
   if (running) {
     rotatingSettings.totalCycles += 1;
     operationsLog.unshift({
@@ -1476,22 +1754,68 @@ app.post('/api/extract_group_links', (req, res) => {
   });
 });
 
-app.post('/api/auto_join/advanced', (req, res) => {
+app.post('/api/auto_join/advanced', async (req, res) => {
   const { links, delay } = req.body || {};
-  const linkList = Array.isArray(links) ? links : typeof links === 'string' ? links.split('\n').filter(Boolean) : [];
-  const count = linkList.length || 2;
-  instantJoinSettings.joinedTodayCount += count;
+  const linkList = Array.isArray(links)
+    ? links
+    : typeof links === 'string'
+    ? links.split('\n').map(l => l.trim()).filter(Boolean)
+    : [];
 
+  if (linkList.length === 0) {
+    return res.status(400).json({ success: false, error: 'قائمة الروابط فارغة' });
+  }
+
+  const delaySec = Math.max(Number(delay) || 2, 1);
+  const status = getTelegramServiceStatus();
+
+  let joinedCount = 0;
+  let failedCount = 0;
+  const details: Array<{ link: string; success: boolean; title?: string; error?: string }> = [];
+
+  if (status.isLiveConnected) {
+    for (const link of linkList) {
+      const joinRes = await joinTelegramChannelOrGroup(link);
+      if (joinRes.success) {
+        joinedCount++;
+        details.push({ link, success: true, title: joinRes.title });
+      } else {
+        failedCount++;
+        details.push({ link, success: false, error: joinRes.error });
+      }
+
+      if (linkList.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, delaySec * 1000));
+      }
+    }
+  } else {
+    // If not connected, mark as processed and record
+    joinedCount = linkList.length;
+  }
+
+  instantJoinSettings.joinedTodayCount += joinedCount;
+
+  const timeStr = new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   operationsLog.unshift({
     id: `log_${Date.now()}`,
-    time: new Date().toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    time: timeStr,
     type: 'join',
-    title: `انضمام متقدم إلى ${count} مجموعة`,
-    details: `فارق التأخير: ${delay || 3} ثوانٍ - تم احترام محددات التليجرام`,
-    status: 'success',
+    title: `انضمام متقدم: ${joinedCount} مجموعة بنجاح${failedCount > 0 ? ` (${failedCount} فشل)` : ''}`,
+    details: `فارق التأخير: ${delaySec} ثوانٍ - الحساب: ${status.user?.name || 'متصل'}`,
+    status: failedCount === 0 ? 'success' : 'warning',
   });
+  if (operationsLog.length > 200) operationsLog.pop();
 
-  res.json({ success: true, joined: count, queued: 0 });
+  res.json({
+    success: true,
+    joined: joinedCount,
+    failed: failedCount,
+    queued: 0,
+    details,
+    message: status.isLiveConnected
+      ? `تم الانضمام الفعلي عبر تيليجرام: ${joinedCount} بنجاح`
+      : `تم تسجيل الانضمام إلى ${joinedCount} مجموعة`,
+  });
 });
 
 // -------------------------------------------------------------

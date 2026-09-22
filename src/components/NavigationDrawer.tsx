@@ -340,7 +340,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
                 {/* 2. رسائلي (سجل الدفعات) */}
                 <button
                   type="button"
-                  onClick={() => handleAction(() => onOpenService('saved_links'))}
+                  onClick={() => handleAction(() => onOpenService('batch_messages'))}
                   className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-medium text-gray-100 hover:bg-amber-500/15 transition-all text-right group"
                 >
                   <div className="flex items-center gap-3.5">

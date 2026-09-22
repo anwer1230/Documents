@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { computeCheck } from 'telegram/Password.js';
+import { NewMessage } from 'telegram/events/index.js';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -122,6 +123,7 @@ export async function restoreSessionFromString(sessionString: string): Promise<{
     activeUser = user;
     activeSessionString = cleanSession;
     isLiveConnected = true;
+    setupClientEventHandlers(client);
 
     // Persist to multi-layer store (local disk + Firestore/cloud storage)
     const sessionRecord: StoredSession = {
@@ -316,6 +318,7 @@ export async function verifyAuthCode(sessionId: string, code: string) {
     activeUser = user;
     activeSessionString = sessionString;
     isLiveConnected = true;
+    setupClientEventHandlers(pending.client);
     pendingAuths.delete(sessionId);
 
     console.log(`[TelegramService] Authentication successful for ${user.name} (${user.phone})!`);
@@ -393,6 +396,7 @@ export async function verify2FAPassword(sessionId: string, password: string) {
     activeUser = user;
     activeSessionString = sessionString;
     isLiveConnected = true;
+    setupClientEventHandlers(pending.client);
     pendingAuths.delete(sessionId);
 
     console.log(`[TelegramService] 2FA authentication successful for ${user.name} (${user.phone})!`);
@@ -756,4 +760,213 @@ export async function fetchTelegramChatDetails(chatId: string): Promise<ChatDeta
     return null;
   }
 }
+
+/**
+ * Type definition for incoming message listener
+ */
+export type TelegramIncomingMessageListener = (data: {
+  senderId: string;
+  senderName: string;
+  senderUsername?: string;
+  peerId: string;
+  chatTitle?: string;
+  text: string;
+  messageId: number;
+  time: string;
+  respond: (text: string) => Promise<void>;
+}) => Promise<void> | void;
+
+const messageListeners: TelegramIncomingMessageListener[] = [];
+
+/**
+ * Register a callback whenever a new real message is received via MTProto
+ */
+export function registerTelegramIncomingMessageListener(listener: TelegramIncomingMessageListener) {
+  messageListeners.push(listener);
+}
+
+/**
+ * Attach MTProto NewMessage event handler to the active client
+ */
+function setupClientEventHandlers(client: TelegramClient) {
+  try {
+    client.addEventHandler(async (event: any) => {
+      try {
+        const msg = event?.message;
+        if (!msg || !msg.message) return;
+        const text = String(msg.message);
+        const peer = msg.peerId;
+        const peerId = (peer?.channelId || peer?.chatId || peer?.userId || '').toString();
+
+        let senderName = 'مستخدم';
+        let senderUsername: string | undefined;
+        let senderId = '';
+        try {
+          const sender = await event.getSender();
+          if (sender) {
+            senderId = sender.id?.toString() || '';
+            senderName = sender.firstName
+              ? `${sender.firstName} ${sender.lastName || ''}`.trim()
+              : (sender.title || sender.username || 'مستخدم');
+            if (sender.username) senderUsername = `@${sender.username}`;
+          }
+        } catch {
+          // ignore
+        }
+
+        let chatTitle: string | undefined;
+        try {
+          const chat = await event.getChat();
+          if (chat && chat.title) chatTitle = chat.title;
+        } catch {
+          // ignore
+        }
+
+        const respond = async (replyText: string) => {
+          try {
+            await client.sendMessage(peerId || senderId, {
+              message: replyText,
+              replyTo: msg.id,
+            });
+          } catch (replyErr) {
+            console.warn('[TelegramService] Error responding to message:', replyErr);
+          }
+        };
+
+        for (const listener of messageListeners) {
+          try {
+            await listener({
+              senderId,
+              senderName,
+              senderUsername,
+              peerId,
+              chatTitle,
+              text,
+              messageId: msg.id,
+              time: new Date().toISOString(),
+              respond,
+            });
+          } catch (lErr) {
+            console.warn('[TelegramService] Message listener callback error:', lErr);
+          }
+        }
+      } catch (inner) {
+        // ignore
+      }
+    }, new NewMessage({ incoming: true }));
+    console.log('[TelegramService] Live NewMessage event handler active for connected MTProto account');
+  } catch (err: any) {
+    console.warn('[TelegramService] Failed to attach NewMessage event handler:', err?.message || err);
+  }
+}
+
+/**
+ * Get the currently active GramJS client if connected
+ */
+export function getActiveTelegramClient(): TelegramClient | null {
+  return activeClient;
+}
+
+/**
+ * Broadcast message to multiple chats/dialogs using real MTProto client
+ */
+export async function broadcastRealTelegramMessage(
+  targetPeers: string[],
+  message: string,
+  delayMs = 1200
+): Promise<{ total: number; sent: number; failed: number; results: Array<{ peer: string; success: boolean; error?: string }> }> {
+  if (!activeClient || !isLiveConnected) {
+    return {
+      total: targetPeers.length,
+      sent: 0,
+      failed: targetPeers.length,
+      results: targetPeers.map(p => ({ peer: p, success: false, error: 'الحساب غير متصل حالياً' })),
+    };
+  }
+
+  const results: Array<{ peer: string; success: boolean; error?: string }> = [];
+  let sent = 0;
+  let failed = 0;
+
+  for (const peer of targetPeers) {
+    try {
+      const cleanPeer = peer.startsWith('tg_') ? peer.replace('tg_', '') : peer;
+      await activeClient.sendMessage(cleanPeer, { message });
+      sent++;
+      results.push({ peer, success: true });
+
+      if (delayMs > 0 && targetPeers.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    } catch (err: any) {
+      failed++;
+      results.push({ peer, success: false, error: err?.message || 'فشل الإرسال' });
+    }
+  }
+
+  return { total: targetPeers.length, sent, failed, results };
+}
+
+/**
+ * Join Telegram group or channel using real MTProto client
+ */
+export async function joinTelegramChannelOrGroup(rawTarget: string): Promise<{ success: boolean; title?: string; error?: string }> {
+  if (!activeClient || !isLiveConnected) {
+    return { success: false, error: 'لا يوجد حساب تيليجرام نشط متصل حالياً' };
+  }
+
+  try {
+    const target = rawTarget.trim();
+    if (!target) {
+      return { success: false, error: 'الرابط أو المعرف فارغ' };
+    }
+
+    // Check private invite link: t.me/+hash or t.me/joinchat/hash
+    const inviteMatch = target.match(/(?:t\.me\/(?:\+|joinchat\/))([a-zA-Z0-9_\-]+)/);
+    if (inviteMatch && inviteMatch[1]) {
+      const hash = inviteMatch[1];
+      try {
+        const res = (await activeClient.invoke(new Api.messages.ImportChatInvite({ hash }))) as any;
+        const chatTitle = res?.chats?.[0]?.title || 'مجموعة خاصة';
+        return { success: true, title: chatTitle };
+      } catch (inviteErr: any) {
+        const msg = inviteErr?.message || String(inviteErr);
+        if (msg.includes('USER_ALREADY_PARTICIPANT')) {
+          return { success: true, title: 'أنت عضو بالفعل في هذه المجموعة' };
+        }
+        if (msg.includes('INVITE_HASH_EXPIRED')) {
+          return { success: false, error: 'رابط الدعوة منتهي الصلاحية' };
+        }
+        throw inviteErr;
+      }
+    }
+
+    // Check public channel/group: @username or t.me/username
+    const cleanUsername = target
+      .replace(/https?:\/\/t\.me\//, '')
+      .replace(/^@/, '')
+      .split('/')[0]
+      .split('?')[0]
+      .trim();
+
+    if (cleanUsername) {
+      const entity = (await activeClient.getEntity(cleanUsername)) as any;
+      await activeClient.invoke(new Api.channels.JoinChannel({ channel: entity }));
+      const title = entity?.title || cleanUsername;
+      return { success: true, title };
+    }
+
+    return { success: false, error: 'صيغة الرابط غير معروفة' };
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err);
+    if (errorMsg.includes('USER_ALREADY_PARTICIPANT')) {
+      return { success: true, title: 'أنت عضو بالفعل في هذه المجموعة' };
+    }
+    if (errorMsg.includes('CHANNELS_TOO_MUCH')) {
+      return { success: false, error: 'بلغ الحساب الحد الأقصى للقنوات والمجموعات المشترك بها' };
+    }
+    return { success: false, error: errorMsg };
+  }
+}
+
 

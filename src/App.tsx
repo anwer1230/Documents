@@ -21,6 +21,7 @@ import { LearningSystemModal } from '@/components/features/LearningSystemModal';
 import { RotatingBroadcastModal } from '@/components/features/RotatingBroadcastModal';
 import { AutoJoinModal } from '@/components/features/AutoJoinModal';
 import { SavedLinksModal } from '@/components/features/SavedLinksModal';
+import { BatchMessagesModal } from '@/components/features/BatchMessagesModal';
 import { MessageTemplatesModal, type MessageTemplate } from '@/components/features/MessageTemplatesModal';
 import { ChatWallpaperModal, WALLPAPER_PRESETS, type WallpaperConfig } from '@/components/features/ChatWallpaperModal';
 import { PWAInstallModal } from '@/components/features/PWAInstallModal';
@@ -1753,6 +1754,13 @@ function AppWorkspace() {
           onSelectMessage={handleSendToChat}
         />
       )}
+      {activeService === 'batch_messages' && (
+        <BatchMessagesModal
+          onClose={() => setActiveService(null)}
+          onOpenPublishing={() => setActiveService('publishing_monitoring')}
+          onSendToChat={handleSendToChat}
+        />
+      )}
       {activeService === 'autoreplies' && (
         <AutoRepliesModal
           onClose={() => setActiveService(null)}
@@ -1780,7 +1788,7 @@ function AppWorkspace() {
       )}
 
       {/* In-App Quick Service Overlay Viewer for other tools */}
-      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links', 'templates', 'install'].includes(activeService) && (
+      {activeService && !['publishing_monitoring', 'broadcast', 'monitoring', 'autoreplies', 'accounts', 'learning', 'rotating', 'join', 'saved_links', 'batch_messages', 'templates', 'install'].includes(activeService) && (
         <div className="fixed inset-0 z-50 flex h-full w-full bg-background fade-up" dir="rtl">
           <InAppServiceViewer
             serviceId={activeService}
