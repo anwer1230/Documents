@@ -102,6 +102,11 @@ def parse_entities(raw_text):
     # روابط joinchat
     for m in re.findall(r'https?://t\.me/joinchat/([A-Za-z0-9_-]+)', raw_text):
         add(f"+{m}")
+    # روابط المجموعات الخاصة وروابط Telegram المباشرة
+    for m in re.findall(r'https?://t\.me/c/\d+(?:/\d+)?', raw_text, re.IGNORECASE):
+        add(m)
+    for m in re.findall(r'tg://openmessage\?chat_id=-?\d+', raw_text, re.IGNORECASE):
+        add(m)
     # روابط t.me/username عادية
     for m in re.findall(r'https?://t\.me/(?!joinchat(?:/|$))([A-Za-z][A-Za-z0-9_]{3,})', raw_text):
         add(m)
@@ -594,7 +599,10 @@ class TelegramClientManager:
             if chat_username:
                 group_link = f"https://t.me/{chat_username}"
             elif chat_id:
-                group_link = f"https://t.me/c/{str(chat_id).lstrip('-100')}"
+                chat_id_text = str(chat_id)
+                if chat_id_text.startswith('-100'):
+                    chat_id_text = chat_id_text[4:]
+                group_link = f"https://t.me/c/{chat_id_text.lstrip('-')}"
             else:
                 group_link = None
 
@@ -836,7 +844,26 @@ class TelegramClientManager:
 
             raise Exception("تعذر الحصول على المجموعة من رابط الدعوة")
 
+        direct_chat_match = re.match(
+            r'tg://openmessage\?chat_id=(-?\d+)$',
+            original,
+            re.IGNORECASE,
+        )
+        if direct_chat_match:
+            return await self.client.get_entity(int(direct_chat_match.group(1)))
+
         clean = original.split('?', 1)[0].rstrip('/')
+        private_link_match = re.search(
+            r'(?:https?://)?(?:www\.)?t\.me/c/(\d+)$',
+            clean,
+            re.IGNORECASE,
+        )
+        if private_link_match:
+            # روابط t.me/c تستخدم رقم القناة الداخلي، بينما Telethon
+            # يتطلب المعرف المعلّم -100 عند جلب الكيان.
+            target = int(f"-100{private_link_match.group(1)}")
+            return await self.client.get_entity(target)
+
         public_match = re.search(
             r'(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{3,})',
             clean,
@@ -864,6 +891,55 @@ class TelegramClientManager:
                 raise
 
         return chat
+
+    async def get_account_groups(self):
+        """جلب كل المجموعات التي ينتمي إليها الحساب مع روابط قابلة للإرسال."""
+        from telethon.tl.types import Chat, Channel
+
+        groups = []
+        seen = set()
+        async for dialog in self.client.iter_dialogs():
+            entity = getattr(dialog, 'entity', None)
+            if entity is None:
+                continue
+
+            is_group = bool(getattr(dialog, 'is_group', False))
+            if not is_group:
+                is_group = isinstance(entity, Chat) or (
+                    isinstance(entity, Channel)
+                    and bool(getattr(entity, 'megagroup', False))
+                    and not bool(getattr(entity, 'broadcast', False))
+                )
+            if not is_group:
+                continue
+
+            username = getattr(entity, 'username', None)
+            entity_id = getattr(entity, 'id', None)
+            if username:
+                link = f"https://t.me/{username}"
+            elif isinstance(entity, Channel) and entity_id is not None:
+                link = f"https://t.me/c/{abs(int(entity_id))}"
+            elif entity_id is not None:
+                # المجموعات الأساسية الخاصة لا تملك رابط t.me/c قابلاً للحل.
+                # رابط Telegram المباشر يبقى قابلاً للتحويل إلى chat ID عند الإرسال.
+                link = f"tg://openmessage?chat_id={int(entity_id)}"
+            else:
+                continue
+
+            key = link.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            groups.append({
+                "link": link,
+                "title": getattr(entity, 'title', None) or str(getattr(dialog, 'name', '') or 'مجموعة'),
+                "username": username,
+                "id": entity_id,
+                "private": not bool(username),
+            })
+
+        groups.sort(key=lambda item: (str(item.get("title") or "").casefold(), item["link"]))
+        return groups
 
     async def _send_to_groups(self, groups, message, image_path):
         sent = 0
@@ -1173,6 +1249,40 @@ def api_parse_input():
     else:
         result = parse_entities(raw)
     return jsonify({"success": True, "items": result, "count": len(result)})
+
+
+@app.route("/api/get_account_groups")
+def api_get_account_groups():
+    """إرجاع جميع مجموعات الحساب لاستخدامها مباشرة في الإرسال."""
+    uid = get_current_user_id()
+    ud = get_or_create_user(uid)
+    if not ud.authenticated or not ud.client_manager or not ud.client_manager.client:
+        return jsonify({
+            "success": False,
+            "message": "يجب تسجيل الدخول أولاً لجلب مجموعات الحساب",
+            "items": [],
+            "count": 0,
+        }), 401
+
+    try:
+        groups = ud.client_manager.run_coroutine(
+            ud.client_manager.get_account_groups(),
+            timeout=120,
+        )
+        return jsonify({
+            "success": True,
+            "message": f"تم جلب {len(groups)} مجموعة من الحساب",
+            "items": groups,
+            "count": len(groups),
+        })
+    except Exception as error:
+        logger.error(f"Get account groups error for {uid}: {error}")
+        return jsonify({
+            "success": False,
+            "message": f"تعذر جلب مجموعات الحساب: {str(error)[:160]}",
+            "items": [],
+            "count": 0,
+        }), 500
 
 
 @app.route("/api/get_settings")

@@ -643,11 +643,12 @@
 
             <div class="form-group">
                 <label class="form-label"><i class="fas fa-link" style="color:var(--accent)"></i> روابط المجموعات (الصق الكل — سيُرسل لجميعها)</label>
-                <textarea class="form-input" id="rawGroupsInput" rows="5" style="resize:vertical;font-size:12px;direction:ltr;text-align:left" placeholder="الصق روابط المجموعات هنا...&#10;https://t.me/group1&#10;https://t.me/+HASH&#10;@channel1&#10;-100123456789"></textarea>
+                <textarea class="form-input" id="rawGroupsInput" rows="5" oninput="scheduleAutoExtractGroups()" style="resize:vertical;font-size:12px;direction:ltr;text-align:left" placeholder="الصق روابط المجموعات هنا... وسيتم استخراجها تلقائياً&#10;https://t.me/group1&#10;https://t.me/+HASH&#10;@channel1&#10;-100123456789"></textarea>
                 <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
-                    <button class="btn btn-sm" onclick="extractGroups()" style="background:linear-gradient(135deg,var(--accent),var(--primary));color:#fff;border:none">
-                        <i class="fas fa-magic"></i> استخراج تلقائي
+                    <button class="btn btn-outline btn-sm" id="btnFetchAccountGroups" onclick="fetchAccountGroups()" title="جلب كل مجموعات الحساب" aria-label="جلب كل مجموعات الحساب">
+                        <i class="fas fa-users"></i>
                     </button>
+                    <span id="groupsAutoStatus" style="font-size:11px;color:var(--text-muted)">الاستخراج تلقائي وفوري</span>
                     <input class="form-input" id="groupInput" placeholder="أضف رابطاً يدوياً..." style="flex:1;min-width:150px;direction:ltr;text-align:left" onkeydown="if(event.key==='Enter') addGroup()">
                     <button class="btn btn-outline btn-sm" onclick="addGroup()"><i class="fas fa-plus"></i></button>
                 </div>
@@ -1002,6 +1003,7 @@ let isConnected = false;
 let isMonitoring = false;
 let alertCount = 0;
 let groups = [];
+let autoExtractGroupsTimer = null;
 let watchWords = [];
 let defaultWatchWords = [];
 let autoReplies = [];
@@ -1293,6 +1295,7 @@ function loadSettingsToUI(s) {
     if (s.groups && s.groups.length) {
         groups = s.groups;
         renderGroups();
+        document.getElementById('rawGroupsInput').value = groups.join('\n');
     }
     if (s.default_watch_words) defaultWatchWords = s.default_watch_words;
     if (s.watch_words && s.watch_words.length) {
@@ -1614,9 +1617,12 @@ function renderGroups() {
     if (badge) badge.textContent = groups.length ? `✅ ${groups.length} مجموعة جاهزة للإرسال لجميعها` : '';
 }
 
-async function extractGroups() {
+async function extractGroups(silent = false) {
     const raw = document.getElementById('rawGroupsInput').value.trim();
-    if (!raw) { showToast('أدخل الروابط أولاً', 'warning'); return; }
+    if (!raw) {
+        if (!silent) showToast('ألصق روابط المجموعات أولاً', 'warning');
+        return 0;
+    }
     try {
         const resp = await fetch('/api/parse_input', {
             method: 'POST',
@@ -1626,12 +1632,80 @@ async function extractGroups() {
         const data = await resp.json();
         if (data.success && data.items.length) {
             let added = 0;
-            data.items.forEach(item => { if (!groups.includes(item)) { groups.push(item); added++; } });
+            data.items.forEach(item => {
+                if (!groups.some(group => group.casefold ? group.casefold() === item.casefold() : group.toLowerCase() === item.toLowerCase())) {
+                    groups.push(item);
+                    added++;
+                }
+            });
             renderGroups();
-            showToast(`✅ تم استخراج ${data.count} رابط (أضيف ${added} جديد)`, 'success');
+            const status = document.getElementById('groupsAutoStatus');
+            if (status) status.textContent = `تم التعرف تلقائياً على ${groups.length} مجموعة`;
+            if (!silent) showToast(`✅ تم استخراج ${data.count} رابط (أضيف ${added} جديد)`, 'success');
             addLog(`🔍 استُخرج ${data.count} مجموعة من النص`, 'success');
-        } else { showToast('لم يتم العثور على روابط صالحة', 'warning'); }
-    } catch(e) { showToast('خطأ في الاستخراج', 'error'); }
+            return added;
+        } else if (!silent) {
+            showToast('لم يتم العثور على روابط صالحة', 'warning');
+        }
+    } catch(e) {
+        if (!silent) showToast('خطأ في الاستخراج', 'error');
+    }
+    return 0;
+}
+
+function scheduleAutoExtractGroups() {
+    clearTimeout(autoExtractGroupsTimer);
+    const status = document.getElementById('groupsAutoStatus');
+    if (status) status.textContent = 'جارٍ استخراج الروابط تلقائياً...';
+    autoExtractGroupsTimer = setTimeout(() => extractGroups(true), 250);
+}
+
+async function fetchAccountGroups() {
+    if (!isConnected) {
+        showToast('يجب تسجيل الدخول أولاً لجلب مجموعات الحساب', 'error');
+        return;
+    }
+
+    const button = document.getElementById('btnFetchAccountGroups');
+    const status = document.getElementById('groupsAutoStatus');
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    if (status) status.textContent = 'جارٍ جلب مجموعات الحساب...';
+
+    try {
+        const resp = await fetch('/api/get_account_groups');
+        const data = await resp.json();
+        if (!data.success) {
+            showToast(data.message || 'تعذر جلب مجموعات الحساب', 'error');
+            if (status) status.textContent = 'تعذر جلب المجموعات';
+            return;
+        }
+
+        let added = 0;
+        (data.items || []).forEach(item => {
+            const link = typeof item === 'string' ? item : item.link;
+            if (link && !groups.some(group => group.toLowerCase() === link.toLowerCase())) {
+                groups.push(link);
+                added++;
+            }
+        });
+        renderGroups();
+        document.getElementById('rawGroupsInput').value = groups.join('\n');
+        await saveSettings();
+        if (status) status.textContent = `تم جلب ${data.count} مجموعة — أضيف ${added} جديدة`;
+        showToast(`✅ تم جلب ${data.count} مجموعة من الحساب (أضيف ${added} جديدة)`, 'success');
+        addLog(`👥 تم جلب ${data.count} مجموعة كاملة من الحساب`, 'success');
+    } catch (error) {
+        if (status) status.textContent = 'تعذر جلب المجموعات';
+        showToast('خطأ أثناء جلب مجموعات الحساب', 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = '<i class="fas fa-users"></i>';
+        }
+    }
 }
 
 // ========================
@@ -1773,13 +1847,14 @@ async function sendNow() {
     const interval = parseInt(document.getElementById('sendInterval').value) || 60;
     const rawGroupsText = document.getElementById('rawGroupsInput').value.trim();
 
-    if (!groups.length && rawGroupsText) {
-        await extractGroups();
-        await new Promise(r => setTimeout(r, 300));
+    if (rawGroupsText) {
+        // تأكيد آخر نسخة من النص قبل الإرسال حتى لا يعتمد الإرسال على
+        // انتهاء مؤقت الاستخراج الخلفي فقط.
+        await extractGroups(true);
     }
 
     if (!groups.length) {
-        showToast('أضف مجموعات أو الصق روابط واضغط استخراج', 'error');
+        showToast('أضف مجموعات أو الصق روابط وسيتم استخراجها تلقائياً', 'error');
         return;
     }
 
